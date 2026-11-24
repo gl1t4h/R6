@@ -56,3 +56,8 @@ analysis.
 This is an analysis aid, not yet a production disassembler or recompilation
 backend. The next milestone is explicit MIPS R3000A instruction decoding and
 validation against synthetic control-flow fixtures.
+
+The first decoder and synthetic tests are now in `tools/mips_decode.py` and
+`tests/test_mips_decode.py`. They cover common arithmetic, memory, branch,
+jump, call, return, and delay-slot forms. The decoder is intentionally
+dependency-free so it can become part of the future translation pipeline.

@@ -70,3 +70,7 @@ secrets/
 Thumbs.db
 Desktop.ini
 .DS_Store
+
+# Python caches
+__pycache__/
+*.pyc

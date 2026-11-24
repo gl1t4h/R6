@@ -15,7 +15,7 @@ There is not yet a playable native recompilation.
 
 | Game | Region/version | Status | Progress |
 | --- | --- | --- | --- |
-| Spider-Man | USA PlayStation 1 release | Control-flow analysis | 15% — local PS-X EXE discovery plus delay-slot-aware CFG walking |
+| Spider-Man | USA PlayStation 1 release | MIPS decoding | 20% — local PS-X EXE discovery, CFG walking, and initial R3000A decoder tests |
 
 No games are currently completed.
 
@@ -83,15 +83,15 @@ Verify a local BIN/CUE input without copying it into the repository:
 
 ```powershell
 .\tools\verify-disc.ps1 `
-  -CuePath "C:\path\to\your\Spider-Man (USA).cue"
+  -CuePath "C:\path\to\your\game.cue"
 ```
 
 Write a local-only verification manifest outside the repository:
 
 ```powershell
 .\tools\verify-disc.ps1 `
-  -CuePath "C:\path\to\your\Spider-Man (USA).cue" `
-  -ManifestPath "$env:USERPROFILE\R6-local\spider-man-usa-manifest.json"
+  -CuePath "C:\path\to\your\game.cue" `
+  -ManifestPath "$env:USERPROFILE\R6-local\game-manifest.json"
 ```
 
 The manifest contains hashes and structural metadata only. It does not copy or
@@ -129,6 +129,7 @@ The current scaffold is a development diagnostic, not a playable game.
 ├── src/
 ├── tools/
 │   ├── analyze-mips.py
+│   ├── mips_decode.py
 │   ├── inspect-ps1-disc.py
 │   └── verify-disc.ps1
 ├── CMakeLists.txt
@@ -158,7 +159,7 @@ None.
 
 | Game | Status | Next milestone |
 | --- | --- | --- |
-| Spider-Man (USA) | Control-flow analysis | Add explicit R3000A instruction decoding and validate the CFG with synthetic fixtures |
+| Spider-Man (USA) | MIPS decoding | Integrate decoder output into translation-unit generation |
 
 ## Contributing
 
