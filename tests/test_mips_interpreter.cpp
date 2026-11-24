@@ -166,6 +166,22 @@ void unsupported_instruction_stops() {
     R6_CHECK(result.steps == 1);
 }
 
+void break_stops_execution() {
+    Memory ram(2u * 1024u * 1024u);
+    TestServices services;
+    MipsInterpreter interpreter(ram, services);
+    interpreter.cpu().pc = 0x80010000u;
+
+    ram.write32(0x10000, 0x24080001u);  // addiu t0, zero, 1
+    ram.write32(0x10004, 0x0000000Du);  // break
+    ram.write32(0x10008, 0x24080002u);  // addiu t0, zero, 2 (not executed)
+
+    const auto result = interpreter.run(8);
+    R6_CHECK(result.reason == StopReason::guest_break);
+    R6_CHECK(result.pc == 0x80010004u);
+    R6_CHECK(interpreter.cpu().gpr[8] == 1);
+}
+
 }  // namespace
 
 void run_mips_interpreter_tests() {
@@ -176,4 +192,5 @@ void run_mips_interpreter_tests() {
     unaligned_load_word_left();
     bios_trap_prints();
     unsupported_instruction_stops();
+    break_stops_execution();
 }
