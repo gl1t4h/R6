@@ -15,7 +15,7 @@ There is not yet a playable native recompilation.
 
 | Game | Region/version | Status | Progress |
 | --- | --- | --- | --- |
-| Spider-Man | USA PlayStation 1 release | Function dispatch | 40% - delay-slot-aware translation and native function dispatch scaffold |
+| Spider-Man | USA PlayStation 1 release | Function discovery | 45% - static call-target discovery and multi-function registration |
 
 No games are currently completed.
 
@@ -173,7 +173,7 @@ None.
 
 | Game | Status | Next milestone |
 | --- | --- | --- |
-| Spider-Man (USA) | Function dispatch | Discover and register all reachable translated functions |
+| Spider-Man (USA) | Function discovery | Replace static seeds with validated CFG-reachable function discovery |
 
 ## Contributing
 

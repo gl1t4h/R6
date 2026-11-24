@@ -10,8 +10,8 @@ None.
 
 - **Platform:** PlayStation 1
 - **Region:** USA
-- **Status:** Function dispatch
-- **Progress:** 40%
+- **Status:** Function discovery
+- **Progress:** 45%
 - **Completed:** Local BIN/CUE verification, ISO9660 root discovery, and PS-X
   EXE header identification, plus a delay-slot-aware control-flow walk from
   the entry point and discovered direct calls, plus the first dependency-free
@@ -19,8 +19,10 @@ None.
   that emits a small C++ translation prototype, plus native little-endian
   memory helpers for common byte/halfword/word loads and stores, plus
   delay-slot-aware branch/jump/call lowering, a platform service interface,
-  and a PC-to-native-function dispatcher with a step budget.
-- **Next step:** Discover and register all reachable translated functions.
+  and a PC-to-native-function dispatcher with a step budget. The generator
+  now emits and registers a bounded set of static in-image call targets.
+- **Next step:** Replace static seeds with validated CFG-reachable function
+  discovery.
 - **Playable native build:** No
 - **Distributed game assets:** No
 

@@ -179,11 +179,71 @@ def translate_control(
     ]
 
 
+def discover_function_entries(
+    payload: bytes,
+    load_address: int,
+    initial_pc: int,
+    max_functions: int,
+) -> list[int]:
+    entries = {initial_pc}
+    for offset in range(0, len(payload) - 3, 4):
+        address = load_address + offset
+        instruction = word(payload, offset)
+        if instruction >> 26 != 0x03:
+            continue
+        target = ((address + 4) & 0xF0000000) | ((instruction & 0x03FFFFFF) << 2)
+        if load_address <= target < load_address + len(payload) and target % 4 == 0:
+            entries.add(target)
+    remaining = sorted(entries - {initial_pc})
+    return [initial_pc, *remaining[: max(0, max_functions - 1)]]
+
+
+def emit_function(
+    payload: bytes,
+    load_address: int,
+    entry: int,
+    max_instructions: int,
+) -> list[str]:
+    lines = [
+        f"std::uint32_t function_{entry:08X}(r6::CpuState& cpu, r6::Memory& memory,",
+        "                              r6::PlatformServices& services) {",
+        "    (void)services;",
+        f"    // Translated candidate at 0x{entry:08X}",
+    ]
+    offset = entry - load_address
+    if offset < 0 or offset >= len(payload) or offset % 4:
+        lines.append(f"    r6::unsupported_instruction(cpu, 0x{entry:08X}u, 0u);")
+    else:
+        for instruction_index in range(max_instructions):
+            current_offset = offset + instruction_index * 4
+            if current_offset + 4 > len(payload):
+                break
+            address = load_address + current_offset
+            instruction = word(payload, current_offset)
+            decoded = decode_word(instruction, address)
+            lines.append(f"    // 0x{address:08X}: {decoded['text']}")
+            if decoded["kind"] in (
+                "call", "jump", "branch", "trap", "indirect_call", "return"
+            ):
+                lines.extend(translate_control(
+                    instruction, address, decoded, payload, load_address
+                ))
+                break
+            lines.extend(translate(instruction, address, decoded))
+        else:
+            lines.append("    return cpu.pc;  // function translation limit")
+    if lines[-1].strip() != "return cpu.pc;":
+        lines.append("    return cpu.pc;")
+    lines.extend(["}", ""])
+    return lines
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("exe_path", type=Path, help="local PS-X EXE analysis copy")
     parser.add_argument("output_path", type=Path, help="local output path outside the repo")
     parser.add_argument("--max-instructions", type=int, default=256)
+    parser.add_argument("--max-functions", type=int, default=32)
     args = parser.parse_args()
 
     exe = args.exe_path.resolve()
@@ -198,6 +258,9 @@ def main() -> int:
     initial_pc = word(data, 0x10)
     payload = data[2048 : 2048 + payload_size]
 
+    entries = discover_function_entries(
+        payload, load_address, initial_pc, args.max_functions
+    )
     lines = [
         "// GENERATED LOCALLY FROM A USER-SUPPLIED PS-X EXE.",
         "// Do not commit or distribute this file.",
@@ -205,44 +268,19 @@ def main() -> int:
         "",
         "namespace r6_generated {",
         "",
-        f"std::uint32_t entry(r6::CpuState& cpu, r6::Memory& memory,",
-        "                    r6::PlatformServices& services) {",
-        "    (void)services;  // platform calls are the next runtime layer",
-        f"    // Entry point: 0x{initial_pc:08X}",
     ]
-
-    entry_offset = initial_pc - load_address
-    if entry_offset < 0 or entry_offset >= len(payload) or entry_offset % 4:
-        parser.error("PS-X EXE entry point is outside the declared payload")
-
-    for offset in range(
-        entry_offset,
-        min(len(payload), entry_offset + args.max_instructions * 4),
-        4,
-    ):
-        address = load_address + offset
-        instruction = word(payload, offset)
-        decoded = decode_word(instruction, address)
-        lines.append(f"    // 0x{address:08X}: {decoded['text']}")
-        if decoded["kind"] in ("call", "jump", "branch", "trap", "indirect_call", "return"):
-            lines.extend(translate_control(
-                instruction, address, decoded, payload, load_address
-            ))
-            break
-        lines.extend(translate(instruction, address, decoded))
-
-    if lines[-1].strip() != "return cpu.pc;":
-        lines.append("    return cpu.pc;")
+    for entry in entries:
+        lines.extend(emit_function(
+            payload, load_address, entry, args.max_instructions
+        ))
     lines.extend([
-        "}",
-        "",
         "void register_functions(r6::FunctionDispatcher& dispatcher) {",
-        f"    dispatcher.register_function(0x{initial_pc:08X}u, &entry);",
-        "}",
-        "",
-        "}  // namespace r6_generated",
-        "",
     ])
+    for entry in entries:
+        lines.append(
+            f"    dispatcher.register_function(0x{entry:08X}u, &function_{entry:08X});"
+        )
+    lines.extend(["}", "", "}  // namespace r6_generated", ""])
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text("\n".join(lines), encoding="utf-8")
     print(f"Wrote local native translation prototype: {output}")
