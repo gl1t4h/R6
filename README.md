@@ -15,7 +15,7 @@ There is not yet a playable native recompilation.
 
 | Game | Region/version | Status | Progress |
 | --- | --- | --- | --- |
-| Spider-Man | USA PlayStation 1 release | GPU decoder and BIOS layer | 92% - GP0/GP1 command decoding, software VRAM rasterizer, and native kernel-call replacements |
+| Spider-Man | USA PlayStation 1 release | Textured primitive rendering | 95% - 4/8/15-bit texture sampling with CLUT, texture window, modulation and semi-transparency, on top of GP0/GP1 decoding and native kernel-call replacements |
 
 No games are currently completed.
 
@@ -182,7 +182,7 @@ None.
 
 | Game | Status | Next milestone |
 | --- | --- | --- |
-| Spider-Man (USA) | GPU decoder and BIOS layer | Render textured primitives using texture pages, CLUTs, and the texture window |
+| Spider-Man (USA) | Textured primitive rendering | Native execution of the full executable: COP2/GTE, DMA, interrupts and the boot path |
 
 ## Contributing
 

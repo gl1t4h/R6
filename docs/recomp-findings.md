@@ -167,3 +167,31 @@ Both layers are covered by `r6-tests`, a dependency-free C++ executable
 registered with CTest. It includes a regression that runs an unsupported
 textured packet ahead of a supported rectangle and asserts the rectangle still
 lands at the right address.
+
+## 2026-11-24 — Textured primitives
+
+Textured rendering is implemented in the software GPU, so a decoded frame now
+carries colour instead of flat polygons.
+
+Sampling reads from the texture page selected by `GP0(E1)`: 4-bit CLUT
+(one halfword holds four palette indices), 8-bit CLUT (two indices per
+halfword), and 15-bit direct colour. Palette location comes from the CLUT
+attribute in bits 16-31 of the first texture-coordinate word for polygons and
+of the coordinate word for rectangles, decoded as `x = (clut AND 3Fh) * 16`,
+`y = (clut SHR 6) AND 1FFh`. Coordinates pass through the texture window first:
+`(coord AND NOT(mask*8)) OR ((offset AND mask)*8)`.
+
+Per-pixel colour is `(texel * vertexcolour) / 128`, so `0x808080` is neutral and
+the "raw texture" command variants bypass modulation. A zero texel is
+transparent and leaves the destination untouched. When the primitive is a
+semi-transparent variant and the texel (or its CLUT entry) has bit 15 set, the
+pixel blends with the destination using the mode in texture-page bits 5-6:
+`B/2+F/2`, `B+F`, `B-F`, `B+F/4`, with clamping.
+
+Polygons use affine interpolation of `u`/`v` from the edge-function weights,
+matching the hardware's lack of perspective correction; this is also why
+texture warping on large PS1 polygons will need to be reproduced rather than
+"fixed". Rectangles advance `u` per column and `v` per row.
+
+Gouraud shading (`GP0 30h-3Fh`) and lines (`40h-5Fh`) remain unsupported and
+are still reported through `unsupported_commands()`.

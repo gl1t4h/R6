@@ -7,6 +7,13 @@
 
 namespace r6 {
 
+struct TexturedVertex {
+    std::int32_t x{0};
+    std::int32_t y{0};
+    std::uint8_t u{0};
+    std::uint8_t v{0};
+};
+
 // PlayStation GPU command decoder and VRAM rasterizer.
 //
 // VRAM is modelled as 1024x512 16-bit BGR555 pixels, matching the retail GPU
@@ -77,6 +84,33 @@ private:
                        std::int32_t x2,
                        std::int32_t y2,
                        std::uint16_t color);
+    void draw_textured_triangle(const TexturedVertex& first,
+                                const TexturedVertex& second,
+                                const TexturedVertex& third,
+                                std::uint32_t modulation,
+                                std::uint32_t clut,
+                                std::uint32_t texpage,
+                                bool semi_transparent);
+    void draw_textured_rectangle(std::uint32_t modulation,
+                                 std::uint32_t position,
+                                 std::uint32_t texcoord,
+                                 std::uint32_t width,
+                                 std::uint32_t height,
+                                 std::uint32_t clut,
+                                 std::uint32_t texpage,
+                                 bool semi_transparent);
+    std::uint16_t sample_texture(std::uint32_t u,
+                                 std::uint32_t v,
+                                 std::uint32_t clut,
+                                 std::uint32_t texpage) const;
+    std::uint32_t texture_window_coordinate(std::uint32_t coordinate,
+                                            bool horizontal) const;
+    void plot_textured(std::int32_t x,
+                       std::int32_t y,
+                       std::uint16_t texel,
+                       std::uint32_t modulation,
+                       std::uint32_t texpage,
+                       bool semi_transparent);
     void copy_vram(std::uint32_t source,
                    std::uint32_t destination,
                    std::uint32_t size);

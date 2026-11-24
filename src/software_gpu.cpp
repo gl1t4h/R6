@@ -49,6 +49,45 @@ constexpr std::uint32_t rect_height(std::uint32_t word) {
     return (word >> 16) & 0x1FFu;
 }
 
+// Texture modulation: (texel * vertex colour) / 128 per channel.
+constexpr std::uint16_t modulate_texel(std::uint16_t texel,
+                                      std::uint32_t color) {
+    const auto red = std::min<std::uint32_t>(
+        31u, ((texel & 0x1Fu) * (color & 0xFFu)) / 128u);
+    const auto green = std::min<std::uint32_t>(
+        31u, (((texel >> 5) & 0x1Fu) * ((color >> 8) & 0xFFu)) / 128u);
+    const auto blue = std::min<std::uint32_t>(
+        31u, (((texel >> 10) & 0x1Fu) * ((color >> 16) & 0xFFu)) / 128u);
+    return static_cast<std::uint16_t>(red | (green << 5) | (blue << 10));
+}
+
+// Semi-transparency modes: 0 = B/2+F/2, 1 = B+F, 2 = B-F, 3 = B+F/4.
+constexpr std::uint16_t blend_texel(std::uint16_t back,
+                                   std::uint16_t front,
+                                   std::uint32_t mode) {
+    const auto channel = [mode](std::uint32_t back_channel,
+                                std::uint32_t front_channel) {
+        switch (mode & 0x3u) {
+            case 0:
+                return (back_channel + front_channel) >> 1;
+            case 1:
+                return std::min<std::uint32_t>(31u,
+                                               back_channel + front_channel);
+            case 2:
+                return back_channel > front_channel
+                           ? back_channel - front_channel
+                           : 0u;
+            default:
+                return std::min<std::uint32_t>(
+                    31u, back_channel + front_channel / 4u);
+        }
+    };
+    const auto red = channel(back & 0x1Fu, front & 0x1Fu);
+    const auto green = channel((back >> 5) & 0x1Fu, (front >> 5) & 0x1Fu);
+    const auto blue = channel((back >> 10) & 0x1Fu, (front >> 10) & 0x1Fu);
+    return static_cast<std::uint16_t>(red | (green << 5) | (blue << 10));
+}
+
 constexpr std::int32_t signed_offset(std::uint32_t value) {
     const auto raw = static_cast<std::int32_t>(value & 0x7FFu);
     return (raw & 0x400) != 0 ? raw - 0x800 : raw;
@@ -197,15 +236,95 @@ void SoftwareGpu::execute_gp0() {
         return;
     }
 
-    if (opcode >= 0x60 && opcode <= 0x7F) {
-        const bool monochrome = opcode <= 0x63 ||
-                                (opcode >= 0x68 && opcode <= 0x6B) ||
-                                (opcode >= 0x70 && opcode <= 0x73) ||
-                                (opcode >= 0x78 && opcode <= 0x7B);
-        if (!monochrome) {
-            record_unsupported(opcode);
-            return;
+    if (opcode >= 0x24 && opcode <= 0x27) {
+        const bool semi_transparent = (opcode & 0x02u) != 0;
+        const bool raw = (opcode & 0x01u) != 0;
+        const auto clut = packet_[2] >> 16;
+        const auto texpage = packet_[4] >> 16;
+        texpage_ = texpage & 0x7FFu;
+        const TexturedVertex first{
+            coordinate_x(packet_[1]) + draw_offset_x_,
+            coordinate_y(packet_[1]) + draw_offset_y_,
+            static_cast<std::uint8_t>(packet_[2] & 0xFFu),
+            static_cast<std::uint8_t>((packet_[2] >> 8) & 0xFFu)};
+        const TexturedVertex second{
+            coordinate_x(packet_[3]) + draw_offset_x_,
+            coordinate_y(packet_[3]) + draw_offset_y_,
+            static_cast<std::uint8_t>(packet_[4] & 0xFFu),
+            static_cast<std::uint8_t>((packet_[4] >> 8) & 0xFFu)};
+        const TexturedVertex third{
+            coordinate_x(packet_[5]) + draw_offset_x_,
+            coordinate_y(packet_[5]) + draw_offset_y_,
+            static_cast<std::uint8_t>(packet_[6] & 0xFFu),
+            static_cast<std::uint8_t>((packet_[6] >> 8) & 0xFFu)};
+        draw_textured_triangle(first, second, third,
+                               raw ? 0x808080u : color, clut, texpage,
+                               semi_transparent);
+        ++rendered_primitives_;
+        return;
+    }
+
+    if (opcode >= 0x2C && opcode <= 0x2F) {
+        const bool semi_transparent = (opcode & 0x02u) != 0;
+        const bool raw = (opcode & 0x01u) != 0;
+        const auto clut = packet_[2] >> 16;
+        const auto texpage = packet_[4] >> 16;
+        texpage_ = texpage & 0x7FFu;
+        const auto modulation = raw ? 0x808080u : color;
+        const TexturedVertex corners[4] = {
+            {coordinate_x(packet_[1]) + draw_offset_x_,
+             coordinate_y(packet_[1]) + draw_offset_y_,
+             static_cast<std::uint8_t>(packet_[2] & 0xFFu),
+             static_cast<std::uint8_t>((packet_[2] >> 8) & 0xFFu)},
+            {coordinate_x(packet_[3]) + draw_offset_x_,
+             coordinate_y(packet_[3]) + draw_offset_y_,
+             static_cast<std::uint8_t>(packet_[4] & 0xFFu),
+             static_cast<std::uint8_t>((packet_[4] >> 8) & 0xFFu)},
+            {coordinate_x(packet_[5]) + draw_offset_x_,
+             coordinate_y(packet_[5]) + draw_offset_y_,
+             static_cast<std::uint8_t>(packet_[6] & 0xFFu),
+             static_cast<std::uint8_t>((packet_[6] >> 8) & 0xFFu)},
+            {coordinate_x(packet_[7]) + draw_offset_x_,
+             coordinate_y(packet_[7]) + draw_offset_y_,
+             static_cast<std::uint8_t>(packet_[8] & 0xFFu),
+             static_cast<std::uint8_t>((packet_[8] >> 8) & 0xFFu)}};
+        draw_textured_triangle(corners[0], corners[1], corners[2], modulation,
+                               clut, texpage, semi_transparent);
+        draw_textured_triangle(corners[0], corners[2], corners[3], modulation,
+                               clut, texpage, semi_transparent);
+        ++rendered_primitives_;
+        return;
+    }
+
+    const bool textured_rectangle =
+        (opcode >= 0x64 && opcode <= 0x67) ||
+        (opcode >= 0x6C && opcode <= 0x6F) ||
+        (opcode >= 0x74 && opcode <= 0x77) ||
+        (opcode >= 0x7C && opcode <= 0x7F);
+    if (textured_rectangle) {
+        const bool semi_transparent = (opcode & 0x02u) != 0;
+        const bool raw = (opcode & 0x01u) != 0;
+        std::uint32_t width = 1;
+        std::uint32_t height = 1;
+        if (opcode >= 0x64 && opcode <= 0x67) {
+            width = rect_width(packet_[3]);
+            height = rect_height(packet_[3]);
+        } else if (opcode >= 0x74 && opcode <= 0x77) {
+            width = 8;
+            height = 8;
+        } else if (opcode >= 0x7C && opcode <= 0x7F) {
+            width = 16;
+            height = 16;
         }
+        draw_textured_rectangle(raw ? 0x808080u : color, packet_[1],
+                                packet_[2] & 0xFFFFu, width, height,
+                                packet_[2] >> 16, texpage_,
+                                semi_transparent);
+        ++rendered_primitives_;
+        return;
+    }
+
+    if (opcode >= 0x60 && opcode <= 0x7F) {
         std::uint32_t width = 1;
         std::uint32_t height = 1;
         if (opcode <= 0x63) {
@@ -356,6 +475,145 @@ void SoftwareGpu::draw_triangle(std::int32_t x0,
     }
 }
 
+void SoftwareGpu::draw_textured_triangle(const TexturedVertex& first,
+                                         const TexturedVertex& second,
+                                         const TexturedVertex& third,
+                                         std::uint32_t modulation,
+                                         std::uint32_t clut,
+                                         std::uint32_t texpage,
+                                         bool semi_transparent) {
+    const auto edge = [](std::int32_t ax, std::int32_t ay, std::int32_t bx,
+                         std::int32_t by, std::int32_t cx, std::int32_t cy) {
+        return static_cast<std::int64_t>(bx - ax) *
+                   static_cast<std::int64_t>(cy - ay) -
+               static_cast<std::int64_t>(by - ay) *
+                   static_cast<std::int64_t>(cx - ax);
+    };
+
+    const auto area = edge(first.x, first.y, second.x, second.y, third.x,
+                           third.y);
+    if (area == 0) return;
+
+    const auto min_x = std::max<std::int32_t>(
+        draw_area_left_, std::min({first.x, second.x, third.x}));
+    const auto max_x = std::min<std::int32_t>(
+        draw_area_right_, std::max({first.x, second.x, third.x}));
+    const auto min_y = std::max<std::int32_t>(
+        draw_area_top_, std::min({first.y, second.y, third.y}));
+    const auto max_y = std::min<std::int32_t>(
+        draw_area_bottom_, std::max({first.y, second.y, third.y}));
+    if (min_x > max_x || min_y > max_y) return;
+
+    const bool counter_clockwise = area > 0;
+    for (std::int32_t y = min_y; y <= max_y; ++y) {
+        for (std::int32_t x = min_x; x <= max_x; ++x) {
+            const auto w0 = edge(second.x, second.y, third.x, third.y, x, y);
+            const auto w1 = edge(third.x, third.y, first.x, first.y, x, y);
+            const auto w2 = edge(first.x, first.y, second.x, second.y, x, y);
+            const bool inside =
+                counter_clockwise
+                    ? (w0 >= 0 && w1 >= 0 && w2 >= 0)
+                    : (w0 <= 0 && w1 <= 0 && w2 <= 0);
+            if (!inside) continue;
+
+            // Affine texture mapping, matching the hardware (no perspective).
+            const auto u =
+                (w0 * first.u + w1 * second.u + w2 * third.u) / area;
+            const auto v =
+                (w0 * first.v + w1 * second.v + w2 * third.v) / area;
+            const auto texel = sample_texture(
+                static_cast<std::uint32_t>(u),
+                static_cast<std::uint32_t>(v), clut, texpage);
+            plot_textured(x, y, texel, modulation, texpage, semi_transparent);
+        }
+    }
+}
+
+void SoftwareGpu::draw_textured_rectangle(std::uint32_t modulation,
+                                          std::uint32_t position,
+                                          std::uint32_t texcoord,
+                                          std::uint32_t width,
+                                          std::uint32_t height,
+                                          std::uint32_t clut,
+                                          std::uint32_t texpage,
+                                          bool semi_transparent) {
+    const auto start_x = coordinate_x(position) + draw_offset_x_;
+    const auto start_y = coordinate_y(position) + draw_offset_y_;
+    const auto base_u = texcoord & 0xFFu;
+    const auto base_v = (texcoord >> 8) & 0xFFu;
+
+    for (std::uint32_t row = 0; row < height; ++row) {
+        for (std::uint32_t column = 0; column < width; ++column) {
+            const auto texel = sample_texture(base_u + column, base_v + row,
+                                              clut, texpage);
+            plot_textured(start_x + static_cast<std::int32_t>(column),
+                          start_y + static_cast<std::int32_t>(row), texel,
+                          modulation, texpage, semi_transparent);
+        }
+    }
+}
+
+std::uint32_t SoftwareGpu::texture_window_coordinate(
+    std::uint32_t coordinate,
+    bool horizontal) const {
+    const auto mask = horizontal ? (texture_window_ & 0x1Fu)
+                                 : ((texture_window_ >> 5) & 0x1Fu);
+    const auto offset = horizontal ? ((texture_window_ >> 10) & 0x1Fu)
+                                   : ((texture_window_ >> 15) & 0x1Fu);
+    // Texcoord = (Texcoord AND NOT(Mask*8)) OR ((Offset AND Mask)*8)
+    return (coordinate & ~(mask * 8u)) | ((offset & mask) * 8u);
+}
+
+std::uint16_t SoftwareGpu::sample_texture(std::uint32_t u,
+                                          std::uint32_t v,
+                                          std::uint32_t clut,
+                                          std::uint32_t texpage) const {
+    u = texture_window_coordinate(u, true) & 0xFFu;
+    v = texture_window_coordinate(v, false) & 0xFFu;
+
+    const auto page_x = (texpage & 0xFu) * 64u;
+    const auto page_y = ((texpage >> 4) & 0x1u) * 256u;
+    const auto depth = (texpage >> 7) & 0x3u;
+    const auto clut_x = (clut & 0x3Fu) * 16u;
+    const auto clut_y = (clut >> 6) & 0x1FFu;
+
+    if (depth == 0) {
+        const auto word = read_vram(page_x + (u >> 2), page_y + v);
+        const auto index = (word >> ((u & 3u) * 4u)) & 0xFu;
+        return read_vram(clut_x + index, clut_y);
+    }
+    if (depth == 1) {
+        const auto word = read_vram(page_x + (u >> 1), page_y + v);
+        const auto index = (word >> ((u & 1u) * 8u)) & 0xFFu;
+        return read_vram(clut_x + index, clut_y);
+    }
+    return read_vram(page_x + u, page_y + v);
+}
+
+void SoftwareGpu::plot_textured(std::int32_t x,
+                                std::int32_t y,
+                                std::uint16_t texel,
+                                std::uint32_t modulation,
+                                std::uint32_t texpage,
+                                bool semi_transparent) {
+    // A zero texel is fully transparent and leaves the destination untouched.
+    if (texel == 0x0000u) return;
+    if (x < draw_area_left_ || x > draw_area_right_) return;
+    if (y < draw_area_top_ || y > draw_area_bottom_) return;
+
+    auto pixel = modulate_texel(static_cast<std::uint16_t>(texel & 0x7FFFu),
+                                modulation);
+
+    // Bit 15 of the texel (or of its CLUT entry) marks the pixel as
+    // semi-transparent; the blend mode comes from the texture page.
+    if (semi_transparent && (texel & 0x8000u) != 0) {
+        const auto back = read_vram(static_cast<std::uint32_t>(x),
+                                    static_cast<std::uint32_t>(y));
+        pixel = blend_texel(back, pixel, (texpage >> 5) & 0x3u);
+    }
+    store_pixel(x, y, pixel);
+}
+
 void SoftwareGpu::copy_vram(std::uint32_t source,
                             std::uint32_t destination,
                             std::uint32_t size) {
@@ -414,7 +672,6 @@ void SoftwareGpu::upload_image() {
                     static_cast<std::uint16_t>(packet_[index] >> 16));
         ++pixel;
     }
-    ++rendered_primitives_;
 }
 
 void SoftwareGpu::begin_download(std::uint32_t position, std::uint32_t size) {

@@ -10,8 +10,8 @@ None.
 
 - **Platform:** PlayStation 1
 - **Region:** USA
-- **Status:** GPU decoder and BIOS layer
-- **Progress:** 92%
+- **Status:** Textured primitive rendering
+- **Progress:** 95%
 - **Completed:** Local BIN/CUE verification, ISO9660 root discovery, and PS-X
   EXE header identification, plus a delay-slot-aware control-flow walk from
   the entry point and discovered direct calls, plus the first dependency-free
@@ -27,10 +27,33 @@ None.
   indirect `jr`/`jalr` sites without uploading executable data. The report now
   includes a CFG-filtered unresolved-site list. The native runtime now exposes
   controller, timer, GPU, disc-sector, audio, video, and BIOS service seams.
-- **Next step:** Render textured primitives using texture pages, CLUTs, and the
-  texture window.
+- **Next step:** Native execution of the full executable (COP2/GTE, DMA,
+  interrupts, boot path).
 - **Playable native build:** No
 - **Distributed game assets:** No
 
 Progress percentages are intentionally conservative and will only change when
 there is a reproducible milestone.
+
+## What a playable build still requires
+
+Texturing closes the rendering gap, but it does not make the game run. The
+current pipeline generates native code for a small instruction subset and
+stops at anything it does not understand, so there is no complete native
+program to launch yet. A playable Spider-Man build still needs:
+
+1. **Full CPU translation** — every MIPS R3000A instruction, including COP2,
+   which is the GTE (3D maths) the game relies on for geometry.
+2. **Complete boot path** — the retail kernel supplies the loader, exception
+   handlers and thread scheduler the executable expects to find at 0xA0/0xB0/
+   0xC0. The native kernel layer covers TTY/exit/events only, so a recompiled
+   program still has to start itself the way `_start` expects.
+3. **Bus and DMA** — GPU DMA linked lists (DMA2), CD-ROM sector streaming for
+   `CD.WAD`/`CINEMAS.XA`, timers, and VBlank/IRQ delivery.
+4. **Audio and video output** — SPU/XA playback and a real window presenting the
+   display area instead of an in-memory frame.
+5. **Input protocol** — the pad serial protocol, not just a raw key state.
+
+Until those exist, `r6-diagnostic` and `r6-tests` are the runnable artifacts.
+The renderer is a software rasterizer; there is no GPU or shader pipeline, and
+adding one would not change whether the game runs.
