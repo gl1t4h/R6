@@ -1,0 +1,142 @@
+#!/usr/bin/env python3
+"""Generate a local native translation-unit prototype from a PS-X EXE.
+
+The output is intentionally required to live outside the repository. It is a
+derived local analysis artifact and must never be committed or distributed.
+Only a small safe instruction subset is emitted as C++; unsupported
+instructions fail loudly at runtime.
+"""
+
+from __future__ import annotations
+
+import argparse
+import struct
+from pathlib import Path
+
+from mips_decode import decode_word
+
+
+def word(data: bytes, offset: int) -> int:
+    return struct.unpack_from("<I", data, offset)[0]
+
+
+def cpp_reg(index: int) -> str:
+    return f"cpu.gpr[{index}]"
+
+
+def ensure_outside_repo(output: Path) -> None:
+    repo = Path(__file__).resolve().parents[1]
+    try:
+        output.relative_to(repo)
+    except ValueError:
+        return
+    raise ValueError("generated translation units must be written outside the repository")
+
+
+def translate(instruction: int, address: int, decoded: dict) -> list[str]:
+    opcode = instruction >> 26
+    rs = (instruction >> 21) & 0x1F
+    rt = (instruction >> 16) & 0x1F
+    rd = (instruction >> 11) & 0x1F
+    shamt = (instruction >> 6) & 0x1F
+    imm = instruction & 0xFFFF
+    simm = imm - 0x10000 if imm & 0x8000 else imm
+    kind = decoded["kind"]
+
+    if instruction == 0:
+        return ["    cpu.pc += 4;  // nop"]
+    if opcode == 0 and (instruction & 0x3F) == 0x21:
+        return [
+            f"    {cpp_reg(rd)} = {cpp_reg(rs)} + {cpp_reg(rt)};",
+            "    cpu.pc += 4;",
+        ]
+    if opcode == 0 and (instruction & 0x3F) == 0x23:
+        return [
+            f"    {cpp_reg(rd)} = {cpp_reg(rs)} - {cpp_reg(rt)};",
+            "    cpu.pc += 4;",
+        ]
+    if opcode == 0 and (instruction & 0x3F) == 0x00:
+        return [
+            f"    {cpp_reg(rd)} = {cpp_reg(rt)} << {shamt};",
+            "    cpu.pc += 4;",
+        ]
+    if opcode == 0x09:
+        return [
+            f"    {cpp_reg(rt)} = {cpp_reg(rs)} + {simm};",
+            "    cpu.pc += 4;",
+        ]
+    if opcode == 0x0F:
+        return [
+            f"    {cpp_reg(rt)} = 0x{imm:04X}u << 16;",
+            "    cpu.pc += 4;",
+        ]
+    if opcode == 0x0D:
+        return [
+            f"    {cpp_reg(rt)} = {cpp_reg(rs)} | 0x{imm:04X}u;",
+            "    cpu.pc += 4;",
+        ]
+    if kind == "return":
+        return ["    return;  // jr $ra"]
+
+    return [
+        f"    r6::unsupported_instruction(cpu, 0x{address:08X}u, 0x{instruction:08X}u);"
+    ]
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("exe_path", type=Path, help="local PS-X EXE analysis copy")
+    parser.add_argument("output_path", type=Path, help="local output path outside the repo")
+    parser.add_argument("--max-instructions", type=int, default=256)
+    args = parser.parse_args()
+
+    exe = args.exe_path.resolve()
+    output = args.output_path.resolve()
+    ensure_outside_repo(output)
+
+    data = exe.read_bytes()
+    if data[:8] != b"PS-X EXE":
+        parser.error("input does not have a PS-X EXE header")
+    load_address = word(data, 0x18)
+    payload_size = word(data, 0x1C)
+    initial_pc = word(data, 0x10)
+    payload = data[2048 : 2048 + payload_size]
+
+    lines = [
+        "// GENERATED LOCALLY FROM A USER-SUPPLIED PS-X EXE.",
+        "// Do not commit or distribute this file.",
+        '#include "r6/native_runtime.h"',
+        "",
+        "namespace r6_generated {",
+        "",
+        f"void entry(r6::CpuState& cpu) {{  // 0x{initial_pc:08X}",
+        f"    cpu.pc = 0x{initial_pc:08X}u;",
+    ]
+
+    entry_offset = initial_pc - load_address
+    if entry_offset < 0 or entry_offset >= len(payload) or entry_offset % 4:
+        parser.error("PS-X EXE entry point is outside the declared payload")
+
+    for offset in range(
+        entry_offset,
+        min(len(payload), entry_offset + args.max_instructions * 4),
+        4,
+    ):
+        address = load_address + offset
+        instruction = word(payload, offset)
+        decoded = decode_word(instruction, address)
+        lines.append(f"    // 0x{address:08X}: {decoded['text']}")
+        lines.extend(translate(instruction, address, decoded))
+        if decoded["kind"] in ("call", "jump", "branch", "trap", "indirect_call"):
+            lines.append("    return;  // control-flow translation pending")
+            break
+
+    lines.extend(["}", "", "}  // namespace r6_generated", ""])
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text("\n".join(lines), encoding="utf-8")
+    print(f"Wrote local native translation prototype: {output}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

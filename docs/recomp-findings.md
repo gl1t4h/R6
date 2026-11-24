@@ -61,3 +61,12 @@ The first decoder and synthetic tests are now in `tools/mips_decode.py` and
 `tests/test_mips_decode.py`. They cover common arithmetic, memory, branch,
 jump, call, return, and delay-slot forms. The decoder is intentionally
 dependency-free so it can become part of the future translation pipeline.
+
+## Native translation prototype
+
+`tools/generate-native-stub.py` now consumes a local PS-X EXE and emits a
+local-only C++ translation prototype outside the repository. It currently
+translates a small safe subset (`nop`, selected arithmetic/immediate
+instructions, `lui`, `ori`, and returns) and fails loudly at unsupported
+instructions. This proves the decoder-to-C++ pipeline without pretending that
+the game is already playable.

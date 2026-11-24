@@ -13,41 +13,15 @@ import struct
 from collections import deque
 from pathlib import Path
 
+from mips_decode import decode_word
+
 
 def word(data: bytes, offset: int) -> int:
     return struct.unpack_from("<I", data, offset)[0]
 
 
-def signed(value: int, bits: int) -> int:
-    sign = 1 << (bits - 1)
-    return (value & (sign - 1)) - (value & sign)
-
-
 def in_image(address: int, load: int, size: int) -> bool:
     return load <= address < load + size and (address - load) % 4 == 0
-
-
-def decode(instruction: int, pc: int) -> dict:
-    opcode = instruction >> 26
-    rs = (instruction >> 21) & 0x1F
-    funct = instruction & 0x3F
-
-    if opcode == 0 and funct == 0x08 and rs == 31:
-        return {"kind": "return", "control": True}
-    if opcode == 0 and funct == 0x09:
-        return {"kind": "indirect_call", "control": True}
-    if opcode == 0x03:
-        target = ((pc + 4) & 0xF0000000) | ((instruction & 0x03FFFFFF) << 2)
-        return {"kind": "call", "target": target, "control": True}
-    if opcode == 0x02:
-        target = ((pc + 4) & 0xF0000000) | ((instruction & 0x03FFFFFF) << 2)
-        return {"kind": "jump", "target": target, "control": True}
-    if opcode in (0x04, 0x05, 0x06, 0x07, 0x14, 0x15, 0x16, 0x17):
-        target = pc + 4 + (signed(instruction & 0xFFFF, 16) << 2)
-        return {"kind": "branch", "target": target, "control": True}
-    if opcode == 0 and funct in (0x0D, 0x0C):
-        return {"kind": "trap", "control": True}
-    return {"kind": "normal", "control": False}
 
 
 def analyze_function(
@@ -84,7 +58,7 @@ def analyze_function(
         ):
             visited.add(pc)
             block_instructions.append(pc)
-            decoded = decode(read_instruction(pc), pc)
+            decoded = decode_word(read_instruction(pc), pc)
 
             if decoded["kind"] == "call":
                 target = decoded["target"]

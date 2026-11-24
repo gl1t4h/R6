@@ -15,7 +15,7 @@ There is not yet a playable native recompilation.
 
 | Game | Region/version | Status | Progress |
 | --- | --- | --- | --- |
-| Spider-Man | USA PlayStation 1 release | MIPS decoding | 20% — local PS-X EXE discovery, CFG walking, and initial R3000A decoder tests |
+| Spider-Man | USA PlayStation 1 release | Native translation prototype | 25% - decoder integration and local C++ translation-unit generation |
 
 No games are currently completed.
 
@@ -106,6 +106,19 @@ cmake --build build --config Release
 
 The current scaffold is a development diagnostic, not a playable game.
 
+To generate a local-only native translation prototype from an extracted PS-X
+EXE:
+
+```powershell
+python .\tools\generate-native-stub.py `
+  "$env:USERPROFILE\R6-local\game.exe" `
+  "$env:USERPROFILE\R6-local\generated\game_translation.cpp"
+```
+
+The generated file must stay outside this repository. It supports only a small
+instruction subset and deliberately stops on unsupported control flow; it is
+not yet a playable recompilation.
+
 ## Development rules
 
 - Never add a game image or extracted game files to Git.
@@ -129,6 +142,7 @@ The current scaffold is a development diagnostic, not a playable game.
 ├── src/
 ├── tools/
 │   ├── analyze-mips.py
+│   ├── generate-native-stub.py
 │   ├── mips_decode.py
 │   ├── inspect-ps1-disc.py
 │   └── verify-disc.ps1
@@ -159,7 +173,7 @@ None.
 
 | Game | Status | Next milestone |
 | --- | --- | --- |
-| Spider-Man (USA) | MIPS decoding | Integrate decoder output into translation-unit generation |
+| Spider-Man (USA) | Native translation prototype | Expand instruction coverage and implement native memory/platform services |
 
 ## Contributing
 
