@@ -15,7 +15,7 @@ There is not yet a playable native recompilation.
 
 | Game | Region/version | Status | Progress |
 | --- | --- | --- | --- |
-| Spider-Man | USA PlayStation 1 release | Jump-table discovery | 60% - conservative table loads and indirect control-flow targets |
+| Spider-Man | USA PlayStation 1 release | Indirect-target reporting | 65% - bounded table analysis and unresolved-site reporting |
 
 No games are currently completed.
 
@@ -145,6 +145,7 @@ not yet a playable recompilation.
 │   ├── generate-native-stub.py
 │   ├── mips_decode.py
 │   ├── inspect-ps1-disc.py
+│   ├── report-indirects.py
 │   └── verify-disc.ps1
 ├── CMakeLists.txt
 └── README.md
@@ -173,7 +174,7 @@ None.
 
 | Game | Status | Next milestone |
 | --- | --- | --- |
-| Spider-Man (USA) | Jump-table discovery | Add bounded indexed-table analysis and unresolved-target reporting |
+| Spider-Man (USA) | Indirect-target reporting | Validate unresolved sites against reachable CFG paths |
 
 ## Contributing
 

@@ -104,3 +104,8 @@ The same analysis now resolves aligned in-image `lw` values. This covers a
 basic jump-table/function-pointer pattern where a constant table address is
 loaded and then used by `jr` or `jalr`. Indexed tables and external pointers
 remain unresolved until a bounded table analysis is added.
+
+`tools/report-indirects.py` now emits a local JSON report of potential
+indirect `jr` and `jalr` sites. The report marks each site as requiring
+contextual resolution and caps output size; it does not claim that every
+static candidate is reachable code.
