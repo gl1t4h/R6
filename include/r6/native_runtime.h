@@ -3,6 +3,7 @@
 #include <cstdint>
 
 #include "r6/cpu_state.h"
+#include "r6/memory.h"
 
 namespace r6 {
 

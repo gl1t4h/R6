@@ -15,7 +15,7 @@ There is not yet a playable native recompilation.
 
 | Game | Region/version | Status | Progress |
 | --- | --- | --- | --- |
-| Spider-Man | USA PlayStation 1 release | Native translation prototype | 25% - decoder integration and local C++ translation-unit generation |
+| Spider-Man | USA PlayStation 1 release | Native memory translation | 30% - decoder integration, local C++ generation, and load/store lowering |
 
 No games are currently completed.
 
@@ -173,7 +173,7 @@ None.
 
 | Game | Status | Next milestone |
 | --- | --- | --- |
-| Spider-Man (USA) | Native translation prototype | Expand instruction coverage and implement native memory/platform services |
+| Spider-Man (USA) | Native memory translation | Add delay-slot-aware control-flow lowering and runtime service boundaries |
 
 ## Contributing
 

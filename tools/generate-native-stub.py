@@ -75,6 +75,32 @@ def translate(instruction: int, address: int, decoded: dict) -> list[str]:
             f"    {cpp_reg(rt)} = {cpp_reg(rs)} | 0x{imm:04X}u;",
             "    cpu.pc += 4;",
         ]
+    if opcode in (0x20, 0x21, 0x23, 0x24, 0x25):
+        address_name = f"address_{address:08X}"
+        operation = {
+            0x20: f"static_cast<std::int32_t>(static_cast<std::int8_t>(memory.read8({address_name})))",
+            0x21: f"static_cast<std::int32_t>(static_cast<std::int16_t>(memory.read16({address_name})))",
+            0x23: f"memory.read32({address_name})",
+            0x24: f"memory.read8({address_name})",
+            0x25: f"memory.read16({address_name})",
+        }[opcode]
+        return [
+            f"    const std::uint32_t {address_name} = {cpp_reg(rs)} + {simm};",
+            f"    {cpp_reg(rt)} = static_cast<std::uint32_t>({operation});",
+            "    cpu.pc += 4;",
+        ]
+    if opcode in (0x28, 0x29, 0x2B):
+        address_name = f"address_{address:08X}"
+        operation = {
+            0x28: f"memory.write8({address_name}, static_cast<std::uint8_t>({cpp_reg(rt)}));",
+            0x29: f"memory.write16({address_name}, static_cast<std::uint16_t>({cpp_reg(rt)}));",
+            0x2B: f"memory.write32({address_name}, {cpp_reg(rt)});",
+        }[opcode]
+        return [
+            f"    const std::uint32_t {address_name} = {cpp_reg(rs)} + {simm};",
+            f"    {operation}",
+            "    cpu.pc += 4;",
+        ]
     if kind == "return":
         return ["    return;  // jr $ra"]
 
@@ -109,7 +135,7 @@ def main() -> int:
         "",
         "namespace r6_generated {",
         "",
-        f"void entry(r6::CpuState& cpu) {{  // 0x{initial_pc:08X}",
+        f"void entry(r6::CpuState& cpu, r6::Memory& memory) {{  // 0x{initial_pc:08X}",
         f"    cpu.pc = 0x{initial_pc:08X}u;",
     ]
 

@@ -70,3 +70,8 @@ translates a small safe subset (`nop`, selected arithmetic/immediate
 instructions, `lui`, `ori`, and returns) and fails loudly at unsupported
 instructions. This proves the decoder-to-C++ pipeline without pretending that
 the game is already playable.
+
+The generated prototype now accepts `r6::Memory&` and lowers common
+little-endian `lb`, `lh`, `lw`, `lbu`, `lhu`, `sb`, `sh`, and `sw` operations.
+The memory object is deliberately bounds-checked so invalid address mappings
+fail during development instead of silently corrupting the host process.
