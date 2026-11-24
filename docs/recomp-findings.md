@@ -99,3 +99,8 @@ The CFG walker now tracks a small constant register state through `lui`,
 `jalr` or `jr` lies inside the executable image, the target is followed;
 otherwise it remains unresolved. This deliberately favors incomplete analysis
 over false code discovery.
+
+The same analysis now resolves aligned in-image `lw` values. This covers a
+basic jump-table/function-pointer pattern where a constant table address is
+loaded and then used by `jr` or `jalr`. Indexed tables and external pointers
+remain unresolved until a bounded table analysis is added.

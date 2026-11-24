@@ -25,7 +25,7 @@ def walk_function(
 ) -> tuple[set[int], set[int]]:
     pending = deque([(entry, {})])
     visited: set[int] = set()
-    calls: set[int] = set()
+    targets: set[int] = set()
 
     while pending and len(visited) < max_instructions:
         block, incoming_constants = pending.popleft()
@@ -59,6 +59,16 @@ def walk_function(
                 if funct == 0x23:
                     value = constants[rs] - constants[rt]
                 constants[rd] = value & 0xFFFFFFFF
+            elif opcode == 0x23 and rs in constants:
+                address = (constants[rs] + simm) & 0xFFFFFFFF
+                if (
+                    address >= load
+                    and address + 4 <= load + len(payload)
+                    and (address - load) % 4 == 0
+                ):
+                    constants[rt] = word(payload, address - load)
+                else:
+                    constants.pop(rt, None)
             elif opcode == 0x03 or opcode in (0x20, 0x21, 0x23, 0x24, 0x25):
                 constants.pop(rt, None)
             elif opcode == 0 and funct in (0x08, 0x09):
@@ -67,7 +77,7 @@ def walk_function(
             if kind == "call":
                 target = decoded["target"]
                 if in_image(target, load, size):
-                    calls.add(target)
+                    targets.add(target)
                 delay = pc + 4
                 if in_image(delay, load, size):
                     visited.add(delay)
@@ -78,7 +88,7 @@ def walk_function(
             if kind == "indirect_call":
                 target = constants.get(rs)
                 if target is not None and in_image(target, load, size):
-                    calls.add(target)
+                    targets.add(target)
                 delay = pc + 4
                 if in_image(delay, load, size):
                     visited.add(delay)
@@ -102,6 +112,7 @@ def walk_function(
             if kind == "jump_register":
                 target = constants.get(rs)
                 if target is not None and in_image(target, load, size):
+                    targets.add(target)
                     pending.append((target, constants.copy()))
                 break
             if kind == "branch":
@@ -114,7 +125,7 @@ def walk_function(
                 break
             pc += 4
 
-    return visited, calls
+    return visited, targets
 
 
 def discover_reachable_functions(
@@ -138,10 +149,10 @@ def discover_reachable_functions(
             continue
         seen.add(entry)
         discovered.append(entry)
-        _, calls = walk_function(
+        _, targets = walk_function(
             payload, load, len(payload), entry, max_instructions_per_function
         )
-        for target in sorted(calls):
+        for target in sorted(targets):
             if target not in seen:
                 pending.append(target)
     return discovered

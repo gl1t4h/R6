@@ -43,6 +43,23 @@ class MipsCfgTests(unittest.TestCase):
         )
         self.assertEqual(entries[:2], [load, load + 0x20])
 
+    def test_discovers_jump_table_loaded_target(self):
+        load = 0x80010000
+        payload = bytearray(0x50)
+        struct.pack_into("<I", payload, 0x00, 0x3C088001)  # lui $t0, 0x8001
+        struct.pack_into("<I", payload, 0x04, 0x35080030)  # ori $t0, $t0, 0x30
+        struct.pack_into("<I", payload, 0x08, 0x8D090000)  # lw $t1, 0($t0)
+        struct.pack_into("<I", payload, 0x0C, 0x01200008)  # jr $t1
+        struct.pack_into("<I", payload, 0x10, 0)
+        struct.pack_into("<I", payload, 0x30, load + 0x40)
+        struct.pack_into("<I", payload, 0x40, 0x03E00008)
+        struct.pack_into("<I", payload, 0x44, 0)
+
+        entries = discover_reachable_functions(
+            bytes(payload), load, load, max_functions=8
+        )
+        self.assertEqual(entries[:2], [load, load + 0x40])
+
 
 if __name__ == "__main__":
     unittest.main()
