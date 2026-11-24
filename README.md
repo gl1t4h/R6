@@ -15,7 +15,7 @@ There is not yet a playable native recompilation.
 
 | Game | Region/version | Status | Progress |
 | --- | --- | --- | --- |
-| Spider-Man | USA PlayStation 1 release | Initial investigation | 0% — input verification and executable-format research |
+| Spider-Man | USA PlayStation 1 release | MIPS analysis | 10% — BIN/CUE verification, ISO9660 discovery, PS-X EXE identification, and first-pass call-target scanning |
 
 No games are currently completed.
 
@@ -122,11 +122,14 @@ The current scaffold is a development diagnostic, not a playable game.
 .
 ├── docs/
 │   ├── asset-policy.md
-│   └── game-status.md
+│   ├── game-status.md
+│   └── recomp-findings.md
 ├── include/
 │   └── r6/
 ├── src/
 ├── tools/
+│   ├── analyze-mips.py
+│   ├── inspect-ps1-disc.py
 │   └── verify-disc.ps1
 ├── CMakeLists.txt
 └── README.md
@@ -155,7 +158,7 @@ None.
 
 | Game | Status | Next milestone |
 | --- | --- | --- |
-| Spider-Man (USA) | Initial investigation | Establish a reproducible local input-analysis workflow |
+| Spider-Man (USA) | MIPS analysis | Build control-flow-aware MIPS decoding and an initial function database |
 
 ## Contributing
 
