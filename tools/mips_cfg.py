@@ -26,6 +26,7 @@ def walk_function(
     pending = deque([(entry, {})])
     visited: set[int] = set()
     targets: set[int] = set()
+    max_table_entries = 32
 
     while pending and len(visited) < max_instructions:
         block, incoming_constants = pending.popleft()
@@ -33,6 +34,8 @@ def walk_function(
             continue
         pc = block
         constants = dict(incoming_constants)
+        indexed: dict[int, tuple[int, int, int]] = {}
+        table_origins: dict[int, int] = {}
         while in_image(pc, load, size) and pc not in visited:
             if len(visited) >= max_instructions:
                 break
@@ -59,6 +62,22 @@ def walk_function(
                 if funct == 0x23:
                     value = constants[rs] - constants[rt]
                 constants[rd] = value & 0xFFFFFFFF
+                indexed.pop(rd, None)
+                table_origins.pop(rd, None)
+            elif opcode == 0 and funct == 0x00 and rt not in constants:
+                indexed[rd] = (rt, 1 << ((instruction >> 6) & 0x1F), 0)
+                constants.pop(rd, None)
+                table_origins.pop(rd, None)
+            elif opcode == 0 and funct == 0x21:
+                indexed_value = None
+                if rs in constants and rt in indexed:
+                    indexed_value = (rt, indexed[rt][1], constants[rs])
+                elif rt in constants and rs in indexed:
+                    indexed_value = (rs, indexed[rs][1], constants[rt])
+                if indexed_value is not None:
+                    indexed[rd] = indexed_value
+                    constants.pop(rd, None)
+                    table_origins.pop(rd, None)
             elif opcode == 0x23 and rs in constants:
                 address = (constants[rs] + simm) & 0xFFFFFFFF
                 if (
@@ -69,6 +88,9 @@ def walk_function(
                     constants[rt] = word(payload, address - load)
                 else:
                     constants.pop(rt, None)
+            elif opcode == 0x23 and rs in indexed and simm == 0:
+                table_origins[rt] = indexed[rs][2]
+                constants.pop(rt, None)
             elif opcode == 0x03 or opcode in (0x20, 0x21, 0x23, 0x24, 0x25):
                 constants.pop(rt, None)
             elif opcode == 0 and funct in (0x08, 0x09):
@@ -114,6 +136,20 @@ def walk_function(
                 if target is not None and in_image(target, load, size):
                     targets.add(target)
                     pending.append((target, constants.copy()))
+                elif rs in table_origins:
+                    table_base = table_origins[rs]
+                    for index in range(max_table_entries):
+                        address = table_base + index * 4
+                        if (
+                            address < load
+                            or address + 4 > load + len(payload)
+                            or address % 4
+                        ):
+                            break
+                        table_target = word(payload, address - load)
+                        if not in_image(table_target, load, size):
+                            break
+                        targets.add(table_target)
                 break
             if kind == "branch":
                 delay = pc + 4
