@@ -10,8 +10,8 @@ None.
 
 - **Platform:** PlayStation 1
 - **Region:** USA
-- **Status:** Reachable indirect analysis
-- **Progress:** 70%
+- **Status:** Platform service model
+- **Progress:** 75%
 - **Completed:** Local BIN/CUE verification, ISO9660 root discovery, and PS-X
   EXE header identification, plus a delay-slot-aware control-flow walk from
   the entry point and discovered direct calls, plus the first dependency-free
@@ -25,9 +25,10 @@ None.
   now resolves some indirect `jalr` and `jr` targets, including targets loaded
   from in-image constant tables. A local report tool now lists potential
   indirect `jr`/`jalr` sites without uploading executable data. The report now
-  includes a CFG-filtered unresolved-site list.
-- **Next step:** Resolve remaining reachable sites with data-flow and service
-  models.
+  includes a CFG-filtered unresolved-site list. The native runtime now exposes
+  controller, timer, GPU, disc-sector, audio, video, and BIOS service seams.
+- **Next step:** Map discovered executable hardware accesses to concrete
+  Windows implementations.
 - **Playable native build:** No
 - **Distributed game assets:** No
 

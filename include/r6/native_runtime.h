@@ -3,6 +3,7 @@
 #include <cstdint>
 
 #include "r6/cpu_state.h"
+#include "r6/hardware_map.h"
 #include "r6/memory.h"
 #include "r6/platform_services.h"
 

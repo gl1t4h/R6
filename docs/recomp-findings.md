@@ -114,3 +114,9 @@ The report now re-walks discovered CFG-reachable functions and separately
 lists unresolved indirect sites that are actually reachable under the current
 analysis limits. This distinguishes the full static candidate count from the
 smaller set that the native translator must still model.
+
+The runtime now separates platform behavior behind `PlatformServices` and
+`HardwareMap`. This provides native seams for controller input, timers, GPU
+registers, disc-sector reads, audio, video, and BIOS calls without embedding
+emulation logic in the translator. The current null implementation is a
+development stub; it is not a complete game runtime.

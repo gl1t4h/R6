@@ -15,7 +15,7 @@ There is not yet a playable native recompilation.
 
 | Game | Region/version | Status | Progress |
 | --- | --- | --- | --- |
-| Spider-Man | USA PlayStation 1 release | Reachable indirect analysis | 70% - CFG-filtered unresolved control-flow reporting |
+| Spider-Man | USA PlayStation 1 release | Platform service model | 75% - reachable indirect analysis and native hardware-service boundaries |
 
 No games are currently completed.
 
@@ -174,7 +174,7 @@ None.
 
 | Game | Status | Next milestone |
 | --- | --- | --- |
-| Spider-Man (USA) | Reachable indirect analysis | Resolve remaining reachable sites with data-flow and service models |
+| Spider-Man (USA) | Platform service model | Map executable hardware accesses to real Windows implementations |
 
 ## Contributing
 
