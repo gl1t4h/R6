@@ -23,15 +23,16 @@ def walk_function(
     entry: int,
     max_instructions: int,
 ) -> tuple[set[int], set[int]]:
-    pending = deque([entry])
+    pending = deque([(entry, {})])
     visited: set[int] = set()
     calls: set[int] = set()
 
     while pending and len(visited) < max_instructions:
-        block = pending.popleft()
+        block, incoming_constants = pending.popleft()
         if not in_image(block, load, size):
             continue
         pc = block
+        constants = dict(incoming_constants)
         while in_image(pc, load, size) and pc not in visited:
             if len(visited) >= max_instructions:
                 break
@@ -39,6 +40,29 @@ def walk_function(
             instruction = word(payload, pc - load)
             decoded = decode_word(instruction, pc)
             kind = decoded["kind"]
+            opcode = instruction >> 26
+            rs = (instruction >> 21) & 0x1F
+            rt = (instruction >> 16) & 0x1F
+            rd = (instruction >> 11) & 0x1F
+            funct = instruction & 0x3F
+            imm = instruction & 0xFFFF
+            simm = imm - 0x10000 if imm & 0x8000 else imm
+
+            if opcode == 0x0F:
+                constants[rt] = imm << 16
+            elif opcode == 0x0D and rs in constants:
+                constants[rt] = constants[rs] | imm
+            elif opcode == 0x09 and rs in constants:
+                constants[rt] = (constants[rs] + simm) & 0xFFFFFFFF
+            elif opcode == 0 and funct in (0x21, 0x23) and rs in constants and rt in constants:
+                value = constants[rs] + constants[rt]
+                if funct == 0x23:
+                    value = constants[rs] - constants[rt]
+                constants[rd] = value & 0xFFFFFFFF
+            elif opcode == 0x03 or opcode in (0x20, 0x21, 0x23, 0x24, 0x25):
+                constants.pop(rt, None)
+            elif opcode == 0 and funct in (0x08, 0x09):
+                constants.pop(rd, None)
 
             if kind == "call":
                 target = decoded["target"]
@@ -49,15 +73,18 @@ def walk_function(
                     visited.add(delay)
                 continuation = pc + 8
                 if in_image(continuation, load, size):
-                    pending.append(continuation)
+                    pending.append((continuation, constants.copy()))
                 break
             if kind == "indirect_call":
+                target = constants.get(rs)
+                if target is not None and in_image(target, load, size):
+                    calls.add(target)
                 delay = pc + 4
                 if in_image(delay, load, size):
                     visited.add(delay)
                 continuation = pc + 8
                 if in_image(continuation, load, size):
-                    pending.append(continuation)
+                    pending.append((continuation, constants.copy()))
                 break
             if kind == "return" or kind == "trap":
                 delay = pc + 4
@@ -70,7 +97,12 @@ def walk_function(
                     visited.add(delay)
                 target = decoded["target"]
                 if in_image(target, load, size):
-                    pending.append(target)
+                    pending.append((target, constants.copy()))
+                break
+            if kind == "jump_register":
+                target = constants.get(rs)
+                if target is not None and in_image(target, load, size):
+                    pending.append((target, constants.copy()))
                 break
             if kind == "branch":
                 delay = pc + 4
@@ -78,7 +110,7 @@ def walk_function(
                     visited.add(delay)
                 for successor in (decoded["target"], pc + 8):
                     if in_image(successor, load, size):
-                        pending.append(successor)
+                        pending.append((successor, constants.copy()))
                 break
             pc += 4
 

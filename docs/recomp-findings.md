@@ -93,3 +93,9 @@ follow direct calls and control-flow edges, emit a bounded native function
 candidate for each discovered function, and register them with the dispatcher.
 Indirect calls and jump tables are left unresolved rather than treating
 arbitrary data as code.
+
+The CFG walker now tracks a small constant register state through `lui`,
+`ori`, `addiu`, `addu`, and `subu`. If that proves the target of an indirect
+`jalr` or `jr` lies inside the executable image, the target is followed;
+otherwise it remains unresolved. This deliberately favors incomplete analysis
+over false code discovery.

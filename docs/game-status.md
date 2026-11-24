@@ -10,8 +10,8 @@ None.
 
 - **Platform:** PlayStation 1
 - **Region:** USA
-- **Status:** CFG function discovery
-- **Progress:** 50%
+- **Status:** Indirect target discovery
+- **Progress:** 55%
 - **Completed:** Local BIN/CUE verification, ISO9660 root discovery, and PS-X
   EXE header identification, plus a delay-slot-aware control-flow walk from
   the entry point and discovered direct calls, plus the first dependency-free
@@ -21,9 +21,10 @@ None.
   delay-slot-aware branch/jump/call lowering, a platform service interface,
   and a PC-to-native-function dispatcher with a step budget. The generator
   now emits and registers functions reached through validated direct in-image
-  calls and control-flow edges.
-- **Next step:** Resolve indirect calls and jump tables without guessing data
-  as code.
+  calls and control-flow edges. Simple `lui`/`ori`/`addiu` constant propagation
+  now resolves some indirect `jalr` and `jr` targets.
+- **Next step:** Analyze jump tables and unresolved function-pointer calls
+  safely.
 - **Playable native build:** No
 - **Distributed game assets:** No
 

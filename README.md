@@ -15,7 +15,7 @@ There is not yet a playable native recompilation.
 
 | Game | Region/version | Status | Progress |
 | --- | --- | --- | --- |
-| Spider-Man | USA PlayStation 1 release | CFG function discovery | 50% - validated direct-call reachability and multi-function registration |
+| Spider-Man | USA PlayStation 1 release | Indirect target discovery | 55% - conservative constant-propagation for indirect calls/jumps |
 
 No games are currently completed.
 
@@ -173,7 +173,7 @@ None.
 
 | Game | Status | Next milestone |
 | --- | --- | --- |
-| Spider-Man (USA) | CFG function discovery | Resolve indirect calls and jump tables without guessing data as code |
+| Spider-Man (USA) | Indirect target discovery | Analyze jump tables and unresolved function-pointer calls safely |
 
 ## Contributing
 
