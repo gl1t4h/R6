@@ -4,6 +4,7 @@
 
 #include "r6/cpu_state.h"
 #include "r6/memory.h"
+#include "r6/platform_services.h"
 
 namespace r6 {
 

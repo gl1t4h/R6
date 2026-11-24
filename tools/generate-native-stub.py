@@ -109,6 +109,76 @@ def translate(instruction: int, address: int, decoded: dict) -> list[str]:
     ]
 
 
+def translate_delay_slot(payload: bytes, load_address: int, address: int) -> list[str]:
+    offset = address - load_address
+    if offset < 0 or offset + 4 > len(payload):
+        return ["    r6::unsupported_instruction(cpu, cpu.pc, 0u);"]
+    instruction = word(payload, offset)
+    decoded = decode_word(instruction, address)
+    if decoded["kind"] in ("call", "jump", "branch", "return", "indirect_call", "trap"):
+        return [
+            f"    r6::unsupported_instruction(cpu, 0x{address:08X}u, 0x{instruction:08X}u);"
+        ]
+    return translate(instruction, address, decoded)
+
+
+def translate_control(
+    instruction: int,
+    address: int,
+    decoded: dict,
+    payload: bytes,
+    load_address: int,
+) -> list[str]:
+    delay = translate_delay_slot(payload, load_address, address + 4)
+    opcode = instruction >> 26
+    rs = (instruction >> 21) & 0x1F
+    rt = (instruction >> 16) & 0x1F
+    funct = instruction & 0x3F
+
+    if decoded["kind"] == "call":
+        return [
+            f"    cpu.gpr[31] = 0x{address + 8:08X}u;",
+            *delay,
+            f"    cpu.pc = 0x{decoded['target']:08X}u;",
+            "    return cpu.pc;",
+        ]
+    if decoded["kind"] == "jump":
+        return [
+            *delay,
+            f"    cpu.pc = 0x{decoded['target']:08X}u;",
+            "    return cpu.pc;",
+        ]
+    if decoded["kind"] == "return":
+        return [*delay, f"    cpu.pc = cpu.gpr[{rs}];", "    return cpu.pc;"]
+    if decoded["kind"] == "indirect_call":
+        rd = (instruction >> 11) & 0x1F
+        return [
+            f"    cpu.gpr[{rd}] = 0x{address + 8:08X}u;",
+            *delay,
+            f"    cpu.pc = cpu.gpr[{rs}];",
+            "    return cpu.pc;",
+        ]
+    if decoded["kind"] == "branch":
+        target = decoded["target"]
+        if opcode == 0x04:
+            condition = f"cpu.gpr[{rs}] == cpu.gpr[{rt}]"
+        elif opcode == 0x05:
+            condition = f"cpu.gpr[{rs}] != cpu.gpr[{rt}]"
+        elif opcode in (0x06, 0x16):
+            condition = f"static_cast<std::int32_t>(cpu.gpr[{rs}]) <= 0"
+        else:
+            condition = f"static_cast<std::int32_t>(cpu.gpr[{rs}]) > 0"
+        return [
+            f"    const bool taken = {condition};",
+            *delay,
+            f"    cpu.pc = taken ? 0x{target:08X}u : 0x{address + 8:08X}u;",
+            "    return cpu.pc;",
+        ]
+    return [
+        f"    r6::unsupported_instruction(cpu, 0x{address:08X}u, 0x{instruction:08X}u);"
+    ]
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("exe_path", type=Path, help="local PS-X EXE analysis copy")
@@ -135,7 +205,10 @@ def main() -> int:
         "",
         "namespace r6_generated {",
         "",
-        f"void entry(r6::CpuState& cpu, r6::Memory& memory) {{  // 0x{initial_pc:08X}",
+        f"std::uint32_t entry(r6::CpuState& cpu, r6::Memory& memory,",
+        "                    r6::PlatformServices& services) {",
+        "    (void)services;  // platform calls are the next runtime layer",
+        f"    // Entry point: 0x{initial_pc:08X}",
         f"    cpu.pc = 0x{initial_pc:08X}u;",
     ]
 
@@ -152,11 +225,15 @@ def main() -> int:
         instruction = word(payload, offset)
         decoded = decode_word(instruction, address)
         lines.append(f"    // 0x{address:08X}: {decoded['text']}")
-        lines.extend(translate(instruction, address, decoded))
-        if decoded["kind"] in ("call", "jump", "branch", "trap", "indirect_call"):
-            lines.append("    return;  // control-flow translation pending")
+        if decoded["kind"] in ("call", "jump", "branch", "trap", "indirect_call", "return"):
+            lines.extend(translate_control(
+                instruction, address, decoded, payload, load_address
+            ))
             break
+        lines.extend(translate(instruction, address, decoded))
 
+    if lines[-1].strip() != "return cpu.pc;":
+        lines.append("    return cpu.pc;")
     lines.extend(["}", "", "}  // namespace r6_generated", ""])
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text("\n".join(lines), encoding="utf-8")

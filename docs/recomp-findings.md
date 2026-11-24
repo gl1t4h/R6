@@ -75,3 +75,9 @@ The generated prototype now accepts `r6::Memory&` and lowers common
 little-endian `lb`, `lh`, `lw`, `lbu`, `lhu`, `sb`, `sh`, and `sw` operations.
 The memory object is deliberately bounds-checked so invalid address mappings
 fail during development instead of silently corrupting the host process.
+
+Control-flow lowering now models the MIPS delay slot before returning the next
+program counter for direct jumps, calls, branches, `jr`, and `jalr`. The
+generated prototype uses a `PlatformServices` boundary so controller, audio,
+and video replacements can be implemented without embedding PlayStation
+hardware code into the translator.
