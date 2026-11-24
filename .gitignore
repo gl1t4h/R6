@@ -1,0 +1,72 @@
+# Build output
+build/
+out/
+bin/
+obj/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+compile_commands.json
+
+# Visual Studio / IDE files
+.vs/
+*.user
+*.suo
+*.VC.db
+*.VC.opendb
+
+# Local recompilation workspaces
+local/
+work/
+artifacts/
+generated/
+logs/
+
+# PlayStation disc images and extracted game data.
+# These must remain on the user's machine and must never be committed.
+*.bin
+*.cue
+*.img
+*.iso
+*.ecm
+*.pbp
+*.chd
+*.m3u
+*.rom
+*.exe
+*.elf
+*.o
+*.obj
+*.a
+*.lib
+*.dll
+*.pdb
+*.map
+*.sav
+*.srm
+*.mcr
+
+# Common extracted asset/data directories
+disc/
+dump/
+extracted/
+assets/
+assets-local/
+game-data/
+game_data/
+rom/
+roms/
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.token
+secrets/
+
+# OS files
+Thumbs.db
+Desktop.ini
+.DS_Store
