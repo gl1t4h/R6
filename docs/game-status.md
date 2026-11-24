@@ -10,8 +10,8 @@ None.
 
 - **Platform:** PlayStation 1
 - **Region:** USA
-- **Status:** Indirect-target reporting
-- **Progress:** 65%
+- **Status:** Reachable indirect analysis
+- **Progress:** 70%
 - **Completed:** Local BIN/CUE verification, ISO9660 root discovery, and PS-X
   EXE header identification, plus a delay-slot-aware control-flow walk from
   the entry point and discovered direct calls, plus the first dependency-free
@@ -24,8 +24,10 @@ None.
   calls and control-flow edges. Simple `lui`/`ori`/`addiu` constant propagation
   now resolves some indirect `jalr` and `jr` targets, including targets loaded
   from in-image constant tables. A local report tool now lists potential
-  indirect `jr`/`jalr` sites without uploading executable data.
-- **Next step:** Validate unresolved sites against reachable CFG paths.
+  indirect `jr`/`jalr` sites without uploading executable data. The report now
+  includes a CFG-filtered unresolved-site list.
+- **Next step:** Resolve remaining reachable sites with data-flow and service
+  models.
 - **Playable native build:** No
 - **Distributed game assets:** No
 

@@ -13,6 +13,7 @@ class IndirectReportTests(unittest.TestCase):
             path = Path(directory) / "sample.exe"
             data = bytearray(2048 + 8)
             data[:8] = b"PS-X EXE"
+            struct.pack_into("<I", data, 0x10, 0x80010000)
             struct.pack_into("<I", data, 0x18, 0x80010000)
             struct.pack_into("<I", data, 0x1C, 8)
             struct.pack_into("<I", data, 2048, 0x01200008)  # jr $t1
@@ -32,6 +33,7 @@ class IndirectReportTests(unittest.TestCase):
             self.assertEqual(report["potential_indirect_site_count"], 1)
             self.assertEqual(report["reported_sites"][0]["status"],
                              "requires_contextual_resolution")
+            self.assertEqual(report["reachable_unresolved_site_count"], 1)
 
 
 if __name__ == "__main__":

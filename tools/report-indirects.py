@@ -9,6 +9,7 @@ import struct
 from pathlib import Path
 
 from mips_decode import decode_word
+from mips_cfg import discover_reachable_indirect_sites
 
 
 def word(data: bytes, offset: int) -> int:
@@ -19,6 +20,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("exe_path", type=Path, help="local PS-X EXE analysis copy")
     parser.add_argument("--max-sites", type=int, default=256)
+    parser.add_argument("--max-functions", type=int, default=256)
     args = parser.parse_args()
 
     exe = args.exe_path.resolve()
@@ -43,10 +45,19 @@ def main() -> int:
             "status": "requires_contextual_resolution",
         })
 
+    reachable_sites = discover_reachable_indirect_sites(
+        payload,
+        load,
+        word(data, 0x10),
+        max_functions=args.max_functions,
+    )
     report = {
         "potential_indirect_site_count": len(sites),
         "reported_sites": sites[: args.max_sites],
         "truncated": len(sites) > args.max_sites,
+        "reachable_unresolved_site_count": len(reachable_sites),
+        "reachable_unresolved_sites": reachable_sites[: args.max_sites],
+        "reachable_truncated": len(reachable_sites) > args.max_sites,
         "note": (
             "Static candidates only. Sites may be data interpreted as code; "
             "the CFG pass must validate reachability."

@@ -22,6 +22,7 @@ def walk_function(
     size: int,
     entry: int,
     max_instructions: int,
+    unresolved_sites: set[tuple[int, str]] | None = None,
 ) -> tuple[set[int], set[int]]:
     pending = deque([(entry, {})])
     visited: set[int] = set()
@@ -111,6 +112,8 @@ def walk_function(
                 target = constants.get(rs)
                 if target is not None and in_image(target, load, size):
                     targets.add(target)
+                elif unresolved_sites is not None:
+                    unresolved_sites.add((pc, kind))
                 delay = pc + 4
                 if in_image(delay, load, size):
                     visited.add(delay)
@@ -150,6 +153,8 @@ def walk_function(
                         if not in_image(table_target, load, size):
                             break
                         targets.add(table_target)
+                elif unresolved_sites is not None:
+                    unresolved_sites.add((pc, kind))
                 break
             if kind == "branch":
                 delay = pc + 4
@@ -192,3 +197,30 @@ def discover_reachable_functions(
             if target not in seen:
                 pending.append(target)
     return discovered
+
+
+def discover_reachable_indirect_sites(
+    payload: bytes,
+    load: int,
+    initial_pc: int,
+    max_functions: int = 256,
+    max_instructions_per_function: int = 20000,
+) -> list[dict]:
+    sites: set[tuple[int, str]] = set()
+    entries = discover_reachable_functions(
+        payload,
+        load,
+        initial_pc,
+        max_functions,
+        max_instructions_per_function,
+    )
+    for entry in entries:
+        walk_function(
+            payload,
+            load,
+            len(payload),
+            entry,
+            max_instructions_per_function,
+            sites,
+        )
+    return [{"address": address, "kind": kind} for address, kind in sorted(sites)]

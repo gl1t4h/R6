@@ -102,10 +102,15 @@ over false code discovery.
 
 The same analysis now resolves aligned in-image `lw` values. This covers a
 basic jump-table/function-pointer pattern where a constant table address is
-loaded and then used by `jr` or `jalr`. Indexed tables and external pointers
-remain unresolved until a bounded table analysis is added.
+loaded and then used by `jr` or `jalr`. Indexed tables are bounded to a small
+number of in-image entries; external pointers remain unresolved.
 
 `tools/report-indirects.py` now emits a local JSON report of potential
 indirect `jr` and `jalr` sites. The report marks each site as requiring
 contextual resolution and caps output size; it does not claim that every
 static candidate is reachable code.
+
+The report now re-walks discovered CFG-reachable functions and separately
+lists unresolved indirect sites that are actually reachable under the current
+analysis limits. This distinguishes the full static candidate count from the
+smaller set that the native translator must still model.
