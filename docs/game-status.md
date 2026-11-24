@@ -10,8 +10,8 @@ None.
 
 - **Platform:** PlayStation 1
 - **Region:** USA
-- **Status:** Function discovery
-- **Progress:** 45%
+- **Status:** CFG function discovery
+- **Progress:** 50%
 - **Completed:** Local BIN/CUE verification, ISO9660 root discovery, and PS-X
   EXE header identification, plus a delay-slot-aware control-flow walk from
   the entry point and discovered direct calls, plus the first dependency-free
@@ -20,9 +20,10 @@ None.
   memory helpers for common byte/halfword/word loads and stores, plus
   delay-slot-aware branch/jump/call lowering, a platform service interface,
   and a PC-to-native-function dispatcher with a step budget. The generator
-  now emits and registers a bounded set of static in-image call targets.
-- **Next step:** Replace static seeds with validated CFG-reachable function
-  discovery.
+  now emits and registers functions reached through validated direct in-image
+  calls and control-flow edges.
+- **Next step:** Resolve indirect calls and jump tables without guessing data
+  as code.
 - **Playable native build:** No
 - **Distributed game assets:** No
 

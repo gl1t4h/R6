@@ -15,7 +15,7 @@ There is not yet a playable native recompilation.
 
 | Game | Region/version | Status | Progress |
 | --- | --- | --- | --- |
-| Spider-Man | USA PlayStation 1 release | Function discovery | 45% - static call-target discovery and multi-function registration |
+| Spider-Man | USA PlayStation 1 release | CFG function discovery | 50% - validated direct-call reachability and multi-function registration |
 
 No games are currently completed.
 
@@ -173,7 +173,7 @@ None.
 
 | Game | Status | Next milestone |
 | --- | --- | --- |
-| Spider-Man (USA) | Function discovery | Replace static seeds with validated CFG-reachable function discovery |
+| Spider-Man (USA) | CFG function discovery | Resolve indirect calls and jump tables without guessing data as code |
 
 ## Contributing
 

@@ -88,7 +88,8 @@ registration function and return the next PC after each translated block.
 Execution is bounded by a step budget while the function graph is incomplete,
 preventing accidental infinite loops during development.
 
-The local generator now scans in-image `JAL` targets, emits a bounded native
-function candidate for each, and registers every candidate with the dispatcher.
-These are static seeds, not proof that every candidate is code; the next
-analysis pass must validate them through the control-flow graph.
+The local generator now uses `tools/mips_cfg.py` to walk from the entry point,
+follow direct calls and control-flow edges, emit a bounded native function
+candidate for each discovered function, and register them with the dispatcher.
+Indirect calls and jump tables are left unresolved rather than treating
+arbitrary data as code.

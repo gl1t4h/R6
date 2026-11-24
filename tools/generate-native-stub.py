@@ -13,6 +13,7 @@ import argparse
 import struct
 from pathlib import Path
 
+from mips_cfg import discover_reachable_functions
 from mips_decode import decode_word
 
 
@@ -179,25 +180,6 @@ def translate_control(
     ]
 
 
-def discover_function_entries(
-    payload: bytes,
-    load_address: int,
-    initial_pc: int,
-    max_functions: int,
-) -> list[int]:
-    entries = {initial_pc}
-    for offset in range(0, len(payload) - 3, 4):
-        address = load_address + offset
-        instruction = word(payload, offset)
-        if instruction >> 26 != 0x03:
-            continue
-        target = ((address + 4) & 0xF0000000) | ((instruction & 0x03FFFFFF) << 2)
-        if load_address <= target < load_address + len(payload) and target % 4 == 0:
-            entries.add(target)
-    remaining = sorted(entries - {initial_pc})
-    return [initial_pc, *remaining[: max(0, max_functions - 1)]]
-
-
 def emit_function(
     payload: bytes,
     load_address: int,
@@ -258,8 +240,12 @@ def main() -> int:
     initial_pc = word(data, 0x10)
     payload = data[2048 : 2048 + payload_size]
 
-    entries = discover_function_entries(
-        payload, load_address, initial_pc, args.max_functions
+    entries = discover_reachable_functions(
+        payload,
+        load_address,
+        initial_pc,
+        max_functions=args.max_functions,
+        max_instructions_per_function=args.max_instructions,
     )
     lines = [
         "// GENERATED LOCALLY FROM A USER-SUPPLIED PS-X EXE.",
