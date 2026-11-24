@@ -201,7 +201,7 @@ def main() -> int:
     lines = [
         "// GENERATED LOCALLY FROM A USER-SUPPLIED PS-X EXE.",
         "// Do not commit or distribute this file.",
-        '#include "r6/native_runtime.h"',
+        '#include "r6/function_dispatch.h"',
         "",
         "namespace r6_generated {",
         "",
@@ -209,7 +209,6 @@ def main() -> int:
         "                    r6::PlatformServices& services) {",
         "    (void)services;  // platform calls are the next runtime layer",
         f"    // Entry point: 0x{initial_pc:08X}",
-        f"    cpu.pc = 0x{initial_pc:08X}u;",
     ]
 
     entry_offset = initial_pc - load_address
@@ -234,7 +233,16 @@ def main() -> int:
 
     if lines[-1].strip() != "return cpu.pc;":
         lines.append("    return cpu.pc;")
-    lines.extend(["}", "", "}  // namespace r6_generated", ""])
+    lines.extend([
+        "}",
+        "",
+        "void register_functions(r6::FunctionDispatcher& dispatcher) {",
+        f"    dispatcher.register_function(0x{initial_pc:08X}u, &entry);",
+        "}",
+        "",
+        "}  // namespace r6_generated",
+        "",
+    ])
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text("\n".join(lines), encoding="utf-8")
     print(f"Wrote local native translation prototype: {output}")

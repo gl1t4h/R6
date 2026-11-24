@@ -81,3 +81,9 @@ program counter for direct jumps, calls, branches, `jr`, and `jalr`. The
 generated prototype uses a `PlatformServices` boundary so controller, audio,
 and video replacements can be implemented without embedding PlayStation
 hardware code into the translator.
+
+The runtime now has a `FunctionDispatcher` that maps translated PlayStation
+addresses to native C++ function pointers. Generated translation units expose a
+registration function and return the next PC after each translated block.
+Execution is bounded by a step budget while the function graph is incomplete,
+preventing accidental infinite loops during development.

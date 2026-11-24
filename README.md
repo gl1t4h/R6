@@ -15,7 +15,7 @@ There is not yet a playable native recompilation.
 
 | Game | Region/version | Status | Progress |
 | --- | --- | --- | --- |
-| Spider-Man | USA PlayStation 1 release | Native control flow | 35% - delay-slot-aware branches/calls and platform service boundaries |
+| Spider-Man | USA PlayStation 1 release | Function dispatch | 40% - delay-slot-aware translation and native function dispatch scaffold |
 
 No games are currently completed.
 
@@ -173,7 +173,7 @@ None.
 
 | Game | Status | Next milestone |
 | --- | --- | --- |
-| Spider-Man (USA) | Native control flow | Add generated function dispatch and PlayStation hardware service implementations |
+| Spider-Man (USA) | Function dispatch | Discover and register all reachable translated functions |
 
 ## Contributing
 
