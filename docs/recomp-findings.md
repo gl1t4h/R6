@@ -120,3 +120,8 @@ The runtime now separates platform behavior behind `PlatformServices` and
 registers, disc-sector reads, audio, video, and BIOS calls without embedding
 emulation logic in the translator. The current null implementation is a
 development stub; it is not a complete game runtime.
+
+`WindowsPlatformServices` now provides a concrete local backend for raw BIN
+user-sector reads and a monotonic timer. It opens the user's BIN in place; it
+does not extract or copy it. Controller, GPU, audio, and BIOS methods remain
+explicit stubs until their native contracts are defined and tested.

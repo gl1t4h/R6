@@ -12,6 +12,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 add_executable(r6-diagnostic
     src/main.cpp
+    src/windows_platform_services.cpp
 )
 
 target_include_directories(r6-diagnostic PRIVATE

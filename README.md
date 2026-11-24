@@ -15,7 +15,7 @@ There is not yet a playable native recompilation.
 
 | Game | Region/version | Status | Progress |
 | --- | --- | --- | --- |
-| Spider-Man | USA PlayStation 1 release | Platform service model | 75% - reachable indirect analysis and native hardware-service boundaries |
+| Spider-Man | USA PlayStation 1 release | Windows service backend | 80% - local disc-sector and timer service implementations |
 
 No games are currently completed.
 
@@ -174,7 +174,7 @@ None.
 
 | Game | Status | Next milestone |
 | --- | --- | --- |
-| Spider-Man (USA) | Platform service model | Map executable hardware accesses to real Windows implementations |
+| Spider-Man (USA) | Windows service backend | Implement controller, GPU, audio, and BIOS behavior with tests |
 
 ## Contributing
 
