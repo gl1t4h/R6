@@ -15,7 +15,7 @@ There is not yet a playable native recompilation.
 
 | Game | Region/version | Status | Progress |
 | --- | --- | --- | --- |
-| Spider-Man | USA PlayStation 1 release | Windows service backend | 80% - local disc-sector and timer service implementations |
+| Spider-Man | USA PlayStation 1 release | Windows I/O backend | 85% - keyboard input and software audio/framebuffer sinks |
 
 No games are currently completed.
 
@@ -174,7 +174,7 @@ None.
 
 | Game | Status | Next milestone |
 | --- | --- | --- |
-| Spider-Man (USA) | Windows service backend | Implement controller, GPU, audio, and BIOS behavior with tests |
+| Spider-Man (USA) | Windows I/O backend | Implement GPU command decoding and BIOS service behavior with tests |
 
 ## Contributing
 

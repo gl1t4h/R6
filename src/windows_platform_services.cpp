@@ -1,7 +1,14 @@
 #include "r6/windows_platform_services.h"
+#include "r6/hardware_map.h"
 
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
+#include <algorithm>
+
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 namespace r6 {
 
@@ -15,17 +22,49 @@ WindowsPlatformServices::WindowsPlatformServices(
     const std::filesystem::path& raw_bin_path)
     : disc_(raw_bin_path, std::ios::binary) {}
 
-std::uint16_t WindowsPlatformServices::read_controller(std::size_t) {
-    return 0;
+std::uint16_t WindowsPlatformServices::read_controller(std::size_t port) {
+    if (port >= 2) return 0xFFFF;
+    if (controller_override_[port]) return controller_state_[port];
+
+#ifdef _WIN32
+    auto pressed = [](int key) {
+        return (GetAsyncKeyState(key) & 0x8000) != 0;
+    };
+    std::uint16_t state = 0xFFFF;
+    if (pressed(VK_RETURN)) state &= static_cast<std::uint16_t>(~(1u << 3));
+    if (pressed(VK_SHIFT)) state &= static_cast<std::uint16_t>(~(1u << 0));
+    if (pressed(VK_UP)) state &= static_cast<std::uint16_t>(~(1u << 4));
+    if (pressed(VK_RIGHT)) state &= static_cast<std::uint16_t>(~(1u << 5));
+    if (pressed(VK_DOWN)) state &= static_cast<std::uint16_t>(~(1u << 6));
+    if (pressed(VK_LEFT)) state &= static_cast<std::uint16_t>(~(1u << 7));
+    if (pressed('Z')) state &= static_cast<std::uint16_t>(~(1u << 14));
+    if (pressed('X')) state &= static_cast<std::uint16_t>(~(1u << 13));
+    if (pressed('A')) state &= static_cast<std::uint16_t>(~(1u << 12));
+    if (pressed('S')) state &= static_cast<std::uint16_t>(~(1u << 15));
+    return state;
+#else
+    return 0xFFFF;
+#endif
 }
 
 void WindowsPlatformServices::submit_audio_samples(
-    const std::int16_t*,
-    std::size_t) {}
+    const std::int16_t* samples,
+    std::size_t count) {
+    if (samples == nullptr) return;
+    audio_.insert(audio_.end(), samples, samples + count);
+    constexpr std::size_t kMaxBufferedSamples = 44100 * 2;
+    if (audio_.size() > kMaxBufferedSamples) {
+        audio_.erase(audio_.begin(), audio_.begin() +
+            static_cast<std::ptrdiff_t>(audio_.size() - kMaxBufferedSamples));
+    }
+}
 
 void WindowsPlatformServices::present_frame(
-    const std::uint32_t*,
-    std::size_t) {}
+    const std::uint32_t* pixels,
+    std::size_t count) {
+    if (pixels == nullptr) return;
+    frame_.assign(pixels, pixels + count);
+}
 
 std::uint32_t WindowsPlatformServices::read_timer(std::size_t) {
     const auto now = std::chrono::steady_clock::now().time_since_epoch();
@@ -34,8 +73,13 @@ std::uint32_t WindowsPlatformServices::read_timer(std::size_t) {
 }
 
 void WindowsPlatformServices::write_gpu_register(
-    std::uint32_t,
-    std::uint32_t) {}
+    std::uint32_t register_address,
+    std::uint32_t value) {
+    if (register_address == hardware::kGpuCommand) {
+        // GPU command decoding will feed the software framebuffer next.
+        (void)value;
+    }
+}
 
 bool WindowsPlatformServices::read_disc_sector(
     std::uint32_t raw_sector,
@@ -56,6 +100,14 @@ bool WindowsPlatformServices::read_disc_sector(
 
 bool WindowsPlatformServices::bios_call(std::uint32_t, CpuState&) {
     return false;
+}
+
+void WindowsPlatformServices::set_controller_state(
+    std::size_t port,
+    std::uint16_t active_low_state) {
+    if (port >= 2) return;
+    controller_state_[port] = active_low_state;
+    controller_override_[port] = true;
 }
 
 }  // namespace r6

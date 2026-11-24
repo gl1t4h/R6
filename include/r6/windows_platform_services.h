@@ -2,6 +2,8 @@
 
 #include <filesystem>
 #include <fstream>
+#include <cstdint>
+#include <vector>
 
 #include "r6/platform_services.h"
 
@@ -22,8 +24,16 @@ public:
         std::size_t destination_size) override;
     bool bios_call(std::uint32_t vector, CpuState& cpu) override;
 
+    void set_controller_state(std::size_t port, std::uint16_t active_low_state);
+    const std::vector<std::uint32_t>& frame_buffer() const { return frame_; }
+    const std::vector<std::int16_t>& audio_buffer() const { return audio_; }
+
 private:
     std::ifstream disc_;
+    std::uint16_t controller_state_[2]{0xFFFF, 0xFFFF};
+    bool controller_override_[2]{false, false};
+    std::vector<std::uint32_t> frame_;
+    std::vector<std::int16_t> audio_;
 };
 
 }  // namespace r6

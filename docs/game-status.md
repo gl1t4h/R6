@@ -10,8 +10,8 @@ None.
 
 - **Platform:** PlayStation 1
 - **Region:** USA
-- **Status:** Windows service backend
-- **Progress:** 80%
+- **Status:** Windows I/O backend
+- **Progress:** 85%
 - **Completed:** Local BIN/CUE verification, ISO9660 root discovery, and PS-X
   EXE header identification, plus a delay-slot-aware control-flow walk from
   the entry point and discovered direct calls, plus the first dependency-free
@@ -27,7 +27,7 @@ None.
   indirect `jr`/`jalr` sites without uploading executable data. The report now
   includes a CFG-filtered unresolved-site list. The native runtime now exposes
   controller, timer, GPU, disc-sector, audio, video, and BIOS service seams.
-- **Next step:** Implement controller, GPU, audio, and BIOS behavior with
+- **Next step:** Implement GPU command decoding and BIOS service behavior with
   tests.
 - **Playable native build:** No
 - **Distributed game assets:** No

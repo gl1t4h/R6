@@ -125,3 +125,9 @@ development stub; it is not a complete game runtime.
 user-sector reads and a monotonic timer. It opens the user's BIN in place; it
 does not extract or copy it. Controller, GPU, audio, and BIOS methods remain
 explicit stubs until their native contracts are defined and tested.
+
+The Windows backend now maps arrow/keyboard controls to an active-low
+PlayStation-style pad state when built on Windows. It also retains bounded
+audio samples and the latest presented framebuffer in host memory. These are
+development sinks, not a finished audiovisual frontend; GPU command decoding
+and BIOS behavior remain separate milestones.
