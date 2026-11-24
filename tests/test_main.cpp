@@ -1,0 +1,19 @@
+#include <cstdio>
+
+#include "test_support.h"
+
+void run_software_gpu_tests();
+void run_bios_services_tests();
+
+int main() {
+    run_software_gpu_tests();
+    run_bios_services_tests();
+
+    const auto failures = r6::test::failure_count();
+    if (failures == 0) {
+        std::printf("r6-tests: all checks passed\n");
+        return 0;
+    }
+    std::printf("r6-tests: %d check(s) failed\n", failures);
+    return 1;
+}

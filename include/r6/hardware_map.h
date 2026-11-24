@@ -22,6 +22,8 @@ public:
         if (address == hardware::kTimer0) return services_.read_timer(0);
         if (address == hardware::kTimer1) return services_.read_timer(1);
         if (address == hardware::kTimer2) return services_.read_timer(2);
+        if (address == hardware::kGpuStatus) return services_.read_gpu_status();
+        if (address == hardware::kGpuCommand) return services_.read_gpu_data();
         return 0;
     }
 

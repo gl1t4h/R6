@@ -15,7 +15,7 @@ There is not yet a playable native recompilation.
 
 | Game | Region/version | Status | Progress |
 | --- | --- | --- | --- |
-| Spider-Man | USA PlayStation 1 release | Windows I/O backend | 85% - keyboard input and software audio/framebuffer sinks |
+| Spider-Man | USA PlayStation 1 release | GPU decoder and BIOS layer | 92% - GP0/GP1 command decoding, software VRAM rasterizer, and native kernel-call replacements |
 
 No games are currently completed.
 
@@ -106,6 +106,13 @@ cmake --build build --config Release
 
 The current scaffold is a development diagnostic, not a playable game.
 
+Run the native checks (GPU decoder and BIOS services) and the analysis tests:
+
+```powershell
+ctest --test-dir build --output-on-failure
+python -m unittest discover -s tests -v
+```
+
 To generate a local-only native translation prototype from an extracted PS-X
 EXE:
 
@@ -147,6 +154,7 @@ not yet a playable recompilation.
 │   ├── inspect-ps1-disc.py
 │   ├── report-indirects.py
 │   └── verify-disc.ps1
+├── tests/
 ├── CMakeLists.txt
 └── README.md
 ```
@@ -174,7 +182,7 @@ None.
 
 | Game | Status | Next milestone |
 | --- | --- | --- |
-| Spider-Man (USA) | Windows I/O backend | Implement GPU command decoding and BIOS service behavior with tests |
+| Spider-Man (USA) | GPU decoder and BIOS layer | Render textured primitives using texture pages, CLUTs, and the texture window |
 
 ## Contributing
 

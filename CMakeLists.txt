@@ -10,17 +10,48 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-add_executable(r6-diagnostic
-    src/main.cpp
+add_library(r6-core STATIC
+    src/bios_services.cpp
+    src/software_gpu.cpp
     src/windows_platform_services.cpp
 )
 
-target_include_directories(r6-diagnostic PRIVATE
+target_include_directories(r6-core PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
-if (MSVC)
-    target_compile_options(r6-diagnostic PRIVATE /W4 /permissive-)
-else()
-    target_compile_options(r6-diagnostic PRIVATE -Wall -Wextra -Wpedantic)
+add_executable(r6-diagnostic
+    src/main.cpp
+)
+
+target_link_libraries(r6-diagnostic PRIVATE r6-core)
+
+add_executable(r6-tests
+    tests/test_main.cpp
+    tests/test_bios_services.cpp
+    tests/test_software_gpu.cpp
+)
+
+target_include_directories(r6-tests PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/tests
+)
+
+target_link_libraries(r6-tests PRIVATE r6-core)
+
+if (WIN32)
+    # GetAsyncKeyState, used by the keyboard controller backend.
+    target_link_libraries(r6-core PUBLIC user32)
 endif()
+
+if (MSVC)
+    target_compile_options(r6-core PRIVATE /W4 /permissive-)
+    target_compile_options(r6-diagnostic PRIVATE /W4 /permissive-)
+    target_compile_options(r6-tests PRIVATE /W4 /permissive-)
+else()
+    target_compile_options(r6-core PRIVATE -Wall -Wextra -Wpedantic)
+    target_compile_options(r6-diagnostic PRIVATE -Wall -Wextra -Wpedantic)
+    target_compile_options(r6-tests PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+enable_testing()
+add_test(NAME r6-tests COMMAND r6-tests)

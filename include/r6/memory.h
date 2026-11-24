@@ -15,6 +15,14 @@ public:
         return bytes_.at(index(address));
     }
 
+    // Returns false instead of throwing when the address is unmapped, so
+    // callers that walk guest strings can stop cleanly at the boundary.
+    bool try_read8(std::uint32_t address, std::uint8_t& value) const noexcept {
+        if (address >= bytes_.size()) return false;
+        value = bytes_[address];
+        return true;
+    }
+
     std::uint16_t read16(std::uint32_t address) const {
         return static_cast<std::uint16_t>(read8(address)) |
                (static_cast<std::uint16_t>(read8(address + 1)) << 8);

@@ -1,10 +1,10 @@
 #include "r6/windows_platform_services.h"
 #include "r6/hardware_map.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
-#include <algorithm>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -76,9 +76,20 @@ void WindowsPlatformServices::write_gpu_register(
     std::uint32_t register_address,
     std::uint32_t value) {
     if (register_address == hardware::kGpuCommand) {
-        // GPU command decoding will feed the software framebuffer next.
-        (void)value;
+        gpu_.submit_gp0(value);
+        return;
     }
+    if (register_address == hardware::kGpuStatus) {
+        gpu_.submit_gp1(value);
+    }
+}
+
+std::uint32_t WindowsPlatformServices::read_gpu_status() {
+    return gpu_.status();
+}
+
+std::uint32_t WindowsPlatformServices::read_gpu_data() {
+    return gpu_.read_gp0_data();
 }
 
 bool WindowsPlatformServices::read_disc_sector(
@@ -98,8 +109,14 @@ bool WindowsPlatformServices::read_disc_sector(
     return disc_.gcount() == static_cast<std::streamsize>(kUserDataSize);
 }
 
-bool WindowsPlatformServices::bios_call(std::uint32_t, CpuState&) {
-    return false;
+bool WindowsPlatformServices::bios_call(std::uint32_t pc,
+                                        CpuState& cpu,
+                                        Memory& memory) {
+    BiosTable table{};
+    if (!BiosServices::trap_table(pc, table)) return false;
+    last_bios_pc_ = pc;
+    bios_.dispatch(table, cpu, memory);
+    return true;
 }
 
 void WindowsPlatformServices::set_controller_state(

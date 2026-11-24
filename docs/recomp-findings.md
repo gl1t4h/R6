@@ -131,3 +131,39 @@ PlayStation-style pad state when built on Windows. It also retains bounded
 audio samples and the latest presented framebuffer in host memory. These are
 development sinks, not a finished audiovisual frontend; GPU command decoding
 and BIOS behavior remain separate milestones.
+
+## 2026-11-24 — GPU command decoding and BIOS vectors
+
+The software GPU is now a command decoder rather than a single-command sink.
+
+`r6::SoftwareGpu` models VRAM as 1024x512 16-bit BGR555 pixels and tracks the
+parameter length of every GP0 packet (`gp0_word_count`). That length table is
+the important part: before it existed, an unsupported command consumed one word
+and every following word was misread as a command. Poly-lines and CPU-to-VRAM
+uploads have data-dependent lengths, so their packets are completed from the
+vertex stream and the header size field respectively.
+
+Implemented drawing paths are fill rectangle, flat triangle, flat variable and
+fixed-size rectangles, VRAM-to-VRAM copy, CPU-to-VRAM upload and VRAM-to-CPU
+download. Drawing area (`GP0 E3`/`E4`), drawing offset (`E5`) and the mask
+setting (`E6`) are tracked, and display area plus display enable are tracked
+through GP1. Textured and gouraud primitives are decoded, counted and reported
+through `unsupported_commands()` instead of being drawn with guessed shading.
+
+`GPUSTAT` now reports command, DMA and read readiness so guest polling loops do
+not spin forever, and `GPUREAD` returns buffered download halfwords.
+
+`r6::BiosServices` replaces the A0/B0 kernel vectors reached by jumping to
+`0xA0`/`0xB0`/`0xC0` with the function number in `$t1`. TTY output (`putchar`,
+`puts`, `printf` with a documented format subset), `InitHeap` and `_exit` are
+implemented; the B0 event family (`OpenEvent`, `CloseEvent`, `DeliverEvent`,
+`UnDeliverEvent`, `WaitEvent`, `TestEvent`, `EnableEvent`, `DisableEvent`) uses
+a bounded 16-slot event table. `WaitEvent` returns whether the event was
+delivered rather than blocking, because the runtime is single-threaded.
+Unimplemented vectors return zero and are recorded, so the next analysis pass
+can enumerate exactly which kernel functions this game still needs.
+
+Both layers are covered by `r6-tests`, a dependency-free C++ executable
+registered with CTest. It includes a regression that runs an unsupported
+textured packet ahead of a supported rectangle and asserts the rectangle still
+lands at the right address.
