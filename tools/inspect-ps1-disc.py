@@ -27,6 +27,25 @@ def read_user_sector(handle, sector: int) -> bytes:
     return data
 
 
+def read_user_sectors(handle, start_sector: int, count: int) -> bytes:
+    """Read consecutive user areas instead of a contiguous byte range.
+
+    A Mode2/2352 track stores only 2048 of every 2352 bytes as file data, so a
+    single contiguous read splices 304 bytes of sync, header, subheader and EDC
+    into the result and every sector after the first is wrong.
+    """
+    return b"".join(
+        read_user_sector(handle, start_sector + index) for index in range(count)
+    )
+
+
+def read_executable(handle, entry: dict) -> bytes:
+    """Return the file data of one directory entry, sector-correctly."""
+    size = entry["size"]
+    sectors = (size + USER_DATA_SIZE - 1) // USER_DATA_SIZE
+    return read_user_sectors(handle, entry["extent"], sectors)[:size]
+
+
 def u32le(data: bytes, offset: int) -> int:
     return struct.unpack_from("<I", data, offset)[0]
 
@@ -112,9 +131,7 @@ def main() -> int:
         if executable is None:
             raise ValueError("no root-level PlayStation executable was found")
 
-        exe_offset = executable["extent"] * RAW_SECTOR_SIZE + USER_DATA_OFFSET
-        handle.seek(exe_offset)
-        header = handle.read(2048)
+        header = read_user_sector(handle, executable["extent"])
         if header[:8] != b"PS-X EXE":
             raise ValueError("disc executable does not have a PS-X EXE header")
 
@@ -151,8 +168,7 @@ def main() -> int:
         if args.extract_exe:
             output = args.extract_exe.resolve()
             output.parent.mkdir(parents=True, exist_ok=True)
-            handle.seek(exe_offset)
-            payload = handle.read(executable["size"])
+            payload = read_executable(handle, executable)
             output.write_bytes(payload)
             metadata["executable"]["sha256"] = hashlib.sha256(payload).hexdigest().upper()
             metadata["executable"]["local_analysis_copy"] = str(output)

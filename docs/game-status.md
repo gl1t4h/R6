@@ -27,7 +27,16 @@ None.
   indirect `jr`/`jalr` sites without uploading executable data. The report now
   includes a CFG-filtered unresolved-site list. The native runtime now exposes
   controller, timer, GPU, disc-sector, audio, video, and BIOS service seams.
-- **Next step:** GTE geometry, DMA, interrupts and the kernel boot thread.
+  The local Python extractor now reads Mode2/2352 sectors individually instead
+  of one contiguous run, so extracted analysis copies are no longer shifted by
+  304 bytes per sector; `tests/test_inspect_disc.py` covers this with a
+  synthetic image. The interpreter now stops on the guest's own `BREAK`
+  instead of falling through it, matching PsyQ startup code that ends with
+  `BREAK` after `main` returns.
+- **Next step:** Give the guest a valid stack. The startup computes `$sp` from
+  a `.data` global that holds `0x800000`, producing `0x807FFFF8`, which is
+  outside main RAM; the constructor epilogue then restores a dropped `$ra` and
+  the guest exits at PC `0x0`. After that, GTE geometry, DMA and interrupts.
 - **Playable native build:** No
 - **Distributed game assets:** No
 

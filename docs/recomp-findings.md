@@ -215,8 +215,69 @@ First observed run of the USA executable:
 - One kernel call: `A(0x39) InitHeap`.
 - No GPU or DMA traffic, as expected before the kernel thread exists.
 
-The early return is the expected consequence of running the executable without
-the retail kernel's thread creation: the startup code is entered the way the
-BIOS enters it, finishes its initialisation, and returns. Implementing GTE
-maths, DMA and interrupts is what turns this into a running game loop rather
-than a startup trace.
+Implementation notes for this stage:
+
+- `--entry <address>` overrides the header entry point, which is useful when
+  tracing a startup path by hand.
+- `BREAK` now stops the run with its own stop reason. PsyQ startup code ends
+  with `BREAK` after `main` returns, so this is a normal exit, not a fault. It
+  used to be a no-op, which let the guest fall through into whatever followed.
+- The report lists the most recent guest PCs, so the last few instructions
+  before a stop are visible without re-running under a debugger.
+
+## 2026-11-24 — Corrected local extraction
+
+An earlier version of `tools/inspect-ps1-disc.py --extract-exe` read the
+requested byte count in one contiguous `read()`. On a Mode2/2352 track only
+2048 of every 2352 bytes are file data, so that single read spliced 304 bytes
+of sync pattern, header, subheader and EDC/ECC into the result. The first
+sector was correct and every sector after it was shifted, which silently
+corrupted any local analysis copy and every report generated from it.
+
+`read_user_sectors()` now reads sector by sector and `read_executable()`
+truncates the joined user areas to the directory-record size. Both are covered
+by `tests/test_inspect_disc.py`, which builds a synthetic Mode2/2352 image with
+non-zero sync, subheader and EDC regions and asserts the extracted bytes match
+the file data exactly. No game data is used by the test.
+
+The C++ readers were already sector-correct; only the Python extractor was
+wrong. Findings in this document that depend on an extracted copy were
+re-checked against the corrected image.
+
+## 2026-11-24 — Corrected startup analysis
+
+The `0x8008739C` entry is a self-contained C runtime startup, not the middle of
+an unrelated function:
+
+1. Zeroes the BSS range `0x800B5994`–`0x800C65D4`.
+2. Loads `$v0` from `0x800B3E70` and builds the stack pointer as
+   `($v0 - 8) OR 0x80000000`.
+3. Computes the heap base `0x800C65D4` and size from `0x800B3E6C`, storing them
+   at `0x800B123C` and `0x800B1240`.
+4. Saves `$ra`, sets `$gp = 0x800B47F4`, `$fp = $sp`.
+5. Calls `0x8008DC98`, which is the `InitHeap` syscall stub (`$t1 = 0x39`,
+   `jr 0xA0`).
+6. Restores `$ra`, calls `0x8002C354`, then executes `BREAK` at `0x80087440`.
+
+`0x8002C354` is the C `main`: a 72-byte frame that saves every callee-saved
+register and first calls `0x80087444`. That routine is
+the C++ static-constructor runner: it walks a 12-entry function-pointer table
+at `0x800B47C4` with `jalr` and then returns.
+
+Observed stop: 86,250 instructions, one `InitHeap` call, no GPU, DMA or
+interrupt traffic, ending at PC `0x0`. The recent-PC trace shows all twelve
+constructors returning normally into the loop at `0x80087494`, then the
+routine's epilogue restoring `$ra` as zero.
+
+That zero is a stack-mapping problem, not a game problem. `0x800B3E70` holds
+`0x800000`, so the startup computes `$sp = 0x807FFFF8`, which is outside the
+2 MiB of main RAM; stores to it are not retained, so `0x80087458`'s
+`sw $ra, 12($sp)` is lost and `0x8008749C` reloads zero. The header's own
+stack fields are empty (`0x00000000`, and a garbage size), so nothing in the
+image supplies a usable stack.
+
+This is the concrete blocker to resolve next: the startup expects a stack
+above `main` that the retail loader establishes. The runner should either map
+that region explicitly or reject a guest stack pointer outside RAM instead of
+dropping stores silently. Until then the guest cannot get past its own
+constructors, and GTE/DMA/interrupt work cannot show any effect.

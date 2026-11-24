@@ -13,6 +13,7 @@
 #include <fstream>
 #include <iostream>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "r6/mips_interpreter.h"
@@ -207,6 +208,7 @@ int main(int argc, char** argv) {
     std::filesystem::path input;
     std::uint64_t steps = 5000000;
     std::filesystem::path frame_path;
+    std::uint32_t entry_override = 0;
 
     for (int index = 1; index < argc; ++index) {
         const std::string argument = argv[index];
@@ -214,6 +216,9 @@ int main(int argc, char** argv) {
             steps = std::stoull(argv[++index]);
         } else if (argument == "--dump-frame" && index + 1 < argc) {
             frame_path = argv[++index];
+        } else if (argument == "--entry" && index + 1 < argc) {
+            entry_override = static_cast<std::uint32_t>(
+                std::stoul(argv[++index], nullptr, 0));
         } else if (input.empty()) {
             input = argument;
         }
@@ -221,7 +226,7 @@ int main(int argc, char** argv) {
 
     if (input.empty()) {
         std::cerr << "usage: r6-run <game.cue|game.bin> [--steps N]"
-                     " [--dump-frame frame.ppm]\n"
+                     " [--entry 0xADDR] [--dump-frame frame.ppm]\n"
                   << "Runs your own local copy. No game data is copied or"
                      " uploaded.\n";
         return 2;
@@ -288,7 +293,7 @@ int main(int argc, char** argv) {
 
     r6::MipsInterpreter interpreter(ram, services);
     auto& cpu = interpreter.cpu();
-    cpu.pc = image.entry;
+    cpu.pc = entry_override != 0 ? entry_override : image.entry;
     cpu.gpr[28] = image.gp;
     cpu.gpr[29] =
         image.stack_base != 0 ? image.stack_base : 0x801FFFF0u;
@@ -299,7 +304,8 @@ int main(int argc, char** argv) {
               << "Disc: " << bin_path.filename().string() << "\n"
               << "EXE:  " << executable->name << " (" << image.size
               << " bytes at LBA " << executable->lba << ")\n"
-              << "Entry 0x" << std::hex << image.entry << std::dec
+              << "Entry 0x" << std::hex << cpu.pc << std::dec
+              << (entry_override != 0 ? " (overridden)" : "")
               << ", GP 0x" << std::hex << image.gp << std::dec
               << ", SP 0x" << std::hex << cpu.gpr[29] << std::dec << "\n"
               << "Running " << steps << " instructions...\n";
@@ -340,6 +346,43 @@ int main(int argc, char** argv) {
         case r6::StopReason::bios_exit:
             std::cout << " (BIOS exit)\n";
             break;
+        case r6::StopReason::guest_break:
+            std::cout << " (guest executed BREAK)\n";
+            break;
+    }
+
+
+    {
+        // A stack pointer outside main RAM silently loses every push and pop,
+        // which shows up much later as a return to address zero.
+        const auto sp = interpreter.cpu().gpr[29];
+        const bool in_ram = sp >= 0x80000000u && sp < 0x80200000u;
+        const bool in_scratchpad = sp >= 0x1F800000u && sp < 0x1F800400u;
+        if (!in_ram && !in_scratchpad) {
+            std::cout << "\nWarning: guest stack pointer 0x" << std::hex << sp
+                      << " is outside main RAM and the scratchpad; pushes to it"
+                      << " are discarded.\n"
+                      << std::dec;
+        }
+    }
+
+    {
+        // Show the busiest hardware registers so unimplemented devices are
+        // easy to spot during bring-up.
+        std::vector<std::pair<std::uint32_t, std::uint64_t>> reads(
+            interpreter.hardware_reads().begin(),
+            interpreter.hardware_reads().end());
+        std::sort(reads.begin(), reads.end(),
+                  [](const auto& left, const auto& right) {
+                      return left.second > right.second;
+                  });
+        std::cout << "\nHardware reads (top):";
+        for (std::size_t index = 0; index < reads.size() && index < 8;
+             ++index) {
+            std::cout << " 0x" << std::hex << reads[index].first << std::dec
+                      << " x" << reads[index].second;
+        }
+        std::cout << "\n";
     }
 
     const auto& gpu = services.gpu();

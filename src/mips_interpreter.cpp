@@ -77,6 +77,7 @@ std::uint32_t MipsInterpreter::read32(std::uint32_t address) {
                (static_cast<std::uint32_t>(scratchpad_[index + 3]) << 24);
     }
     if (physical >= kHardwareBase && physical < kHardwareEnd) {
+        ++hardware_reads_[physical & ~3u];
         return hardware_.read32(physical);
     }
     ++unknown_hardware_reads_;
@@ -127,6 +128,7 @@ void MipsInterpreter::write32(std::uint32_t address, std::uint32_t value) {
         return;
     }
     if (physical >= kHardwareBase && physical < kHardwareEnd) {
+        ++hardware_writes_[physical & ~3u];
         if (physical >= kDmaBase && physical < kDmaEnd) {
             // DMA is not executed yet; record it so the gap is visible.
             ++dma_writes_;
@@ -176,6 +178,13 @@ RunResult MipsInterpreter::run(std::uint64_t max_steps) {
 
         if (step.unsupported) {
             result.reason = StopReason::unsupported_instruction;
+            result.pc = current_pc;
+            result.instruction = instruction;
+            return result;
+        }
+
+        if (step.halted) {
+            result.reason = StopReason::guest_break;
             result.pc = current_pc;
             result.instruction = instruction;
             return result;
@@ -248,7 +257,9 @@ MipsInterpreter::StepResult MipsInterpreter::execute(
                     break;
                 }
                 case 0x0C:  // syscall
+                    break;
                 case 0x0D:  // break
+                    result.halted = true;
                     break;
                 case 0x10:
                     gpr[rd] = cpu_.hi;

@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <map>
 #include <vector>
 
 #include "r6/cpu_state.h"
@@ -16,6 +17,9 @@ enum class StopReason {
     returned,
     unsupported_instruction,
     bios_exit,
+    // The guest executed BREAK. PsyQ startup code ends with BREAK after main
+    // returns, so this is a normal program exit, not a fault.
+    guest_break,
 };
 
 struct RunResult {
@@ -47,12 +51,21 @@ public:
         return unknown_hardware_writes_;
     }
     const std::vector<std::uint32_t>& recent_pcs() const { return recent_pcs_; }
+    // Hardware register address -> access count, for finding unimplemented
+    // devices during bring-up.
+    const std::map<std::uint32_t, std::uint64_t>& hardware_reads() const {
+        return hardware_reads_;
+    }
+    const std::map<std::uint32_t, std::uint64_t>& hardware_writes() const {
+        return hardware_writes_;
+    }
 
 private:
     struct StepResult {
         bool branch{false};
         std::uint32_t target{0};
         bool unsupported{false};
+        bool halted{false};
     };
 
     StepResult execute(std::uint32_t instruction, std::uint32_t pc);
@@ -78,6 +91,8 @@ private:
     std::uint64_t dma_writes_{0};
     std::uint64_t unknown_hardware_reads_{0};
     std::uint64_t unknown_hardware_writes_{0};
+    std::map<std::uint32_t, std::uint64_t> hardware_reads_;
+    std::map<std::uint32_t, std::uint64_t> hardware_writes_;
 };
 
 }  // namespace r6
