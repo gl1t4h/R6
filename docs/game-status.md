@@ -10,12 +10,13 @@ None.
 
 - **Platform:** PlayStation 1
 - **Region:** USA
-- **Status:** MIPS analysis
-- **Progress:** 10%
+- **Status:** Control-flow analysis
+- **Progress:** 15%
 - **Completed:** Local BIN/CUE verification, ISO9660 root discovery, and PS-X
-  EXE header identification, plus a conservative first-pass scan for direct
-  calls and likely returns.
-- **Next step:** Add control-flow-aware MIPS decoding with delay-slot handling.
+  EXE header identification, plus a delay-slot-aware control-flow walk from
+  the entry point and discovered direct calls.
+- **Next step:** Add explicit R3000A instruction decoding and synthetic CFG
+  validation.
 - **Playable native build:** No
 - **Distributed game assets:** No
 

@@ -15,7 +15,7 @@ There is not yet a playable native recompilation.
 
 | Game | Region/version | Status | Progress |
 | --- | --- | --- | --- |
-| Spider-Man | USA PlayStation 1 release | MIPS analysis | 10% — BIN/CUE verification, ISO9660 discovery, PS-X EXE identification, and first-pass call-target scanning |
+| Spider-Man | USA PlayStation 1 release | Control-flow analysis | 15% — local PS-X EXE discovery plus delay-slot-aware CFG walking |
 
 No games are currently completed.
 
@@ -158,7 +158,7 @@ None.
 
 | Game | Status | Next milestone |
 | --- | --- | --- |
-| Spider-Man (USA) | MIPS analysis | Build control-flow-aware MIPS decoding and an initial function database |
+| Spider-Man (USA) | Control-flow analysis | Add explicit R3000A instruction decoding and validate the CFG with synthetic fixtures |
 
 ## Contributing
 

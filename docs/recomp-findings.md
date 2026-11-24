@@ -42,11 +42,17 @@ The repository currently implements steps 1 and 2 in
 
 ## First-pass MIPS analysis
 
-`tools/analyze-mips.py` now performs a conservative scan of a local PS-X EXE.
-It reports instruction-class counts, direct in-image `JAL` targets, and likely
-`JR $ra` return sites. It deliberately emits metadata rather than generated
-game code, and its output should be kept outside Git.
+`tools/analyze-mips.py` now performs a conservative control-flow walk from the
+entry point and statically discovered in-image `JAL` targets. It records basic
+blocks, branch edges, delay-slot instructions, direct calls, indirect calls,
+and return sites. It deliberately emits metadata rather than generated game
+code, and its output should be kept outside Git.
+
+The walk is intentionally bounded (`32` function candidates and `5,000`
+instructions per function by default) so a first pass cannot spend excessive
+time treating data as code. These limits are configurable for later targeted
+analysis.
 
 This is an analysis aid, not yet a production disassembler or recompilation
-backend. The next milestone is control-flow-aware function discovery with
-delay-slot handling and explicit MIPS R3000A instruction decoding.
+backend. The next milestone is explicit MIPS R3000A instruction decoding and
+validation against synthetic control-flow fixtures.
