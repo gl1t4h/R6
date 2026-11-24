@@ -15,7 +15,7 @@ There is not yet a playable native recompilation.
 
 | Game | Region/version | Status | Progress |
 | --- | --- | --- | --- |
-| Spider-Man | USA PlayStation 1 release | Textured primitive rendering | 95% - 4/8/15-bit texture sampling with CLUT, texture window, modulation and semi-transparency, on top of GP0/GP1 decoding and native kernel-call replacements |
+| Spider-Man | USA PlayStation 1 release | Interpreter execution runner | 96% - loads `SLUS_008.75` from the local image and executes it on the native CPU; GTE geometry, DMA, interrupts and the kernel boot thread are still missing |
 
 No games are currently completed.
 
@@ -106,6 +106,19 @@ cmake --build build --config Release
 
 The current scaffold is a development diagnostic, not a playable game.
 
+Run your own local copy on the development runner:
+
+```powershell
+.uild6-run.exe "C:\path	o\your\game.cue" --steps 2000000
+```
+
+Use `build\Release6-run.exe` for a Visual Studio build. The runner loads the
+boot executable out of your BIN/CUE, executes it on the native R3000A
+interpreter, and reports the instructions, BIOS calls and GPU traffic it saw. It
+is **not** a playable build: GTE geometry, DMA, interrupts and the kernel thread
+the executable expects are still missing, so the guest returns from its entry
+point after initialisation instead of reaching a render loop.
+
 Run the native checks (GPU decoder and BIOS services) and the analysis tests:
 
 ```powershell
@@ -182,7 +195,7 @@ None.
 
 | Game | Status | Next milestone |
 | --- | --- | --- |
-| Spider-Man (USA) | Textured primitive rendering | Native execution of the full executable: COP2/GTE, DMA, interrupts and the boot path |
+| Spider-Man (USA) | Interpreter execution runner | GTE geometry, DMA, interrupts and the kernel boot thread |
 
 ## Contributing
 

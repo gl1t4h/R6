@@ -9,7 +9,10 @@ namespace r6 {
 
 class Memory {
 public:
-    explicit Memory(std::size_t bytes) : bytes_(bytes, 0) {}
+    // translate_kseg maps the 0x80000000/0xA0000000 kernel aliases into the
+    // buffer, which requires the buffer size to be a power of two.
+    explicit Memory(std::size_t bytes, bool translate_kseg = false)
+        : bytes_(bytes, 0), translate_kseg_(translate_kseg) {}
 
     std::uint8_t read8(std::uint32_t address) const {
         return bytes_.at(index(address));
@@ -18,8 +21,9 @@ public:
     // Returns false instead of throwing when the address is unmapped, so
     // callers that walk guest strings can stop cleanly at the boundary.
     bool try_read8(std::uint32_t address, std::uint8_t& value) const noexcept {
-        if (address >= bytes_.size()) return false;
-        value = bytes_[address];
+        const auto mapped = translate(address);
+        if (mapped >= bytes_.size()) return false;
+        value = bytes_[mapped];
         return true;
     }
 
@@ -48,14 +52,25 @@ public:
     }
 
 private:
-    std::size_t index(std::uint32_t address) const {
-        if (address >= bytes_.size()) {
-            throw std::out_of_range("R6 memory address outside local memory");
+    std::size_t translate(std::uint32_t address) const noexcept {
+        if (translate_kseg_ && address >= 0x80000000u) {
+            return static_cast<std::size_t>(address &
+                                            (static_cast<std::uint32_t>(
+                                                 bytes_.size()) - 1u));
         }
         return static_cast<std::size_t>(address);
     }
 
+    std::size_t index(std::uint32_t address) const {
+        const auto mapped = translate(address);
+        if (mapped >= bytes_.size()) {
+            throw std::out_of_range("R6 memory address outside local memory");
+        }
+        return mapped;
+    }
+
     std::vector<std::uint8_t> bytes_;
+    bool translate_kseg_{false};
 };
 
 }  // namespace r6

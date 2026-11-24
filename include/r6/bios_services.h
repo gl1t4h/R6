@@ -39,6 +39,12 @@ public:
     const std::string& tty_output() const { return tty_; }
     std::size_t unhandled_call_count() const { return unhandled_calls_.size(); }
     std::size_t call_count(BiosTable table, std::uint32_t vector) const;
+    std::size_t total_calls() const;
+    // (table, vector) -> call count, ordered by table then vector.
+    const std::map<std::pair<std::uint8_t, std::uint32_t>, std::size_t>& calls()
+        const {
+        return call_counts_;
+    }
     std::uint32_t unhandled_vector(std::size_t index) const;
 
 private:

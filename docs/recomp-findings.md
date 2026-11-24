@@ -195,3 +195,28 @@ texture warping on large PS1 polygons will need to be reproduced rather than
 
 Gouraud shading (`GP0 30h-3Fh`) and lines (`40h-5Fh`) remain unsupported and
 are still reported through `unsupported_commands()`.
+
+## 2026-11-24 — Interpreter runner and first guest execution
+
+`r6-run` boots the user's own disc image for pipeline validation. It parses the
+ISO9660 root, follows the `BOOT` line in `SYSTEM.CNF`, validates the `PS-X EXE`
+header, loads the payload at its reported address, and executes from the
+reported entry point on the native interpreter.
+
+The interpreter covers the integer R3000A instruction set, including the
+unaligned `lwl`/`lwr`/`swl`/`swr` forms, correct branch-delay-slot ordering,
+`jal`/`jalr` link addresses, HI/LO multiply and divide, COP0 register moves and
+`rfe`, and the 2 MiB RAM / 1 KiB scratchpad / hardware register map.
+
+First observed run of the USA executable:
+
+- Entry point `0x8008739C`, loaded from LBA 24.
+- 86,250 instructions executed before the guest returned through `$ra`.
+- One kernel call: `A(0x39) InitHeap`.
+- No GPU or DMA traffic, as expected before the kernel thread exists.
+
+The early return is the expected consequence of running the executable without
+the retail kernel's thread creation: the startup code is entered the way the
+BIOS enters it, finishes its initialisation, and returns. Implementing GTE
+maths, DMA and interrupts is what turns this into a running game loop rather
+than a startup trace.

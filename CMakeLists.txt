@@ -12,6 +12,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 add_library(r6-core STATIC
     src/bios_services.cpp
+    src/mips_interpreter.cpp
     src/software_gpu.cpp
     src/windows_platform_services.cpp
 )
@@ -26,9 +27,16 @@ add_executable(r6-diagnostic
 
 target_link_libraries(r6-diagnostic PRIVATE r6-core)
 
+add_executable(r6-run
+    src/runner_main.cpp
+)
+
+target_link_libraries(r6-run PRIVATE r6-core)
+
 add_executable(r6-tests
     tests/test_main.cpp
     tests/test_bios_services.cpp
+    tests/test_mips_interpreter.cpp
     tests/test_software_gpu.cpp
 )
 
@@ -46,10 +54,12 @@ endif()
 if (MSVC)
     target_compile_options(r6-core PRIVATE /W4 /permissive-)
     target_compile_options(r6-diagnostic PRIVATE /W4 /permissive-)
+    target_compile_options(r6-run PRIVATE /W4 /permissive-)
     target_compile_options(r6-tests PRIVATE /W4 /permissive-)
 else()
     target_compile_options(r6-core PRIVATE -Wall -Wextra -Wpedantic)
     target_compile_options(r6-diagnostic PRIVATE -Wall -Wextra -Wpedantic)
+    target_compile_options(r6-run PRIVATE -Wall -Wextra -Wpedantic)
     target_compile_options(r6-tests PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 

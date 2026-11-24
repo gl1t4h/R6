@@ -10,8 +10,8 @@ None.
 
 - **Platform:** PlayStation 1
 - **Region:** USA
-- **Status:** Textured primitive rendering
-- **Progress:** 95%
+- **Status:** Interpreter execution runner
+- **Progress:** 96%
 - **Completed:** Local BIN/CUE verification, ISO9660 root discovery, and PS-X
   EXE header identification, plus a delay-slot-aware control-flow walk from
   the entry point and discovered direct calls, plus the first dependency-free
@@ -27,8 +27,7 @@ None.
   indirect `jr`/`jalr` sites without uploading executable data. The report now
   includes a CFG-filtered unresolved-site list. The native runtime now exposes
   controller, timer, GPU, disc-sector, audio, video, and BIOS service seams.
-- **Next step:** Native execution of the full executable (COP2/GTE, DMA,
-  interrupts, boot path).
+- **Next step:** GTE geometry, DMA, interrupts and the kernel boot thread.
 - **Playable native build:** No
 - **Distributed game assets:** No
 
@@ -42,8 +41,9 @@ current pipeline generates native code for a small instruction subset and
 stops at anything it does not understand, so there is no complete native
 program to launch yet. A playable Spider-Man build still needs:
 
-1. **Full CPU translation** — every MIPS R3000A instruction, including COP2,
-   which is the GTE (3D maths) the game relies on for geometry.
+1. **GTE geometry** — the interpreter covers the integer instruction set, but
+   COP2/GTE commands are accepted without computing anything, so vertex
+   transforms and projections produce nothing usable yet.
 2. **Complete boot path** — the retail kernel supplies the loader, exception
    handlers and thread scheduler the executable expects to find at 0xA0/0xB0/
    0xC0. The native kernel layer covers TTY/exit/events only, so a recompiled
@@ -54,6 +54,7 @@ program to launch yet. A playable Spider-Man build still needs:
    display area instead of an in-memory frame.
 5. **Input protocol** — the pad serial protocol, not just a raw key state.
 
-Until those exist, `r6-diagnostic` and `r6-tests` are the runnable artifacts.
+Until those exist, `r6-run` (which boots the guest's own executable),
+`r6-diagnostic` and `r6-tests` are the runnable artifacts.
 The renderer is a software rasterizer; there is no GPU or shader pipeline, and
 adding one would not change whether the game runs.

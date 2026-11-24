@@ -368,6 +368,12 @@ std::size_t BiosServices::call_count(BiosTable table,
     return found == call_counts_.end() ? 0 : found->second;
 }
 
+std::size_t BiosServices::total_calls() const {
+    std::size_t total = 0;
+    for (const auto& entry : call_counts_) total += entry.second;
+    return total;
+}
+
 std::uint32_t BiosServices::unhandled_vector(std::size_t index) const {
     return index < unhandled_calls_.size() ? unhandled_calls_[index] : 0;
 }

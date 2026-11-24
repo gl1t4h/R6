@@ -4,10 +4,12 @@
 
 void run_software_gpu_tests();
 void run_bios_services_tests();
+void run_mips_interpreter_tests();
 
 int main() {
     run_software_gpu_tests();
     run_bios_services_tests();
+    run_mips_interpreter_tests();
 
     const auto failures = r6::test::failure_count();
     if (failures == 0) {
