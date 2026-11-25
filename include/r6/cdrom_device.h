@@ -24,8 +24,11 @@ public:
     std::uint8_t read(std::uint32_t offset) {
         switch (offset) {
             case 0:
+                ++status_reads_;
+                if (response_index_ < response_.size()) ++response_seen_;
                 return status();
             case 1:
+                ++response_reads_;
                 return index_ == 0 ? pop_response() : 0;
             case 2:
                 // Index 1 is the data FIFO; index 0 takes parameters on write.
@@ -67,6 +70,10 @@ public:
     // sector loads, most recent last.
     const std::vector<std::string>& log() const { return log_; }
 
+    std::uint32_t status_reads() const { return status_reads_; }
+    std::uint32_t response_seen() const { return response_seen_; }
+    std::uint32_t response_reads() const { return response_reads_; }
+
     std::uint32_t sector() const { return sector_; }
     std::uint32_t sectors_read() const { return sectors_read_; }
     std::uint8_t status_byte() const { return status_; }
@@ -86,7 +93,9 @@ private:
         value |= 0x08u;  // parameter FIFO empty
         value |= 0x10u;  // parameter FIFO not full
         if (response_index_ < response_.size()) value |= 0x20u;
-        if (index_ == 1 && data_index_ < data_.size()) value |= 0x40u;
+        // The transfer loops in this title poll this bit without switching to
+        // index 1, so it reports the buffered sector whenever there is one.
+        if (data_index_ < data_.size()) value |= 0x40u;
         return static_cast<std::uint8_t>(value);
     }
 
@@ -96,12 +105,12 @@ private:
     }
 
     std::uint8_t pop_data() {
-        if (reading_ && data_index_ >= data_.size() && !data_end_raised_) {
-            // The guest has taken the whole sector, so the read reports data
-            // end (INT3): libraries complete a transfer on it, and leaving the
-            // read open makes their sync helper time out instead.
-            data_end_raised_ = true;
-            interrupt_ = kIntDataEnd;
+        if (reading_ && data_index_ >= data_.size()) {
+            // A read streams: when the guest has taken a sector the next one is
+            // waiting and its data-ready interrupt is raised. The library stops
+            // the transfer itself when it has the sectors it asked for.
+            load_sector();
+            interrupt_ = kIntDataReady;
             complete_pending_ = 0;
         }
         if (data_index_ >= data_.size()) return 0;
@@ -118,7 +127,6 @@ private:
         if (!loaded) {
             data_.assign(2048, 0);
         }
-        if (reading_) ++sector_;
         ++sectors_read_;
     }
 
@@ -132,22 +140,19 @@ private:
             complete_pending_ = 0;
             return;
         }
-        if (interrupt_ == kIntDataReady && reading_ && !data_.empty()) {
-            // Acknowledge of the data-ready interrupt ends this sector's
-            // transfer, so the guest can also see data end even when its
-            // library waits for it without draining the FIFO first.
-            data_end_raised_ = true;
-            interrupt_ = kIntDataEnd;
-            return;
-        }
 
+
+        // Acknowledging clears the interrupt flag only: the response FIFO keeps
+        // its bytes until the guest reads them out. Libraries acknowledge first
+        // and then collect the response, so clearing it here leaves them with
+        // an empty status byte.
         interrupt_ = 0;
-        response_.clear();
-        response_index_ = 0;
     }
 
     void begin_command(std::uint32_t interrupt, std::uint32_t complete) {
-        status_ = kMotorOn;
+        // While a read is active the drive reports "reading" as well as motor
+        // on; the loader waits for the reading bit before it collects sectors.
+        status_ = static_cast<std::uint8_t>(kMotorOn | (reading_ ? 0x20 : 0x00));
         interrupt_ = interrupt;
         complete_pending_ = complete;
         push_response(status_);
@@ -270,6 +275,9 @@ private:
     std::size_t data_index_{0};
     std::uint32_t sector_{0};
     std::uint32_t sectors_read_{0};
+    std::uint32_t status_reads_{0};
+    std::uint32_t response_seen_{0};
+    std::uint32_t response_reads_{0};
     bool reading_{false};
     bool data_end_raised_{false};
     std::vector<std::string> log_;

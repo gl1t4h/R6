@@ -53,9 +53,18 @@ MipsInterpreter::MipsInterpreter(Memory& ram, PlatformServices& services)
     hardware_.set_cdrom_interrupt_enabled(true);
 }
 
+void MipsInterpreter::note_cdrom_poll(std::uint32_t physical) {
+    if (physical != hardware::kCdromBase) return;
+    if (cdrom_polls_.size() >= 16) cdrom_polls_.erase(cdrom_polls_.begin());
+    cdrom_polls_.push_back(cpu_.pc);
+}
+
 std::uint32_t MipsInterpreter::read8(std::uint32_t address) {
     const auto physical = address & 0x1FFFFFFFu;
-    if (hardware_.is_cdrom(physical)) return hardware_.read_cdrom(physical);
+    if (hardware_.is_cdrom(physical)) {
+        note_cdrom_poll(physical);
+        return hardware_.read_cdrom(physical);
+    }
     if (physical <= kRamMask) return ram_.read8(physical & kRamMask);
     if (physical >= kScratchpadBase && physical <= kScratchpadBase + kScratchpadMask) {
         return scratchpad_[physical & kScratchpadMask];
@@ -70,6 +79,7 @@ std::uint32_t MipsInterpreter::read8(std::uint32_t address) {
 std::uint32_t MipsInterpreter::read16(std::uint32_t address) {
     const auto physical = address & 0x1FFFFFFFu;
     if (hardware_.is_cdrom(physical)) {
+        note_cdrom_poll(physical);
         return hardware_.read_cdrom(physical) |
                (static_cast<std::uint32_t>(hardware_.read_cdrom(physical + 1))
                 << 8);

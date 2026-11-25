@@ -122,6 +122,7 @@ private:
     // Raises the vertical-blank interrupt.
     void poll_vblank();
     void enter_entry_int();
+    void note_cdrom_poll(std::uint32_t physical);
     // Enters the queued guest interrupt routine when a pending interrupt is
     // unmasked, which stands in for the retail kernel's dispatcher.
     void deliver_interrupt();
@@ -157,6 +158,7 @@ private:
     std::uint32_t trace_reg_{0};
     std::uint32_t find_value_{0};
     std::vector<std::string> trace_log_;
+    std::vector<std::uint32_t> cdrom_polls_;
     std::vector<std::string> interrupt_log_;
 
     std::vector<std::uint32_t> recent_pcs_;
@@ -194,8 +196,13 @@ private:
 
 public:
     std::uint64_t hooks() const { return interrupt_hooks_; }
+    const std::vector<std::uint32_t>& cdrom_polls() const {
+        return cdrom_polls_;
+    }
 
     const std::vector<std::string>& cdrom_log() { return hardware_.cdrom().log(); }
+
+    HardwareMap& hardware() { return hardware_; }
 
 private:
     std::uint64_t unknown_hardware_reads_{0};

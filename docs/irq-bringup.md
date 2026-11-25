@@ -171,12 +171,41 @@ guest through DMA3) and the hard CD timeout is gone. The loader still prints
 `CdRead: retry...` a few times per run and never gets past its own validation,
 so no display command is issued yet.
 
+## Why the loader rejected the read
+
+The retry loop was not about sector contents at all. Two register-level defects
+kept libcd from ever seeing a transfer:
+
+1. **The data FIFO never looked ready.** The transfer routine at `0x8008D8B8`
+   spins on bit 6 of `0x1F801800` ("data FIFO not empty") before it programs
+   DMA3 and only then does it collect the sector. Our status register only set
+   that bit when index 1 was selected, which the caller never does, so the loop
+   spun about a million times per run. It now reports a buffered sector
+   regardless of the selected index (302 status reads per run instead of 1M).
+2. **The response FIFO was cleared on acknowledgement.** libcd acknowledges
+   first (`0x8008C4E4`, writes 7 to `0x1F801803`) and then reads the response
+   bytes out; clearing the FIFO on the ack left it with an empty response, so
+   `_cd_status` (`0x800B3B20`) stayed 0 and the loader's
+   `if (!(CdStatus() & 0x10)) retry` branch always fired. The FIFO now survives
+   an acknowledgement and is only cleared when a new command is issued.
+
+With those two fixed, DMA3 runs as the library intends: `BCR = 0x00010200`
+(one block of 512 words) and `CHCR = 0x11000000`, so one 2048-byte sector per
+transfer, and sectors now reach the guest (15 per 40M-instruction run).
+
+The failure has moved forward: instead of `CdRead: retry...` with nothing
+transferred, the loader now reports `CdRead: sector error`, then re-runs
+`CD_init` and tries again. So the transfer path is accepted and the remaining
+rejection is on sector content/position validation in the game's own wrapper,
+not in the CD controller.
+
 ## Still open
 
-- The game's loader still retries its reads. libcd registers no data/ready
-  callbacks in this title (`0x800B3B14`/`0x800B3B18` stay zero), so completion
-  depends on its sync helper, and the retry survives even with INT3 delivered.
+- `CdRead: sector error` after a successful transfer, followed by `CD_init`
+  again: the game's loader rejects the sector it received. Its wrapper (around
+  `0x80089CE4`) checks `CdStatus()` bits and re-issues `Setloc`/`ReadN` per
+  attempt; the exact validation it fails is not yet identified.
 - Handlers still overrun their 50k-step budget on nearly every interrupt.
 - No display programming at all: `2 primitives (1 fills)`, draw area
-  `0,0 to 0,0`, display off, `0` rasterised pixels. A `--shot` PPM of 320x240x3
-  is 230,400 bytes of zeroes, so the frame is still black.
+  `0,0 to 0,0`, display off, `0` rasterised pixels, and a `--shot` PPM of
+  320x240x3 is 230,400 bytes of zeroes. The frame is still black.

@@ -55,6 +55,7 @@ int main(int argc, char** argv) {
     std::uint32_t search_imm = 0;
     bool search_code = false;
     bool trace_cd = false;
+    std::string search_text;
 
     for (int index = 1; index < argc; ++index) {
         const std::string argument = argv[index];
@@ -77,6 +78,8 @@ int main(int argc, char** argv) {
             search_imm = static_cast<std::uint32_t>(
                 std::stoul(argv[++index], nullptr, 0));
             search_code = true;
+        } else if (argument == "--search-string" && index + 1 < argc) {
+            search_text = argv[++index];
         } else if (argument == "--trace-cd") {
             trace_cd = true;
         } else if (argument == "--hot") {
@@ -198,6 +201,26 @@ int main(int argc, char** argv) {
             std::cout << "code " << name << " 0x" << std::hex << address
                       << std::dec << " word=0x" << std::hex << word << std::dec
                       << std::endl;
+        }
+    }
+    if (!search_text.empty()) {
+        for (std::uint32_t address = 0x80010000u; address < 0x80200000u;
+             ++address) {
+            bool match = true;
+            for (std::size_t offset = 0; offset < search_text.size(); ++offset) {
+                if (interpreter.peek(address + offset) == 0 &&
+                    ram.read8((address + offset) & kRamMask) != 0) {
+                }
+                if (ram.read8((address + offset) & kRamMask) !=
+                    static_cast<std::uint8_t>(search_text[offset])) {
+                    match = false;
+                    break;
+                }
+            }
+            if (!match) continue;
+            std::cout << "text 0x" << std::hex << address << std::dec
+                      << std::endl;
+            address += search_text.size() - 1;
         }
     }
     interpreter.set_trace_reg(trace_reg);
@@ -378,7 +401,16 @@ int main(int argc, char** argv) {
               << "BIOS: " << services.bios().unhandled_call_count()
               << " unhandled vectors, " << interpreter.cd_sectors_read()
               << " disc sectors read\n"
-              << "VBlank: " << interpreter.vblanks() << " ticks, "
+              << "CD: status reads=" << interpreter.hardware().cdrom().status_reads()
+              << " with response=" << interpreter.hardware().cdrom().response_seen()
+              << " response reads=" << interpreter.hardware().cdrom().response_reads()
+              << std::endl;
+    std::cout << "CD poll pcs:";
+    for (auto poll_pc : interpreter.cdrom_polls()) {
+        std::cout << " 0x" << std::hex << poll_pc << std::dec;
+    }
+    std::cout << std::endl;
+    std::cout << "VBlank: " << interpreter.vblanks() << " ticks, "
               << interpreter.interrupts() << " interrupts delivered, "
               << interpreter.interrupt_overruns() << " handler overruns\n";
     if (trace_cd) {
