@@ -51,6 +51,12 @@ struct Player {
     std::uint64_t instructions{0};
     bool halted{false};
     std::string stop_text;
+    std::uint64_t frames_presented{0};
+    double fps{0.0};
+    double instructions_per_second{0.0};
+    std::uint64_t fps_window_start{0};
+    std::uint64_t fps_window_frames{0};
+    std::uint64_t fps_window_instructions{0};
 
     void* dib_pixels{nullptr};
     HBITMAP dib{nullptr};
@@ -204,10 +210,10 @@ bool load_image(Player& player, std::string& error) {
     cpu.gpr[28] = player.exe.gp;
     cpu.gpr[29] = stack_in_ram ? stack : kDefaultStack;
     cpu.gpr[31] = 0;
-    // Interrupt delivery is off: the guest's kernel dispatcher does not yet
-    // return cleanly through the HLE path, and running it corrupts guest
-    // state. Without it the game parks in its frame-wait loop instead.
-    player.cpu->set_vblank_enabled(false);
+    // Vblank ticks are generated for the guest's own handler; the handler runs
+    // (the interpreter keeps the interrupted context intact), but it does not
+    // complete yet, so the display stays off.
+    player.cpu->set_vblank_enabled(true);
     return true;
 }
 
@@ -232,6 +238,26 @@ void present(Player& player, HDC dc) {
            SRCCOPY);
 
     const auto& gpu = player.services->gpu();
+
+    // Frame-rate readout across the top of the game screen.
+    {
+        const auto brush = CreateSolidBrush(RGB(0, 0, 0));
+        RECT bar{0, 0, kWindowWidth, 20};
+        FillRect(dc, &bar, brush);
+        DeleteObject(brush);
+        char stats[160]{};
+        std::snprintf(stats, sizeof(stats),
+                      "FPS %.0f   vblank %llu   primitives %llu   %.1fM instr/s",
+                      player.fps,
+                      static_cast<unsigned long long>(player.cpu->vblanks()),
+                      static_cast<unsigned long long>(gpu.rendered_primitives()),
+                      player.instructions_per_second / 1000000.0);
+        SetBkMode(dc, TRANSPARENT);
+        SetTextColor(dc, RGB(140, 255, 140));
+        RECT line{6, 0, kWindowWidth - 6, 20};
+        DrawTextA(dc, stats, -1, &line, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+    }
+
     if (gpu.display_enabled() && gpu.rendered_primitives() > 0) return;
 
     // The guest has not drawn anything yet, so say where it is instead of
@@ -481,10 +507,24 @@ int WINAPI WinMain(HINSTANCE instance, HINSTANCE, LPSTR command_line, int) {
         const auto now = GetTickCount64();
         if (now - last_frame >= 16) {
             step(player);
+            ++player.frames_presented;
             last_frame = now;
             const auto dc = GetDC(window);
             present(player, dc);
             ReleaseDC(window, dc);
+        }
+        if (now - player.fps_window_start >= 1000) {
+            const auto elapsed = now - player.fps_window_start;
+            player.fps = static_cast<double>(player.frames_presented -
+                                             player.fps_window_frames) *
+                         1000.0 / static_cast<double>(elapsed);
+            player.instructions_per_second =
+                static_cast<double>(player.instructions -
+                                    player.fps_window_instructions) *
+                1000.0 / static_cast<double>(elapsed);
+            player.fps_window_start = now;
+            player.fps_window_frames = player.frames_presented;
+            player.fps_window_instructions = player.instructions;
         }
         if (now - last_title >= 500) {
             update_title(player, window);

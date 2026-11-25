@@ -47,6 +47,7 @@ int main(int argc, char** argv) {
     std::uint32_t entry_override = 0;
     bool deliver_vblank = false;
     std::vector<std::pair<std::uint32_t, std::uint32_t>> pokes;
+    std::vector<std::uint32_t> peeks;
 
     for (int index = 1; index < argc; ++index) {
         const std::string argument = argv[index];
@@ -59,6 +60,9 @@ int main(int argc, char** argv) {
                 std::stoul(argv[++index], nullptr, 0));
         } else if (argument == "--vblank") {
             deliver_vblank = true;
+        } else if (argument == "--peek" && index + 1 < argc) {
+            peeks.push_back(static_cast<std::uint32_t>(
+                std::stoul(argv[++index], nullptr, 0)));
         } else if (argument == "--poke" && index + 1 < argc) {
             // Debug aid: patch one guest word before the run starts, so a
             // startup global can be corrected without editing the image.
@@ -197,6 +201,20 @@ int main(int argc, char** argv) {
             std::cout << " 0x" << std::hex << pc;
         }
         std::cout << std::dec << std::endl;
+    }
+    for (const auto& trace : interpreter.irq_traces()) {
+        std::cout << "IRQ trace:";
+        for (auto pc : trace) {
+            std::cout << " 0x" << std::hex << pc;
+        }
+        std::cout << std::dec << std::endl;
+    }
+    for (const auto& entry : interpreter.interrupt_log()) {
+        std::cout << entry << std::endl;
+    }
+    for (auto address : peeks) {
+        std::cout << "peek 0x" << std::hex << address << " = 0x"
+                  << interpreter.peek(address) << std::dec << std::endl;
     }
     std::cout << "IRQ: SR=0x" << std::hex << interpreter.cop0_status()
               << " I_STAT=0x" << interpreter.irq_status() << " I_MASK=0x"

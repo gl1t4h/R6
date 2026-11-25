@@ -15,9 +15,17 @@ There is not yet a playable native recompilation.
 
 | Game | Region/version | Status | Progress |
 | --- | --- | --- | --- |
-| Spider-Man | USA PlayStation 1 release | Interpreter execution runner | 96% - loads `SLUS_008.75` from the local image and executes it on the native CPU; GTE geometry, DMA, interrupts and the kernel boot thread are still missing |
+| Spider-Man | USA PlayStation 1 release | Boots into its own frame loop; draws nothing yet | 96% - loads `SLUS_008.75` and executes it on the native CPU (40M+ instructions), kernel interrupts now reach the guest's own handler, but that handler does not finish, so the display stays off |
 
 No games are currently completed.
+
+### Running what exists
+
+`spider-man-r6.exe` (source: `src/spiderman_player.cpp`) is a windowed player:
+it boots your own disc image and shows a frame-rate readout across the top of
+the game screen. The readout is live, but the screen below it is black - the
+guest never finishes the callback that would turn its display on, so the FPS
+counter reports presented frames, not rendered ones.
 
 ## What is and is not included
 
@@ -109,10 +117,12 @@ The current scaffold is a development diagnostic, not a playable game.
 Run your own local copy on the development runner:
 
 ```powershell
-.uild6-run.exe "C:\path	o\your\game.cue" --steps 2000000
+.uild
+6-run.exe "C:\path	o\your\game.cue" --steps 2000000
 ```
 
-Use `build\Release6-run.exe` for a Visual Studio build. The runner loads the
+Use `build\Release
+6-run.exe` for a Visual Studio build. The runner loads the
 boot executable out of your BIN/CUE, executes it on the native R3000A
 interpreter, and reports the instructions, BIOS calls and GPU traffic it saw. It
 is **not** a playable build: GTE geometry, DMA, interrupts and the kernel thread

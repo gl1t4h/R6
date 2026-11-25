@@ -76,6 +76,12 @@ public:
         if (address == hardware::kInterruptMask) return interrupt_mask_;
         if (address == hardware::kGpuStatus) return services_.read_gpu_status();
         if (address == hardware::kGpuCommand) return services_.read_gpu_data();
+        if (address == kPadData) return pad_data_;
+        if (address == kPadStat) return kPadReadyStatus;
+        if (address == kPadMode) {
+            return pad_mode_ | (pad_control_ << 16);
+        }
+        if (address == kPadBaud) return pad_baud_ << 16;
         const auto channel = dma_register(address);
         if (channel >= 0) {
             const auto slot = static_cast<std::size_t>(channel);
@@ -128,6 +134,19 @@ public:
             interrupt_mask_ = value;
             return;
         }
+        if (address == kPadData) {
+            pad_data_ = value & 0xFFFFu;
+            return;
+        }
+        if (address == kPadMode) {
+            pad_mode_ = value & 0xFFFFu;
+            pad_control_ = value >> 16;
+            return;
+        }
+        if (address == kPadBaud) {
+            pad_baud_ = value >> 16;
+            return;
+        }
         const auto channel = dma_register(address);
         if (channel >= 0) {
             const auto slot = static_cast<std::size_t>(channel / 4);
@@ -153,6 +172,14 @@ public:
     void acknowledge_interrupts(std::uint32_t bits) {
         interrupt_status_ &= ~bits;
     }
+
+    // Pad / SIO0 registers. A transfer must look complete, otherwise the
+    // guest's pad driver spins on JOY_STAT until its timer-based timeout.
+    static constexpr std::uint32_t kPadData = 0x1F801040;
+    static constexpr std::uint32_t kPadStat = 0x1F801044;
+    static constexpr std::uint32_t kPadMode = 0x1F801048;
+    static constexpr std::uint32_t kPadBaud = 0x1F80104C;
+    static constexpr std::uint32_t kPadReadyStatus = 0x0007;
 
     void set_cdrom_interrupt_enabled(bool enabled) {
         cdrom_interrupt_enabled_ = enabled;
@@ -198,6 +225,10 @@ private:
     std::array<std::uint32_t, 7> dma_address_{};
     std::array<std::uint32_t, 7> dma_counter_{};
     std::array<std::uint32_t, 7> dma_control_{};
+    std::uint32_t pad_data_{0x41};
+    std::uint32_t pad_mode_{0};
+    std::uint32_t pad_control_{0};
+    std::uint32_t pad_baud_{0};
     std::uint32_t interrupt_status_{0};
     bool cdrom_interrupt_enabled_{false};
     std::uint32_t interrupt_mask_{0};

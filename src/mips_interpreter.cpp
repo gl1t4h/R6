@@ -1,5 +1,7 @@
 #include "r6/mips_interpreter.h"
 
+#include <cstdio>
+
 #include <cstddef>
 #include <cstdint>
 
@@ -17,8 +19,8 @@ constexpr std::uint32_t kDmaEnd = 0x1F801100u;
 // Sentinel return address used to call a guest interrupt routine from the run
 // loop and notice when it returns.
 constexpr std::uint32_t kInterruptReturnAddress = 0x0000FFFCu;
-constexpr std::uint64_t kInterruptStepBudget = 400000u;
-constexpr std::uint64_t kMaxInterruptOverruns = 3;
+constexpr std::uint64_t kInterruptStepBudget = 50000u;
+constexpr std::uint64_t kMaxInterruptOverruns = 1000;
 
 constexpr std::uint32_t reg(std::uint32_t instruction, std::uint32_t shift) {
     return (instruction >> shift) & 0x1Fu;
@@ -46,6 +48,9 @@ MipsInterpreter::MipsInterpreter(Memory& ram, PlatformServices& services)
     // interrupt enable and the hardware (IP2) mask already set; guest code
     // read-modify-writes SR to enable COP2 and relies on those bits surviving.
     cop0_[12] = 0x00000401u;
+    // The disc controller reports completion through I_STAT bit 2, which is
+    // what libcd's command state machine waits for.
+    hardware_.set_cdrom_interrupt_enabled(true);
 }
 
 std::uint32_t MipsInterpreter::read8(std::uint32_t address) {
@@ -241,8 +246,22 @@ void MipsInterpreter::deliver_interrupt() {
         interrupt_saved_lo_ = cpu_.lo;
         interrupt_saved_cause_ = cop0_[13];
         interrupt_pending_bits_ = pending;
+        if (interrupt_log_.size() < 6) {
+            char line[176]{};
+            std::snprintf(
+                line, sizeof(line),
+                "entry=0x%08X next=0x%08X routine=0x%08X sp=0x%08X gp=0x%08X "
+                "b12c8=0x%08X interrupted=0x%08X",
+                entry, read32(entry), routine, cpu_.gpr[29], cpu_.gpr[28],
+                read32(0x800B12C8u), cpu_.pc);
+            interrupt_log_.push_back(line);
+        }
         interrupt_steps_ = 0;
         irq_pcs_.clear();
+        if (irq_traces_.size() < 4) {
+            irq_traces_.emplace_back();
+            irq_traces_.back().reserve(32);
+        }
         // The retail kernel enters the dispatcher with the hardware interrupt
         // pending bit set in CAUSE and defined argument registers. Leaving the
         // interrupted values in $a0-$a3 makes handlers act on stale pointers.
@@ -362,6 +381,10 @@ RunResult MipsInterpreter::run(std::uint64_t max_steps) {
             // lose it.
             if (vblank_enabled_) poll_vblank();
             deliver_interrupt();
+            // The handler jump replaced cpu_.pc, so current_pc is stale: restart
+            // the iteration and execute the handler instead of the instruction
+            // that was interrupted.
+            if (in_interrupt_) continue;
         }
 
         if (current_pc == 0) {
@@ -385,6 +408,10 @@ RunResult MipsInterpreter::run(std::uint64_t max_steps) {
         if (recent_pcs_.size() >= 16) recent_pcs_.erase(recent_pcs_.begin());
         recent_pcs_.push_back(current_pc);
         if (in_interrupt_ && irq_pcs_.size() < 64) irq_pcs_.push_back(current_pc);
+        if (in_interrupt_ && !irq_traces_.empty() &&
+            irq_traces_.back().size() < 32) {
+            irq_traces_.back().push_back(current_pc);
+        }
 
         if (step.unsupported) {
             result.reason = StopReason::unsupported_instruction;

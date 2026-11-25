@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <map>
+#include <string>
 #include <vector>
 
 #include "r6/cpu_state.h"
@@ -53,7 +54,14 @@ public:
     std::uint64_t vblanks() const { return vblank_count_; }
     std::uint64_t interrupts() const { return interrupts_delivered_; }
     std::uint32_t cop0_status() { return cop0_[12]; }
+    std::uint32_t peek(std::uint32_t address) { return read32(address); }
     const std::vector<std::uint32_t>& irq_pcs() const { return irq_pcs_; }
+    const std::vector<std::string>& interrupt_log() const {
+        return interrupt_log_;
+    }
+    const std::vector<std::vector<std::uint32_t>>& irq_traces() const {
+        return irq_traces_;
+    }
     const std::vector<std::pair<std::uint32_t, std::uint32_t>>& sr_writes()
         const {
         return sr_writes_;
@@ -125,6 +133,8 @@ private:
 
     // First PCs executed inside the last delivered interrupt routine.
     std::vector<std::uint32_t> irq_pcs_;
+    std::vector<std::vector<std::uint32_t>> irq_traces_;
+    std::vector<std::string> interrupt_log_;
 
     std::vector<std::uint32_t> recent_pcs_;
     std::vector<std::uint32_t> recent_calls_;

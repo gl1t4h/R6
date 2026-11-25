@@ -27,6 +27,61 @@ std::string format_unsigned(std::uint32_t value,
     return result;
 }
 
+
+// The kernel exposes its C library through the A0 table; a guest that calls
+// bzero/memcpy expects memory to actually change, so these must be real.
+constexpr std::uint32_t kMaxBlockBytes = 1u << 21;
+
+void block_fill(Memory& memory, std::uint32_t destination, std::uint32_t length,
+                std::uint8_t value) {
+    if (length > kMaxBlockBytes) length = kMaxBlockBytes;
+    std::uint8_t probe = 0;
+    for (std::uint32_t offset = 0; offset < length; ++offset) {
+        const auto address = destination + offset;
+        if (!memory.try_read8(address, probe)) return;
+        memory.write8(address, value);
+    }
+}
+
+void block_copy(Memory& memory, std::uint32_t source, std::uint32_t destination,
+                std::uint32_t length) {
+    if (length > kMaxBlockBytes) length = kMaxBlockBytes;
+    std::uint8_t probe = 0;
+    const bool overlaps_forward =
+        destination > source && destination - source < length;
+    if (overlaps_forward) {
+        for (std::uint32_t offset = length; offset > 0; --offset) {
+            std::uint8_t value = 0;
+            if (!memory.try_read8(source + offset - 1, value)) return;
+            if (!memory.try_read8(destination + offset - 1, probe)) return;
+            memory.write8(destination + offset - 1, value);
+        }
+        return;
+    }
+    for (std::uint32_t offset = 0; offset < length; ++offset) {
+        std::uint8_t value = 0;
+        if (!memory.try_read8(source + offset, value)) return;
+        if (!memory.try_read8(destination + offset, probe)) return;
+        memory.write8(destination + offset, value);
+    }
+}
+
+std::uint32_t block_compare(Memory& memory, std::uint32_t left,
+                            std::uint32_t right, std::uint32_t length) {
+    if (length > kMaxBlockBytes) length = kMaxBlockBytes;
+    for (std::uint32_t offset = 0; offset < length; ++offset) {
+        std::uint8_t first = 0;
+        std::uint8_t second = 0;
+        if (!memory.try_read8(left + offset, first)) return 0;
+        if (!memory.try_read8(right + offset, second)) return 0;
+        if (first != second) {
+            return first < second ? static_cast<std::uint32_t>(-1)
+                                  : static_cast<std::uint32_t>(1);
+        }
+    }
+    return 0;
+}
+
 }  // namespace
 
 bool BiosServices::trap_table(std::uint32_t pc, BiosTable& table) {
@@ -69,6 +124,47 @@ std::uint32_t BiosServices::dispatch(BiosTable table, CpuState& cpu,
 std::uint32_t BiosServices::handle_a0(std::uint32_t vector, CpuState& cpu,
                                       Memory& memory) {
     switch (vector) {
+        case 0x25: {  // toupper
+            const auto character = cpu.gpr[4] & 0xFFu;
+            return character >= 'a' && character <= 'z' ? character - 0x20u
+                                                        : character;
+        }
+        case 0x26: {  // tolower
+            const auto character = cpu.gpr[4] & 0xFFu;
+            return character >= 'A' && character <= 'Z' ? character + 0x20u
+                                                        : character;
+        }
+        case 0x27:  // bcopy(src, dst, len)
+            block_copy(memory, cpu.gpr[4], cpu.gpr[5], cpu.gpr[6]);
+            return 0;
+        case 0x28:  // bzero(dst, len)
+            block_fill(memory, cpu.gpr[4], cpu.gpr[5], 0);
+            return 0;
+        case 0x29:  // bcmp(left, right, len): 0 when equal
+            return block_compare(memory, cpu.gpr[4], cpu.gpr[5], cpu.gpr[6]);
+        case 0x2A:  // memcpy(dst, src, len)
+            block_copy(memory, cpu.gpr[5], cpu.gpr[4], cpu.gpr[6]);
+            return cpu.gpr[4];
+        case 0x2B:  // memset(dst, byte, len)
+            block_fill(memory, cpu.gpr[4], cpu.gpr[6],
+                       static_cast<std::uint8_t>(cpu.gpr[5]));
+            return cpu.gpr[4];
+        case 0x2C:  // memmove(dst, src, len)
+            block_copy(memory, cpu.gpr[5], cpu.gpr[4], cpu.gpr[6]);
+            return cpu.gpr[4];
+        case 0x2D:  // memcmp(left, right, len)
+            return block_compare(memory, cpu.gpr[4], cpu.gpr[5], cpu.gpr[6]);
+        case 0x2E: {  // memchr(src, byte, len)
+            const auto wanted = static_cast<std::uint8_t>(cpu.gpr[5]);
+            std::uint32_t length = cpu.gpr[6];
+            if (length > kMaxBlockBytes) length = kMaxBlockBytes;
+            for (std::uint32_t offset = 0; offset < length; ++offset) {
+                std::uint8_t value = 0;
+                if (!memory.try_read8(cpu.gpr[4] + offset, value)) break;
+                if (value == wanted) return cpu.gpr[4] + offset;
+            }
+            return 0;
+        }
         case 0x39:  // InitHeap: the native runtime owns the heap.
             return 0;
         case 0x3A:  // _exit
