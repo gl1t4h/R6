@@ -35,8 +35,18 @@ public:
         bios.dispatch(table, cpu, memory);
         return true;
     }
+    bool take_return_from_exception() override {
+        return bios.take_return_from_exception();
+    }
 
     BiosServices bios;
+};
+
+class EntryIntServices final : public TestServices {
+public:
+    std::uint32_t entry_int() override { return kEntryInt; }
+
+    static constexpr std::uint32_t kEntryInt = 0x80020000u;
 };
 
 class CaptureServices final : public TestServices {
@@ -384,6 +394,39 @@ void interrupt_without_a_vector_stays_pending() {
     R6_CHECK(cpu.pc == 0x8001000Cu);
 }
 
+// Games never install a handler at 0x80000080 because the BIOS owns it;
+// they hook EntryInt instead, and libetc dispatches IRQs from there.
+void interrupt_falls_back_to_entry_int() {
+    Memory ram(2u * 1024u * 1024u);
+    EntryIntServices services;
+    MipsInterpreter interpreter(ram, services);
+    auto& cpu = interpreter.cpu();
+    cpu.pc = 0x80010000u;
+
+    // HookEntryInt jmp_buf: RA, SP, FP, S0-S7 and GP as A(13h) saves them.
+    ram.write32(0x20000, 0x80002000u);  // resume at the dispatcher
+    ram.write32(0x20004, 0x80030000u);  // SP
+    for (std::uint32_t index = 0; index < 9; ++index) {
+        ram.write32(0x20008 + index * 4, 0x80000000u + index);
+    }
+
+    ram.write32(0x2000, 0x240A0055u);   // addiu t2, zero, 0x55
+    ram.write32(0x2004, 0x24090017u);   // addiu t1, zero, 0x17
+    ram.write32(0x2008, jal(0xB0));     // ReturnFromException
+    ram.write32(0x200C, 0x00000000u);   // delay slot
+
+    ram.write32(0x10000, 0x24080001u);  // addiu t0, zero, 1
+    ram.write32(0x10004, 0x0000000Du);  // break
+    raise_pending_interrupt(interpreter);
+
+    const auto result = interpreter.run(8);
+    R6_CHECK(interpreter.interrupts() == 1);
+    R6_CHECK(interpreter.missing_vectors() == 0);
+    R6_CHECK(cpu.gpr[10] == 0x55u);  // the dispatcher ran
+    R6_CHECK(cpu.gpr[8] == 1u);      // then the interrupted stream resumed
+    R6_CHECK(result.reason == StopReason::guest_break);
+}
+
 void interrupt_overrun_returns_to_epc() {
     Memory ram(2u * 1024u * 1024u);
     TestServices services;
@@ -449,6 +492,7 @@ void run_mips_interpreter_tests() {
     interrupt_takes_the_exception_vector();
     interrupt_handler_returns_through_rfe();
     interrupt_without_a_vector_stays_pending();
+    interrupt_falls_back_to_entry_int();
     interrupt_overrun_returns_to_epc();
     exception_vector_writes_are_traced();
 }

@@ -337,9 +337,16 @@ void MipsInterpreter::deliver_interrupt() {
     const auto pending = hardware_.interrupt_status() & hardware_.interrupt_mask();
     if (pending == 0) return;
 
-    // No handler where the vector points: executing zeroed RAM would slide
-    // through memory, so leave the interrupt pending and report it.
-    if (read32(kExceptionVector) == 0) {
+    // Real hardware has the BIOS exception handler at the vector, so games
+    // install no handler of their own there. When the vector is empty, run
+    // the guest's HookEntryInt jmp_buf instead: the retail kernel does that
+    // at the end of every exception, and libetc dispatches its interrupt
+    // callbacks from it. Only when the guest hooked neither is there nowhere
+    // to go, and delivered interrupts would slide through zeroed RAM.
+    const auto vector = read32(kExceptionVector);
+    const auto entry_int = services_.entry_int();
+    const auto entry_pc = entry_int != 0 ? read32(entry_int) : 0;
+    if (vector == 0 && entry_pc == 0) {
         ++missing_vectors_;
         if (interrupt_log_.size() < 6) {
             interrupt_log_.push_back(
@@ -358,7 +365,23 @@ void MipsInterpreter::deliver_interrupt() {
     cop0_[14] = cpu_.pc;
     cop0_[13] = (cop0_[13] & ~0x0000FF7Cu) | 0x00000400u;
     cop0_[12] = (status & ~0x3Fu) | ((status & 0x0Fu) << 2);
-    cpu_.pc = kExceptionVector;
+    if (vector != 0) {
+        cpu_.pc = kExceptionVector;
+    } else {
+        // longjmp(EntryInt, 1): the jmp_buf that A(13h) setjmp filled keeps
+        // RA, SP, FP, S0-S7 and GP, so restoring them is the C-level resume
+        // libetc expects. EPC still holds the interrupted PC for the handler's
+        // B(17h) ReturnFromException.
+        cpu_.gpr[31] = read32(entry_int);
+        cpu_.gpr[29] = read32(entry_int + 4);
+        cpu_.gpr[30] = read32(entry_int + 8);
+        for (std::uint32_t index = 0; index < 8; ++index) {
+            cpu_.gpr[16 + index] = read32(entry_int + 12 + index * 4);
+        }
+        cpu_.gpr[28] = read32(entry_int + 0x2C);
+        cpu_.gpr[2] = 1;  // longjmp returns 1 from the matching setjmp.
+        cpu_.pc = entry_pc;
+    }
     in_interrupt_ = true;
     interrupt_steps_ = 0;
     irq_pcs_.clear();
@@ -370,9 +393,10 @@ void MipsInterpreter::deliver_interrupt() {
         irq_traces_.back().reserve(32);
     }
     if (interrupt_log_.size() < 6) {
-        interrupt_log_.push_back("vector bits=0x" + format_hex(pending) +
-                                 " interrupted=0x" +
-                                 format_hex(cop0_[14]));
+        interrupt_log_.push_back(
+            std::string(vector != 0 ? "vector bits=0x" : "entryint bits=0x") +
+            format_hex(pending) + " interrupted=0x" +
+            format_hex(cop0_[14]));
     }
     ++interrupts_delivered_;
 }
