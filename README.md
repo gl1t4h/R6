@@ -245,6 +245,33 @@ copyright and anti-circumvention laws applicable to them, and ensuring that
 their use of the tools is lawful. This notice is informational and is not
 legal advice.
 
+## References and credits
+
+Hardware behaviour here was checked against public documentation and two
+independent emulators. Neither emulator is required to build or run R6, and
+this tree contains no code from either project.
+
+- **psx-spx** (<https://psx-spx.consoledev.net/>) is the primary reference
+  for register maps, the root-counter clock table, and the kernel's
+  exception frame.
+- **DuckStation**, by stenzek and contributors
+  (<https://github.com/stenzek/duckstation>), was used as a behavioural
+  reference for root-counter clock sources, exception entry, and restoring
+  the register file on `ReturnFromException`. DuckStation is licensed under
+  Creative Commons BY-NC-ND 4.0, which forbids derivative works, so its
+  source is consulted only to confirm documented hardware behaviour; it is
+  never copied, translated, or vendored into this repository.
+- **psxe**, by Allkern (Lisandro Alarcón)
+  (<https://github.com/allkern/psxe>), was used as an independent second
+  opinion on the same timer and exception behaviour. psxe is MIT licensed,
+  copyright (c) 2024 Allkern (Lisandro Alarcón); its code may be reused
+  with that notice, but none is included here.
+
+The root-counter fixes and the register-file restore on `B(0x17)` were
+written from those documented facts and from the failures observed in the
+runner, not from either emulator's source, and no third-party source files
+are compiled into R6.
+
 ## Completed games
 
 None.

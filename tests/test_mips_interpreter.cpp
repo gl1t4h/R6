@@ -263,8 +263,9 @@ void timer_mode_reads_back() {
     R6_CHECK(cpu.gpr[2] == 0x00400002u);
 }
 
-// DuckStation's timer model: timer 0 counts sysclk or dot clock, timer 1
-// sysclk or hblank, timer 2 sysclk or sysclk/8 (bit 1 of the selector).
+// Hardware timer model (psx-spx; DuckStation implements the same table):
+// timer 0 counts sysclk or dot clock, timer 1 sysclk or hblank, and timer 2
+// sysclk or sysclk/8 (bit 1 of the selector).
 void timer_clock_sources_match_the_hardware() {
     Memory ram(2u * 1024u * 1024u);
     TestServices services;
