@@ -378,7 +378,7 @@ void cdrom_interrupt_line_honours_the_enable_mask() {
     hardware.write_cdrom(0x1F801802u, 0x00);  // mask every CD interrupt
     R6_CHECK((hardware.interrupt_status() & 0x04u) == 0);
 
-    hardware.write_cdrom(0x1F801800u, 3);     // bank 3 mirrors +2
+    hardware.write_cdrom(0x1F801800u, 1);     // bank 1: interrupt enable
     hardware.write_cdrom(0x1F801802u, 0x07);  // enable the response type
     R6_CHECK((hardware.interrupt_status() & 0x04u) != 0);
 
