@@ -75,7 +75,8 @@ None.
 
 - **Platform:** PlayStation 1
 - **Region:** USA
-- **Status:** Interpreter execution runner (early boot)
+- **Status:** Interpreter execution runner (early boot) + native translation
+  slice
 - **Progress:** 10%
 - **Completed:** Opens the retail CHD version 5 image directly (`cdlz`
   hunks, Huffman-compressed map, 32,765 hunks, 262,116 sectors) and discovers
@@ -91,11 +92,16 @@ None.
   130M-instruction run reads 1,402 sectors (LBA 102 through 1402) without
   loader retries, draws 217,138 GPU primitives (31,250 fills) and 91,379
   VRAM pixels, and stops with the loader paused at LBA 1403 and the display
-  still disabled.
-- **Next step:** The game idles after the last CD Pause with the display off;
-  identify the post-load wait and add MDEC decoding for the movie that
-  follows, which is the remaining bootstrap device. Use a 150M+ instruction
-  budget.
+  still disabled. The boot executable's startup is also translated one basic
+  block at a time: `r6-native` executed 1,975 generated blocks, matching the
+  interpreter's registers, HI/LO and all 2 MiB of RAM after every block, and
+  stopped at the `InitHeap` BIOS entry `A(0x39)`.
+- **Next step:** The 79,872-byte `SLUS_007.07` is a bootstrap loader; the main
+  program arrives from the disc into RAM. Capture the loaded image (a RAM dump
+  or a transition snapshot) and translate that, rather than chasing the
+  interpreter's post-load idle. MDEC only becomes relevant if the captured
+  native path reaches the movie. Use a 150M+ instruction budget for the
+  oracle.
 - **Playable native build:** No
 - **Distributed game assets:** No
 

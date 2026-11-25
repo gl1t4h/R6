@@ -527,8 +527,6 @@ std::string MipsInterpreter::format_hex(std::uint32_t value) {
 
 RunResult MipsInterpreter::run(std::uint64_t max_steps) {
     RunResult result;
-    bool in_delay_slot = false;
-    std::uint32_t delay_target = 0;
 
     while (result.steps < max_steps) {
         const auto current_pc = cpu_.pc;
@@ -549,9 +547,9 @@ RunResult MipsInterpreter::run(std::uint64_t max_steps) {
                 format_hex(cpu_.gpr[16]) + " s1=0x" + format_hex(cpu_.gpr[17]));
         }
         if (hot_enabled_ && (result.steps & 0x3Fu) == 0) ++hot_[current_pc];
-        const bool was_delay_slot = in_delay_slot;
-        const auto target = delay_target;
-        in_delay_slot = false;
+        const bool was_delay_slot = in_delay_slot_;
+        const auto target = delay_target_;
+        in_delay_slot_ = false;
 
         if ((result.steps & 0x3FFu) == 0) {
             // Poll even in a delay slot: a wait loop whose length divides the
@@ -681,8 +679,8 @@ RunResult MipsInterpreter::run(std::uint64_t max_steps) {
 
         cpu_.gpr[0] = 0;
         if (step.branch) {
-            in_delay_slot = true;
-            delay_target = step.target;
+            in_delay_slot_ = true;
+            delay_target_ = step.target;
         }
 
         if (was_delay_slot) {

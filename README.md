@@ -23,7 +23,8 @@ images that are never included in this repository.
 | CD-ROM / DMA | In progress | DMA3 disc reads, CD command responses, and sector delivery are implemented enough for early file streaming; timing-sensitive loader behavior is still being debugged. |
 | GPU / display | In progress | Software GPU handles common GP0/GP1 commands and presents a VRAM display window; guest scene submission depends on further CPU/GTE/timing coverage. |
 | GTE / COP2 | In progress | RTPS/RTPT, NCLIP, AVSZ3/4, MVMVA and SQR compute with the documented saturation and FLAG behaviour, as do the lighting commands NCS, NCCS, NCDS and their triple forms NCT, NCCT and NCDT; the colour commands that work from existing IR (CC, CDP, DPCS, DPCT, INTPL, DCPL) are counted per opcode and named in the `r6-run` report. See `docs/gte-scope.md`. |
-| Native player | In progress | `r6-player` opens a Win32 window and presents the translated display from a user-supplied local disc image. |
+| Native translation | First end-to-end slice | `tools/generate-native-stub.py` emits one native function per basic block, and `r6-native` executes them through the dispatcher. The boot executable's startup runs 1,975 generated blocks while matching the interpreter's registers, HI/LO and 2 MiB RAM after every block, then stops at the `InitHeap` BIOS seam. Generated code stays outside the repository. |
+| Native player | In progress | `r6-player` is the development interpreter front end; it presents the reference display, not a recompiled build. |
 
 Progress is measured by bring-up milestones, not playable game content. On-screen
 counters report interpreter/player state; a black or incomplete display usually
@@ -134,18 +135,36 @@ ctest --test-dir build --output-on-failure
 python -m unittest discover -s tests -v
 ```
 
-To generate a local-only native translation prototype from an extracted PS-X
-EXE:
+To generate and run a local-only native translation slice, first extract the
+boot executable from your own image, then generate one native function per
+basic block:
 
 ```powershell
+.\build\Release\r6-run.exe "C:\path\to\your\game.chd" `
+  --extract-exe "$env:USERPROFILE\R6-local\game.exe"
+
 python .\tools\generate-native-stub.py `
   "$env:USERPROFILE\R6-local\game.exe" `
-  "$env:USERPROFILE\R6-local\generated\game_translation.cpp"
+  "$env:USERPROFILE\R6-local\generated\game_translation.cpp" `
+  --max-functions 64
 ```
 
-The generated file must stay outside this repository. It supports only a small
-instruction subset and deliberately stops on unsupported control flow; it is
-not yet a playable recompilation.
+The generated file must stay outside this repository. Configure the native
+target with its path and run it:
+
+```powershell
+cmake -S . -B build-native `
+  -DR6_GENERATED_TRANSLATION="$env:USERPROFILE\R6-local\generated\game_translation.cpp"
+cmake --build build-native --config Release --target r6-native
+.\build-native\Release\r6-native.exe "C:\path\to\your\game.chd"
+```
+
+`r6-native` boots the same executable and executes the generated blocks,
+checking registers, HI/LO and all of RAM against the interpreter after every
+block. It stops at the first unhandled BIOS or hardware seam. This is a
+pipeline verification slice, not a playable recompilation: the extracted
+`SLUS_007.07` is the 79 KB bootstrap loader, and the main program it streams
+from the disc is the next translation input.
 
 ## Disc formats
 
@@ -281,7 +300,7 @@ None.
 | Game | Status | Next milestone |
 | --- | --- | --- |
 | Spider-Man (USA) | Native interpreter runs the guest, its vblank dispatcher, VSync callbacks and the CD loader (whole files stream); emulated-cycle timers, DMA interrupt/DMA4 completion and SPU transfer stubs are committed | Confirm the emulated-cycle timers remove the remaining `CdSync`/loader stalls on disc, then chase the first display/GPU scene and GTE geometry |
-| Silent Hill (USA) | The interpreter opens the retail CHD directly, finds the ISO9660 volume, loads `SLUS_007.07` and runs 40M instructions: 71 interrupts delivered (70 vblank, one CD) with no pending vectors, the guest prints its own `CD_init` line, and the CD trace shows a correct `GetStat` INT3 handshake (flag `0x04`, eight response bytes, ack `0x07`); still no guest CD sectors or GPU primitives, and the run ends in a TIM1/GPUSTAT wait loop | Run with a larger step budget to clear the init wait, then follow CD init to its first sector reads and capture the first display/GPU scene |
+| Silent Hill (USA) | The interpreter streams 1,402 CD sectors (LBA 102-1402), draws 217,138 primitives and 91,379 VRAM pixels, and stops with the loader paused at LBA 1403 and the display off. The boot executable's startup now also runs as 1,975 generated native blocks that match the interpreter on every checkpoint and stop at the `InitHeap` BIOS seam | Capture the loaded main program from RAM (the 79 KB `SLUS_007.07` is a bootstrap loader) and translate that image; the interpreter's post-load idle is an oracle question, not the native milestone |
 | Air Hockey (USA) | The interpreter opens the retail CHD directly, finds the ISO9660 volume, loads `SLUS_014.67` and runs 40M instructions: 71 interrupts delivered with no pending vectors, `ResetGraph` and `CD_init` printed through `B(0x35)`, and the same correct `GetStat` INT3 handshake; still no guest CD sectors or GPU primitives, and the run ends in a TIM1/GPUSTAT wait loop | Run with a larger step budget to clear the init wait, then follow CD init to its first sector reads and the first display/GPU scene |
 
 ## Contributing

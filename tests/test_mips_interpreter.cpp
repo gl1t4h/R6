@@ -105,6 +105,29 @@ void taken_branch_skips_following_instruction() {
     R6_CHECK(cpu.gpr[11] == 11);
 }
 
+void single_step_preserves_branch_target() {
+    Memory ram(2u * 1024u * 1024u);
+    TestServices services;
+    MipsInterpreter interpreter(ram, services);
+    auto& cpu = interpreter.cpu();
+    cpu.pc = 0x80010000u;
+
+    ram.write32(0x10000, beq(0, 0, 3));    // taken, target 0x80010010
+    ram.write32(0x10004, 0x00000000u);     // delay slot
+    ram.write32(0x10008, 0x24080099u);     // skipped fallthrough
+    ram.write32(0x10010, 0x24080001u);     // t0 = 1
+
+    auto result = interpreter.run(1);
+    R6_CHECK(result.reason == StopReason::step_budget);
+    R6_CHECK(cpu.pc == 0x80010004u);
+    result = interpreter.run(1);
+    R6_CHECK(result.reason == StopReason::step_budget);
+    // The pending branch target must survive the run() boundary.
+    R6_CHECK(cpu.pc == 0x80010010u);
+    interpreter.run(1);
+    R6_CHECK(cpu.gpr[8] == 1u);
+}
+
 void call_and_return() {
     Memory ram(2u * 1024u * 1024u);
     TestServices services;
@@ -649,6 +672,7 @@ void exception_vector_writes_are_traced() {
 void run_mips_interpreter_tests() {
     arithmetic_and_delay_slot();
     taken_branch_skips_following_instruction();
+    single_step_preserves_branch_target();
     call_and_return();
     load_and_store();
     unaligned_load_word_left();

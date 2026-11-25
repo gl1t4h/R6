@@ -489,3 +489,69 @@ ESC quits; F12 writes `r6-frame.ppm` next to the executable. `--shot <file>
 --steps N` runs the same path headless and saves one frame.
 While the guest has not drawn anything the window shows live instruction,
 primitive, disc-sector and stop-state counters rather than a black rectangle.
+
+## 2026-11-25 — Native block slice with a differential oracle
+
+The first native execution slice is committed and verified. It is deliberately
+small: it translates the 79 KB bootstrap `SLUS_007.07` and stops at the first
+platform seam, not a playable recompilation.
+
+### Pipeline
+
+- `tools/generate-native-stub.py` now emits one C++ function per **basic
+  block** instead of one per discovered function. It registers every block
+  start with `r6::FunctionDispatcher`; a block ends at a control transfer and
+  returns the next guest PC. Calls, branches, loops, returns and indirect
+  targets therefore resolve through the dispatcher without re-entering a
+  function at its prologue. Branch delay slots stay in the same block, and
+  branch targets and call continuations become leaders.
+- The integer subset covers and/or/xor/nor, slt/sltu/slti/sltiu, shifts
+  (including variable counts), mult/multu/div/divu, mfhi/mflo/mthi/mtlo,
+  addi/andi/xori, the branch conditions used by the compiler, and `jr`.
+- `r6-run --extract-exe PATH` writes a local PS-X EXE for the generator. The
+  file is derived from the user's disc and stays outside the repository.
+- CMake option `-DR6_GENERATED_TRANSLATION=<path>` builds `r6-native` with the
+  generated translation unit. The generated file is still required to live
+  outside the repository.
+
+### Verification
+
+`r6-native` boots the user's image with the same RAM and stack correction as
+the interpreter, then executes generated blocks. In `--compare` mode (the
+default) it snapshots the CPU and RAM before each block, runs the interpreter
+from that same checkpoint until it reaches the native block's next PC, and
+compares all GPRs, HI, LO and the full 2 MiB of RAM. The first difference is
+reported with the block number, starting PC and the differing register or RAM
+address.
+
+Observed for Silent Hill's boot executable:
+
+| Item | Result |
+| --- | --- |
+| Blocks emitted | 583 |
+| Blocks executed and matched | 1,975 |
+| Native stop | BIOS entry `0xA0`, `t1=0x39` (`InitHeap`) |
+| Mismatches | none |
+
+The interpreter needed one correction for this harness: `run()` kept its
+pending branch-delay target in locals, so single-stepping with `run(1)` across
+a branch lost the target and took the fallthrough path. The state is now held
+in `MipsInterpreter` members across calls;
+`single_step_preserves_branch_target` covers the regression.
+
+### Scope finding
+
+`SLUS_007.07` is a 79 KB bootstrap loader, not the main game program. The
+addresses discussed in the earlier startup analysis (`0x8002C354`,
+`0x80087444`, the constructor table at `0x800B47C4`) lie outside its image and
+belong to code the loader streams from the disc into RAM. The slice therefore
+validates the translation pipeline, not the game's own startup. The next input
+must be the loaded RAM image: either a RAM-dump capture plus a raw-image mode
+for the generator, or a transition capture inside `r6-native` that runs the
+interpreter until the main program is resident and then switches to generated
+blocks.
+
+Limits of the current native path: it uses `NullPlatformServices` (no BIOS,
+input, GPU or disc), and `Memory` has no MMIO bus, so a translated hardware
+register access stops with a clear fault. Those seams are the next native
+service work, not something the interpreter should mask.

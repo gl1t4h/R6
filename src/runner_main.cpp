@@ -46,6 +46,36 @@ constexpr std::uint32_t kDefaultStack = 0x801FFFF0u;
 // before the guest's startup code reads it, as the windowed player does.
 constexpr std::uint32_t kCrStackGlobal = 0x800B3E70u;
 
+void put_le32(std::vector<std::uint8_t>& bytes, std::size_t offset,
+              std::uint32_t value) {
+    bytes[offset] = static_cast<std::uint8_t>(value);
+    bytes[offset + 1] = static_cast<std::uint8_t>(value >> 8);
+    bytes[offset + 2] = static_cast<std::uint8_t>(value >> 16);
+    bytes[offset + 3] = static_cast<std::uint8_t>(value >> 24);
+}
+
+// Writes the executable back out in the PS-X EXE format the local translation
+// generator consumes. The file is derived from the user's own disc and stays
+// outside the repository.
+bool write_exe(const std::filesystem::path& path, const ExeImage& image) {
+    std::vector<std::uint8_t> header(0x800, 0);
+    std::memcpy(header.data(), "PS-X EXE", 8);
+    put_le32(header, 0x10, image.entry);
+    put_le32(header, 0x14, image.gp);
+    put_le32(header, 0x18, image.load_address);
+    put_le32(header, 0x1C, static_cast<std::uint32_t>(image.payload.size()));
+    put_le32(header, 0x30, image.stack_base);
+    put_le32(header, 0x34, image.stack_size);
+
+    std::ofstream out(path, std::ios::binary);
+    if (!out) return false;
+    out.write(reinterpret_cast<const char*>(header.data()),
+              static_cast<std::streamsize>(header.size()));
+    out.write(reinterpret_cast<const char*>(image.payload.data()),
+              static_cast<std::streamsize>(image.payload.size()));
+    return static_cast<bool>(out);
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -53,6 +83,7 @@ int main(int argc, char** argv) {
     std::uint64_t steps = 5000000;
     std::filesystem::path frame_path;
     std::uint32_t entry_override = 0;
+    std::filesystem::path extract_exe_path;
     bool deliver_vblank = false;
     std::vector<std::pair<std::uint32_t, std::uint32_t>> pokes;
     std::vector<std::uint32_t> peeks;
@@ -82,6 +113,8 @@ int main(int argc, char** argv) {
         } else if (argument == "--entry" && index + 1 < argc) {
             entry_override = static_cast<std::uint32_t>(
                 std::stoul(argv[++index], nullptr, 0));
+        } else if (argument == "--extract-exe" && index + 1 < argc) {
+            extract_exe_path = argv[++index];
         } else if (argument == "--vblank") {
             deliver_vblank = true;
         } else if (argument == "--trace-reg" && index + 1 < argc) {
@@ -160,7 +193,7 @@ int main(int argc, char** argv) {
 
     if (input.empty()) {
         std::cerr << "usage: r6-run <game.cue|game.bin|game.chd> [--steps N]"
-                     " [--entry 0xADDR] [--poke 0xADDR=0xVALUE] [--vblank]"
+                     " [--entry 0xADDR] [--extract-exe path] [--poke 0xADDR=0xVALUE] [--vblank]"
                      " [--dump-frame frame.ppm] [--dump-range 0xADDR:COUNT]"
                      " [--chd-info]\n"
                   << "Runs your own local copy. No game data is copied or"
@@ -238,6 +271,17 @@ int main(int argc, char** argv) {
     if (!parse_exe(read_file(services, *executable), image)) {
         std::cerr << "r6-run: " << exe_name << " has no valid PS-X EXE header\n";
         return 1;
+    }
+
+    if (!extract_exe_path.empty()) {
+        if (!write_exe(extract_exe_path, image)) {
+            std::cerr << "r6-run: could not write " << extract_exe_path << "\n";
+            return 1;
+        }
+        std::cout << "Wrote " << extract_exe_path << " (entry 0x" << std::hex
+                  << image.entry << std::dec << ", " << image.payload.size()
+                  << " bytes)\n";
+        return 0;
     }
 
     for (std::size_t index = 0; index < image.payload.size(); ++index) {

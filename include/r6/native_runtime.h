@@ -1,11 +1,11 @@
 #pragma once
 
 #include <cstdint>
+#include <cstdio>
+#include <stdexcept>
 
 #include "r6/cpu_state.h"
-#include "r6/hardware_map.h"
 #include "r6/memory.h"
-#include "r6/platform_services.h"
 
 namespace r6 {
 
@@ -14,9 +14,14 @@ namespace r6 {
     std::uint32_t address,
     std::uint32_t instruction) {
     (void)state;
-    (void)address;
-    (void)instruction;
-    throw "R6 generated instruction is not implemented yet";
+    char message[128];
+    std::snprintf(
+        message,
+        sizeof(message),
+        "generated instruction not implemented at 0x%08X: 0x%08X",
+        address,
+        instruction);
+    throw std::runtime_error(message);
 }
 
 }  // namespace r6

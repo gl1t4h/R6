@@ -268,6 +268,10 @@ private:
     std::uint64_t vblank_next_{0};
     std::uint64_t vblank_polls_{0};
     bool vblank_enabled_{false};
+    // Pending branch-delay state, kept across run() calls so the reference
+    // interpreter can be single-stepped for differential checks.
+    bool in_delay_slot_{false};
+    std::uint32_t delay_target_{0};
     bool in_interrupt_{false};
     std::uint64_t interrupt_steps_{0};
     // Long enough for the CD streaming dispatcher, short enough to catch a

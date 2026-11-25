@@ -52,6 +52,17 @@ public:
         write16(address + 2, static_cast<std::uint16_t>(value >> 16));
     }
 
+    // Raw copy support for the differential harness: checkpoints compare all
+    // of RAM without routing through the hardware map.
+    std::vector<std::uint8_t> snapshot() const { return bytes_; }
+
+    void restore(const std::vector<std::uint8_t>& bytes) {
+        if (bytes.size() != bytes_.size()) {
+            throw std::invalid_argument("R6 memory snapshot size mismatch");
+        }
+        bytes_ = bytes;
+    }
+
 private:
     std::size_t translate(std::uint32_t address) const noexcept {
         if (translate_kseg_ && address >= 0x80000000u) {
