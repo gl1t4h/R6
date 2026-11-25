@@ -352,9 +352,39 @@ void cdrom_command_acknowledges_then_completes() {
     ram.write32(0x1002Cu, 0x91040001u);  // lbu a0, 1(t0) -> response byte
 
     interpreter.run(12);
-    R6_CHECK(cpu.gpr[2] == 3);  // command acknowledged
-    R6_CHECK(cpu.gpr[3] == 2);  // completion reported after the ack
-    R6_CHECK(cpu.gpr[4] == 2);  // the response starts with the drive status
+    R6_CHECK(cpu.gpr[2] == 0x04);  // INT3 flag bit, not the literal 3
+    R6_CHECK(cpu.gpr[3] == 0x02);  // completion reported after the ack
+    R6_CHECK(cpu.gpr[4] == 2);     // response starts with the drive status
+}
+
+// The controller drives I_STAT bit 2 only while a pending flag is enabled in
+// its own interrupt mask, and a bank-0 +3 request-register write must not
+// disturb that mask: libcd sets BFRD there just before it drains a sector.
+void cdrom_interrupt_line_honours_the_enable_mask() {
+    Memory ram(2u * 1024u * 1024u);
+    TestServices services;
+    MipsInterpreter interpreter(ram, services);
+    auto& hardware = interpreter.hardware();
+
+    hardware.write_cdrom(0x1F801800u, 0);     // bank 0
+    hardware.write_cdrom(0x1F801801u, 0x01);  // GetStat: INT3 pending
+    R6_CHECK((hardware.interrupt_status() & 0x04u) != 0);
+
+    hardware.write_cdrom(0x1F801800u, 1);     // bank 1
+    hardware.write_cdrom(0x1F801802u, 0x00);  // mask every CD interrupt
+    R6_CHECK((hardware.interrupt_status() & 0x04u) == 0);
+
+    hardware.write_cdrom(0x1F801800u, 3);     // bank 3 mirrors +2
+    hardware.write_cdrom(0x1F801802u, 0x04);  // enable INT3 only
+    R6_CHECK((hardware.interrupt_status() & 0x04u) != 0);
+
+    hardware.write_cdrom(0x1F801800u, 0);     // bank 0 +3: request register
+    hardware.write_cdrom(0x1F801803u, 0x80);  // BFRD, not the mask
+    R6_CHECK((hardware.interrupt_status() & 0x04u) != 0);
+
+    hardware.write_cdrom(0x1F801800u, 1);     // bank 1: acknowledge INT3
+    hardware.write_cdrom(0x1F801803u, 0x07);
+    R6_CHECK((hardware.interrupt_status() & 0x04u) == 0);
 }
 
 // Raises bit 0 (vblank) with every source unmasked, so an interrupt is
@@ -538,6 +568,7 @@ void run_mips_interpreter_tests() {
     timer_clock_sources_match_the_hardware();
     dma2_linked_list_reaches_the_gpu();
     cdrom_command_acknowledges_then_completes();
+    cdrom_interrupt_line_honours_the_enable_mask();
     interrupt_takes_the_exception_vector();
     interrupt_handler_returns_through_rfe();
     interrupt_without_a_vector_stays_pending();

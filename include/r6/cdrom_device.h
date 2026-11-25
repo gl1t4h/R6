@@ -63,7 +63,8 @@ public:
                 if (index_ == 0) execute_command(value);
                 return;
             case 2:
-                if (index_ == 1) {
+                // Banks 1 and 3 redirect +2 to the interrupt enable register.
+                if ((index_ & 1u) != 0) {
                     interrupt_mask_ = value & 0x1Fu;
                     return;
                 }
@@ -75,7 +76,11 @@ public:
                 if ((index_ & 1u) != 0) {
                     acknowledge(static_cast<std::uint32_t>(value));
                 } else {
-                    interrupt_mask_ = value & 0x1Fu;
+                    // Bank 0 +3 is the request register (BFRD and friends),
+                    // not the interrupt mask. Keeping a request-register
+                    // write out of the mask stops a sector DMA from
+                    // disabling the controller's interrupt line.
+                    request_register_ = value;
                 }
                 return;
         }
@@ -116,16 +121,23 @@ public:
     std::uint32_t sectors_read() const { return sectors_read_; }
     std::uint8_t status_byte() const { return status_; }
     std::uint32_t interrupt() const { return interrupt_; }
+    // The controller drives its interrupt line only while a pending flag is
+    // also enabled in its own mask register, as on hardware.
+    bool interrupt_asserted() const {
+        return (interrupt_ & interrupt_mask_) != 0;
+    }
 
 private:
     static constexpr std::uint8_t kMotorOn = 0x02;
     // A command always answers in two steps: INT3 acknowledges it, then the
     // completion interrupt carries the final status, or INT1 starts the sector
-    // stream. Sony's driver keys its state machine off these exact codes.
-    static constexpr std::uint32_t kIntAcknowledge = 3;
-    static constexpr std::uint32_t kIntComplete = 2;
-    static constexpr std::uint32_t kIntDataReady = 1;
-    static constexpr std::uint32_t kIntDataEnd = 4;
+    // stream. The flag register is a bit per interrupt, so INT3 is 0x04, not
+    // the literal 3; returning the code made a guest see INT1+INT2 and
+    // dispatch the wrong callback.
+    static constexpr std::uint32_t kIntAcknowledge = 0x04;  // INT3
+    static constexpr std::uint32_t kIntComplete = 0x02;     // INT2
+    static constexpr std::uint32_t kIntDataReady = 0x01;    // INT1
+    static constexpr std::uint32_t kIntDataEnd = 0x08;      // INT4
 
     std::uint8_t status() const {
         std::uint32_t value = index_ & 3u;
@@ -217,20 +229,21 @@ private:
     }
 
     void acknowledge(std::uint32_t value) {
-        note("ack " + std::to_string(value & 0x07u) + " int=" +
+        const auto acked = value & 0x1Fu;
+        note("ack " + std::to_string(acked) + " int=" +
              std::to_string(interrupt_));
-        if ((value & 0x07u) == 0) return;
+        if (acked == 0) return;
         const auto previous = interrupt_;
         if (previous == 0) return;
-        if (previous == kIntAcknowledge && complete_pending_) {
+        // Acknowledging clears only the flagged bits: the response FIFO keeps
+        // its bytes until the guest reads them out. Libraries acknowledge
+        // first and then collect the response, so clearing it here would
+        // leave them with an empty status byte.
+        interrupt_ &= ~acked;
+        if ((previous & kIntAcknowledge) != 0 &&
+            (acked & kIntAcknowledge) != 0 && complete_pending_ != 0) {
             interrupt_ = complete_pending_;
             complete_pending_ = 0;
-        } else {
-            // Acknowledging clears the interrupt flag only: the response FIFO
-            // keeps its bytes until the guest reads them out. Libraries
-            // acknowledge first and then collect the response, so clearing it
-            // here leaves them with an empty status byte.
-            interrupt_ = 0;
         }
 
         // The drive only presents the next sector after the guest acknowledges
@@ -470,6 +483,7 @@ private:
     std::uint64_t event_counter_{0};
     std::uint32_t interrupt_{0};
     std::uint8_t interrupt_mask_{0x1F};
+    std::uint8_t request_register_{0};
     std::uint32_t complete_pending_{0};
     std::vector<std::uint8_t> parameters_;
     std::vector<std::uint8_t> response_;

@@ -65,11 +65,12 @@ public:
         return value;
     }
 
-    // The disc controller asserts its interrupt line whenever it has an
-    // interrupt flag pending, whether that flag was raised by a command or by
-    // the data FIFO running dry.
+    // The disc controller asserts its interrupt line only while a pending
+    // flag is also enabled in its own mask register, whether that flag was
+    // raised by a command or by the data FIFO running dry.
     void refresh_cdrom_interrupt() {
-        const bool pending = cdrom_.interrupt() != 0;
+        const bool pending =
+            cdrom_interrupt_enabled_ && cdrom_.interrupt_asserted();
         const bool raised = (interrupt_status_ & kInterruptCdrom) != 0;
         if (pending) {
             interrupt_status_ |= kInterruptCdrom;
