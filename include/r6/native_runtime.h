@@ -21,7 +21,17 @@ public:
     NativeBus(Memory& ram, PlatformServices& services)
         : ram_(ram), hardware_(services) {}
 
+    // The differential runner uses this to prove that a translated block
+    // actually reads a specific guest address, not merely that it is present
+    // in the image. A zero address disables the watch.
+    static void set_watch_address(std::uint32_t address) {
+        watch_address_ = address;
+        watch_hits_ = 0;
+    }
+    static std::uint64_t watch_hits() { return watch_hits_; }
+
     std::uint32_t read8(std::uint32_t address) {
+        note_watch(address, "read8");
         const auto physical = address & 0x1FFFFFFFu;
         if (hardware_.is_cdrom(physical)) {
             return hardware_.read_cdrom(physical);
@@ -38,6 +48,7 @@ public:
     }
 
     std::uint32_t read16(std::uint32_t address) {
+        note_watch(address, "read16");
         const auto physical = address & 0x1FFFFFFFu;
         if (hardware_.is_cdrom(physical)) {
             return hardware_.read_cdrom(physical) |
@@ -64,6 +75,7 @@ public:
     }
 
     std::uint32_t read32(std::uint32_t address) {
+        note_watch(address, "read32");
         const auto physical = address & 0x1FFFFFFFu;
         if (hardware_.is_cdrom(physical)) {
             std::uint32_t result = 0;
@@ -95,6 +107,7 @@ public:
     }
 
     void write8(std::uint32_t address, std::uint32_t value) {
+        note_watch(address, "write8");
         const auto physical = address & 0x1FFFFFFFu;
         if (hardware_.is_cdrom(physical)) {
             hardware_.write_cdrom(physical,
@@ -113,6 +126,7 @@ public:
     }
 
     void write16(std::uint32_t address, std::uint32_t value) {
+        note_watch(address, "write16");
         const auto physical = address & 0x1FFFFFFFu;
         if (hardware_.is_cdrom(physical)) {
             hardware_.write_cdrom(physical,
@@ -166,6 +180,7 @@ public:
     }
 
     void write32(std::uint32_t address, std::uint32_t value) {
+        note_watch(address, "write32");
         const auto physical = address & 0x1FFFFFFFu;
         if (hardware_.is_cdrom(physical)) {
             for (std::uint32_t index = 0; index < 4; ++index) {
@@ -196,6 +211,21 @@ public:
     }
 
 private:
+    static void note_watch(std::uint32_t address, const char* kind) {
+        if (watch_address_ == 0) return;
+        const auto physical = address & 0x1FFFFFFFu;
+        const auto watched = watch_address_ & 0x1FFFFFFFu;
+        if (physical != watched) return;
+        ++watch_hits_;
+        if (watch_hits_ <= 16) {
+            std::fprintf(stderr, "watch %s 0x%08X (hit %llu)\n", kind, address,
+                         static_cast<unsigned long long>(watch_hits_));
+        }
+    }
+
+    inline static std::uint32_t watch_address_ = 0;
+    inline static std::uint64_t watch_hits_ = 0;
+
     static constexpr std::uint32_t kRamMask = 0x1FFFFFu;
     static constexpr std::uint32_t kScratchpadBase = 0x1F800000u;
     static constexpr std::uint32_t kScratchpadMask = 0x3FFu;

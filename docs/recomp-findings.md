@@ -246,6 +246,11 @@ re-checked against the corrected image.
 
 ## 2026-11-24 — Corrected startup analysis
 
+Superseded for the 130M loaded image: in that snapshot `0x8008739C` is a branch
+inside the `0x80087360` mode-dispatch function, and `0x8002AB60` is its mode-3
+handler, not a constructor table. The analysis below describes an earlier
+image/patch, not the resident code exercised by the loaded slice.
+
 The `0x8008739C` entry is a self-contained C runtime startup, not the middle of
 an unrelated function:
 
@@ -570,12 +575,13 @@ gave the actual transition:
   `0x800B5508` and the 0x300-byte table at `0x800B2780`, then initializes each
   record through `0x8002E730`/`0x8002E6E4`.
 - The function table at `0x80024B6C` points at resident functions starting at
-  `0x8002EC8C`. The table at `0x8002AB60` contains `0x80087448`, the function
-  the earlier notes called the constructor runner; it is reached through a
-  pointer, not a direct `jal`.
-- The 32 BIOS trampolines in the resident image are the `addiu $t2,0xB0;
-  jr $t2; addiu $t1,imm` pattern around `0x80091AFC`–`0x800A23DC`. They are
-  indirect targets, so the generator needs each as `--extra-entry`.
+  `0x8002EC8C`. The table at `0x8002AB54` is a six-entry mode dispatcher;
+  `0x8002AB60` is entry 3 and points at `0x80087448`. Function `0x80087360`
+  dispatches on the global at `0x800B9FD0`; this is not a constructor table.
+- The 32 BIOS trampolines in the resident image use the `addiu $t2,
+  0xA0/0xB0/0xC0; jr $t2; addiu $t1,imm` pattern around
+  `0x80091AFC`–`0x800A23DC` (22 `B0`, 8 `A0`, 2 `C0`). They are indirect
+  targets, so the generator needs each as `--extra-entry`.
 
 ### Native runtime additions
 
@@ -602,18 +608,28 @@ gave the actual transition:
 
 The generator was run with `--snapshot`, `--entry 0x80032EE0`,
 `--max-functions 512`, the 32 BIOS trampolines as extra entries, and the
-resident C-library entry `0x8001228C`. It emitted 3,316 blocks. `r6-native`
-with `--blocks 50000` reported:
+resident C-library entry `0x8001228C`. It emitted 3,316 blocks. A background
+differential replay with `--blocks 200000 --verbose` reported:
 
 | Item | Result |
 | --- | --- |
-| Blocks executed and matched | 50,000 |
+| Blocks executed and matched | 200,000 |
 | Mismatches | none (GPRs, HI/LO, COP0, 2 MiB RAM) |
-| Stop | block budget at `0x80012A44` |
+| Stop | block budget at `0x80013130` |
+| Dispatcher hits | none at `0x80087360`, `0x800873A4` or `0x80087448` |
 
-This verifies the resident startup and the functions reached during the first
-50,000 blocks; it does not claim that the full constructor list or the frame
-loop has run. Hardware, BIOS and COP0 state is reset at each block boundary,
-so a continuous native run still needs persistent device state. The snapshot
+The 200,000 blocks were spent in the loader/library waits, not in the
+dispatcher. The real call site is the `jr` at `0x800873A4`; `0x8002AB60` is
+read by the `lw` at `0x800873B4`. Adding `0x80087360`, its six table targets
+and the seven targets of the nested `0x8002AB1C` table produced a 4,361-block
+translation. With `[0x800B9FD0]=3`, a targeted checkpoint ran
+`0x80087360 -> 0x800873A4 -> 0x80087448`, matched 10 blocks, and
+`--watch-address 0x8002AB60` reported one read. The 4,361-block translation
+also matched 5,000 startup blocks.
+
+This is a mode dispatcher/handler, not a constructor runner; the earlier
+label was wrong for this image. The startup slice still does not reach the
+frame loop. Hardware, BIOS and COP0 state is reset at each block boundary, so
+a continuous native run still needs persistent device state. The snapshot
 also omits COP0 and hardware registers; only RAM and the integer CPU state are
 captured.

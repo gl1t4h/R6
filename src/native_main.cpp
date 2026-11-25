@@ -242,7 +242,8 @@ int run_native(
     std::uint64_t max_blocks,
     std::uint64_t oracle_steps,
     bool compare,
-    bool verbose) {
+    bool verbose,
+    std::uint32_t watch_address) {
 #ifdef R6_HAS_GENERATED_TRANSLATION
     Boot boot;
     const bool snapshot_mode = !snapshot_path.empty();
@@ -268,6 +269,7 @@ int run_native(
 
     r6::FunctionDispatcher dispatcher;
     r6_generated::register_functions(dispatcher);
+    r6::NativeBus::set_watch_address(watch_address);
 
     const auto start_pc =
         entry_override != 0 ? entry_override : boot.initial.pc;
@@ -283,6 +285,9 @@ int run_native(
               << hex32(boot.initial.gpr[28]) << ", SP "
               << hex32(boot.initial.gpr[29]) << "\n"
               << "Translated blocks: " << r6_generated::block_count() << "\n";
+    if (watch_address != 0) {
+        std::cout << "Watch address: " << hex32(watch_address) << "\n";
+    }
     if (!dispatcher.contains(start_pc)) {
         std::cout << "Native stop: no translated block at entry "
                   << hex32(start_pc) << "\n";
@@ -409,6 +414,9 @@ int run_native(
                   << (failed ? " before the first mismatch" : "")
                   << " (registers, HI/LO, COP0, 2 MiB RAM)\n";
     }
+    if (watch_address != 0) {
+        std::cout << "Watch hits: " << r6::NativeBus::watch_hits() << "\n";
+    }
     return failed ? 1 : 0;
 #else
     (void)input;
@@ -418,6 +426,7 @@ int run_native(
     (void)oracle_steps;
     (void)compare;
     (void)verbose;
+    (void)watch_address;
     std::cerr << "r6-native: no generated translation unit was configured.\n"
               << "Generate one outside the repository, then configure with:\n"
               << "  -DR6_GENERATED_TRANSLATION=<path to generated .cpp>\n";
@@ -435,6 +444,7 @@ int main(int argc, char** argv) {
     std::uint64_t oracle_steps = 100000;
     bool compare = true;
     bool verbose = false;
+    std::uint32_t watch_address = 0;
 
     for (int index = 1; index < argc; ++index) {
         const std::string argument = argv[index];
@@ -451,6 +461,9 @@ int main(int argc, char** argv) {
             compare = false;
         } else if (argument == "--verbose") {
             verbose = true;
+        } else if (argument == "--watch-address" && index + 1 < argc) {
+            watch_address = static_cast<std::uint32_t>(
+                std::stoul(argv[++index], nullptr, 0));
         } else if (input.empty()) {
             input = argument;
         }
@@ -459,7 +472,8 @@ int main(int argc, char** argv) {
     if (input.empty() && snapshot_path.empty()) {
         std::cerr
             << "usage: r6-native <game.cue|game.bin|game.chd> [--entry 0xADDR]"
-               " [--blocks N] [--oracle-steps N] [--no-compare] [--verbose]\n"
+               " [--blocks N] [--oracle-steps N] [--no-compare] [--verbose]"
+               " [--watch-address 0xADDR]\n"
                "       r6-native --snapshot RAM.snap [--entry 0xADDR]"
                " [--blocks N]\n"
             << "Runs the locally generated native translation and compares it"
@@ -467,5 +481,5 @@ int main(int argc, char** argv) {
         return 2;
     }
     return run_native(input, snapshot_path, entry_override, blocks,
-                      oracle_steps, compare, verbose);
+                      oracle_steps, compare, verbose, watch_address);
 }
