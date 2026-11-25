@@ -149,14 +149,14 @@ void event_slots() {
 }
 
 // B(35h) is FileWrite(fd,src,length), the same function as A(03h); games
-// reach it through the kernel table while printing boot-time messages.
+// reach it through either kernel table while printing boot-time messages.
 void file_write_reaches_stdout() {
     BiosServices bios;
     Memory memory(0x2000);
     CpuState cpu;
 
     write_string(memory, 0x300, "boot log\n");
-    cpu.gpr[9] = 0x35;  // FileWrite(fd, src, length)
+    cpu.gpr[9] = 0x35;  // B(35h) FileWrite(fd, src, length)
     cpu.gpr[4] = 1;     // stdout
     cpu.gpr[5] = 0x300;
     cpu.gpr[6] = 8;
@@ -164,10 +164,27 @@ void file_write_reaches_stdout() {
     R6_CHECK(cpu.gpr[2] == 8);
     R6_CHECK(bios.tty_output() == "boot log");
 
-    cpu.gpr[4] = 2;  // no file system behind other descriptors
+    write_string(memory, 0x320, "A-table\n");
+    cpu.gpr[9] = 0x03;  // A(03h) is the same function
+    cpu.gpr[4] = 1;
+    cpu.gpr[5] = 0x320;
+    cpu.gpr[6] = 8;
+    bios.dispatch(BiosTable::a0, cpu, memory);
+    R6_CHECK(cpu.gpr[2] == 8);
+    R6_CHECK(bios.tty_output() == "boot logA-table\n");
+
+    cpu.gpr[9] = 0x35;  // no file system behind other descriptors
+    cpu.gpr[4] = 2;
     bios.dispatch(BiosTable::b0, cpu, memory);
     R6_CHECK(cpu.gpr[2] == 0xFFFFFFFFu);
-    R6_CHECK(bios.tty_output() == "boot log");
+
+    cpu.gpr[9] = 0x03;
+    bios.dispatch(BiosTable::a0, cpu, memory);
+    R6_CHECK(cpu.gpr[2] == 0xFFFFFFFFu);
+    R6_CHECK(bios.tty_output() == "boot logA-table\n");
+
+    R6_CHECK(bios.call_count(BiosTable::b0, 0x35) == 2);
+    R6_CHECK(bios.call_count(BiosTable::a0, 0x03) == 2);
     R6_CHECK(bios.unhandled_call_count() == 0);
 }
 

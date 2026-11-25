@@ -215,6 +215,8 @@ std::uint32_t BiosServices::dispatch(BiosTable table, CpuState& cpu,
 std::uint32_t BiosServices::handle_a0(std::uint32_t vector, CpuState& cpu,
                                       Memory& memory) {
     switch (vector) {
+        case 0x03:  // FileWrite(fd, src, length), same as B(35h).
+            return file_write(cpu.gpr[4], cpu.gpr[5], cpu.gpr[6], memory);
         case 0x25: {  // toupper
             const auto character = cpu.gpr[4] & 0xFFu;
             return character >= 'a' && character <= 'z' ? character - 0x20u
