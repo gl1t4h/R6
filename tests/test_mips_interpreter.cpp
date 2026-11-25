@@ -387,6 +387,30 @@ void cdrom_interrupt_line_honours_the_enable_mask() {
     R6_CHECK((hardware.interrupt_status() & 0x04u) == 0);
 }
 
+// GPUSTAT bit 31 is the drawing field: zero through vertical blank and the
+// field polarity afterwards. Bit 22 is colour depth, so it must not follow
+// the field.
+void gpu_status_reports_field_and_vblank() {
+    Memory ram(2u * 1024u * 1024u);
+    TestServices services;
+    MipsInterpreter interpreter(ram, services);
+    auto& hardware = interpreter.hardware();
+    constexpr std::uint32_t kStatus = 0x1F801814u;
+
+    R6_CHECK((hardware.read32(kStatus) & 0x80400000u) == 0);
+
+    hardware.toggle_gpu_field();  // odd field starts in vertical blank
+    R6_CHECK((hardware.read32(kStatus) & 0x80000000u) == 0);
+    R6_CHECK((hardware.read32(kStatus) & 0x00400000u) == 0);
+
+    hardware.advance_cycles(2146u * 20u);  // vblank ends
+    R6_CHECK((hardware.read32(kStatus) & 0x80000000u) != 0);
+    R6_CHECK((hardware.read32(kStatus) & 0x00400000u) == 0);
+
+    hardware.toggle_gpu_field();  // even field, vblank again
+    R6_CHECK((hardware.read32(kStatus) & 0x80000000u) == 0);
+}
+
 // Raises bit 0 (vblank) with every source unmasked, so an interrupt is
 // pending as soon as the interpreter polls.
 void raise_pending_interrupt(MipsInterpreter& interpreter) {
@@ -566,6 +590,7 @@ void run_mips_interpreter_tests() {
     dma_start_reads_back_idle();
     timer_mode_reads_back();
     timer_clock_sources_match_the_hardware();
+    gpu_status_reports_field_and_vblank();
     dma2_linked_list_reaches_the_gpu();
     cdrom_command_acknowledges_then_completes();
     cdrom_interrupt_line_honours_the_enable_mask();

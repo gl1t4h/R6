@@ -104,12 +104,14 @@ public:
         if (address == hardware::kInterruptStatus) return interrupt_status_;
         if (address == hardware::kInterruptMask) return interrupt_mask_;
         if (address == hardware::kGpuStatus) {
-            // GPUSTAT bit 22 is the interlace field and bit 31 the even/odd
-            // line. Sony's VSync() spins until bit 31 changes while bit 22 is
-            // set, so a model that never flips them hangs the guest inside its
-            // first timer wait.
+            // GPUSTAT bit 31 (ODE) is the drawing field: it toggles per field
+            // and reads zero throughout vertical blank. Bit 22 is the display
+            // colour depth set by GP1(08h), not an interlace flag, so it is
+            // left to the GPU model instead of following the field.
             std::uint32_t value = services_.read_gpu_status();
-            if (gpu_field_) value |= 0x80400000u;
+            if (gpu_field_ && gpu_vblank_cycles_ == 0) {
+                value |= 0x80000000u;
+            }
             return value;
         }
         if (address == hardware::kGpuCommand) return services_.read_gpu_data();
@@ -273,10 +275,21 @@ public:
     // Each executed instruction advances the root counters, so a run is
     // reproducible: a host-clock timer made CD timeouts depend on how fast the
     // interpreter happened to be running.
-    void advance_cycles(std::uint64_t count) { cycles_ += count; }
+    void advance_cycles(std::uint64_t count) {
+        cycles_ += count;
+        if (gpu_vblank_cycles_ > count) {
+            gpu_vblank_cycles_ -= count;
+        } else {
+            gpu_vblank_cycles_ = 0;
+        }
+    }
 
-    // Each field flips the interlace and even/odd-line bits in GPUSTAT.
-    void toggle_gpu_field() { gpu_field_ = !gpu_field_; }
+    // A field starts with vertical blank, where GPUSTAT ODE reads zero, then
+    // shows its own even/odd polarity until the next field.
+    void toggle_gpu_field() {
+        gpu_field_ = !gpu_field_;
+        gpu_vblank_cycles_ = kGpuVblankCycles;
+    }
     // The kernel acknowledges a serviced interrupt by clearing its I_STAT bit.
     // Called from the interpreter's periodic poll: delivers the pad transfer
     // interrupt once the modelled shift-out delay has elapsed.
@@ -318,6 +331,8 @@ private:
     static constexpr std::uint32_t kDmaTrigger = 1u << 28;
     // 33.8688 MHz / 60 fields / 263 scanlines.
     static constexpr std::uint64_t kHBlankCycles = 2146;
+    // Vertical retrace and the upper/lower borders, about 20 scanlines.
+    static constexpr std::uint64_t kGpuVblankCycles = kHBlankCycles * 20;
 
     struct Timer {
         std::uint32_t mode{0};
@@ -388,6 +403,7 @@ private:
     std::uint32_t interrupt_status_{0};
     bool cdrom_interrupt_enabled_{false};
     bool gpu_field_{false};
+    std::uint64_t gpu_vblank_cycles_{0};
     std::uint32_t interrupt_mask_{0};
     std::vector<std::string> interrupt_log_;
 };
