@@ -82,16 +82,18 @@ None.
   reader
   was fixed to parse it correctly and to reject incoherent maps. The ISO9660
   volume is discovered and the PS-X EXE identified (`SLUS_007.07`, 79,872
-  bytes at LBA 24, entry `0x80012f7c`). A 40M-instruction run executes early
-  init and the guest TTY prints `CD_init:addr=80022998`. That run delivered
-  70 vblanks but no interrupts, because the guest installs no handler at
-  `0x80000080`; the interpreter now falls back to the guest's `HookEntryInt`
-  buffer, and the on-disc run with that change has not been reconfirmed yet.
-  No guest CD sectors have been read and no GPU primitives submitted.
-- **Next step:** Rerun on disc with `--vblank` to confirm the `HookEntryInt`
-  fallback raises `interrupts delivered`, then follow CD init to its first
-  sector reads and capture when the first draw-environment and polygon
-  packets appear.
+  bytes at LBA 24, entry `0x80012f7c`). A 40M-instruction on-disc run now
+  delivers 71 interrupts (70 vertical blanks and one CD interrupt), with no
+  pending vectors and no handler overruns, and the guest TTY prints
+  `CD_init:addr=80022998`. The CD trace shows the driver's first command is
+  `GetStat` (01h): the controller raises INT3, the guest reads the flag as
+  `0x04`, drains the eight-byte reply, acknowledges with `07h` and enables
+  interrupts 1-3. No guest CD sectors have been read and no GPU primitives
+  submitted; the run ends in a TIM1/GPUSTAT wait loop at the step budget.
+- **Next step:** Rerun with a larger step budget (120M-200M instructions) to
+  see whether the loop is a timed init delay, and use `--dump-range` on the
+  loop PCs if it does not move; then follow CD init to its first sector
+  reads and capture the first draw-environment and polygon packets.
 - **Playable native build:** No
 - **Distributed game assets:** No
 
@@ -104,17 +106,18 @@ None.
 - **Completed:** Opens the retail CHD version 5 image directly (8,361 hunks,
   66,888 sectors, `cdlz`/`cdzl` codecs, Huffman-compressed map). The ISO9660
   volume is discovered and the PS-X EXE identified (`SLUS_014.67`, 280,576
-  bytes at LBA 28, entry `0x80010d54`). A 40M-instruction run executes early
-  init: 70 vblanks pass and four `B(0x35)` calls write to descriptor 1
-  (stdout); the kernel shim now services those `FileWrite` calls as TTY text.
-  That run read no guest CD sectors, submitted no GPU primitives and
-  delivered no interrupts, because the guest installs no handler at
-  `0x80000080`; the interpreter now falls back to the guest's `HookEntryInt`
-  buffer, and the on-disc run with that change has not been reconfirmed yet.
-- **Next step:** Rerun on disc with `--vblank` to confirm the `HookEntryInt`
-  fallback raises `interrupts delivered`, then follow CD init to its first
-  sector reads and capture when the first draw-environment and polygon
-  packets appear.
+  bytes at LBA 28, entry `0x80010d54`). A 40M-instruction on-disc run now
+  delivers 71 interrupts (70 vertical blanks and one CD interrupt) with no
+  pending vectors; the guest TTY prints `ResetGraph:jtb=80051bc0` and
+  `CD_init:addr=80052100` through four `B(0x35)` writes. The CD trace shows
+  the same correct `GetStat` handshake as Silent Hill: INT3, flag `0x04`,
+  eight response bytes, ack `07h`, interrupt enable `07h`. No guest CD
+  sectors have been read and no GPU primitives submitted; the run ends in a
+  TIM1/GPUSTAT wait loop at the step budget.
+- **Next step:** Rerun with a larger step budget (120M-200M instructions) to
+  see whether the loop is a timed init delay, and use `--dump-range` on the
+  loop PCs if it does not move; then follow CD init to its first sector
+  reads and capture the first draw-environment and polygon packets.
 - **Playable native build:** No
 - **Distributed game assets:** No
 
