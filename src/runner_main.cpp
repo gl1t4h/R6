@@ -13,6 +13,7 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <sstream>
 #include <string>
 #include <utility>
 #include <vector>
@@ -66,6 +67,8 @@ int main(int argc, char** argv) {
     bool dump_stream = false;
     // Guest ranges to print after the run, for reading a hot loop's code.
     std::vector<std::pair<std::uint32_t, std::uint32_t>> dump_ranges;
+    // Addresses holding a code pointer, dumped after the run: ADDR:COUNT.
+    std::vector<std::pair<std::uint32_t, std::uint32_t>> dump_pointers;
     bool chd_info = false;
     std::vector<std::uint32_t> watch_writes;
     std::string search_text;
@@ -104,6 +107,19 @@ int main(int argc, char** argv) {
                 return 2;
             }
             dump_ranges.emplace_back(
+                static_cast<std::uint32_t>(
+                    std::stoul(spec.substr(0, split), nullptr, 0)),
+                static_cast<std::uint32_t>(
+                    std::stoul(spec.substr(split + 1), nullptr, 0)));
+        } else if (argument == "--dump-at-pointer" && index + 1 < argc) {
+            // ADDR:COUNT, where ADDR holds the code address to dump.
+            const std::string spec = argv[++index];
+            const auto split = spec.find(':');
+            if (split == std::string::npos) {
+                std::cerr << "r6-run: --dump-at-pointer expects ADDR:COUNT\n";
+                return 2;
+            }
+            dump_pointers.emplace_back(
                 static_cast<std::uint32_t>(
                     std::stoul(spec.substr(0, split), nullptr, 0)),
                 static_cast<std::uint32_t>(
@@ -258,6 +274,9 @@ int main(int argc, char** argv) {
                 case 0x21: name = "lh"; break;
                 case 0x29: name = "sh"; break;
                 case 0x25: name = "lhu"; break;
+                case 0x20: name = "lb"; break;
+                case 0x24: name = "lbu"; break;
+                case 0x28: name = "sb"; break;
                 case 0x09: name = "addiu"; break;
                 case 0x0D: name = "ori"; break;
                 default: break;
@@ -669,6 +688,21 @@ int main(int argc, char** argv) {
         dump_words(0x80064F80u, 16u, "code@64f80");
         for (const auto& range : dump_ranges) {
             dump_words(range.first, range.second, "range");
+        }
+        for (const auto& entry : dump_pointers) {
+            const auto target = ram.read32(entry.first & kRamMask);
+            const auto label = "at*0x" + [&] {
+                std::ostringstream text;
+                text << std::hex << entry.first;
+                return text.str();
+            }();
+            if (target == 0) {
+                std::cout << "Dump " << label << " = 0x0 (no pointer)\n";
+                continue;
+            }
+            std::cout << "Dump " << label << " -> 0x" << std::hex << target
+                      << std::dec << "\n";
+            dump_words(target, entry.second, label.c_str());
         }
     }
 
