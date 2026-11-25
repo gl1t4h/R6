@@ -15,7 +15,7 @@ There is not yet a playable native recompilation.
 
 | Game | Region/version | Status | Progress |
 | --- | --- | --- | --- |
-| Spider-Man | USA PlayStation 1 release | Boots into its own frame loop; draws nothing yet | 98% - loads `SLUS_008.75` and executes it on the native CPU (40M+ instructions), libetc's vblank dispatcher runs and `VSync` ticks, and disc reads now transfer real sectors through DMA3; the loader still reports `CdRead: sector error` and re-inits the CD driver, so the display is never programmed and the frame is black |
+| Spider-Man | USA PlayStation 1 release | Boots into its own frame loop; draws nothing yet | 99% - loads `SLUS_008.75` and executes it on the native CPU (60M+ instructions), libetc's vblank dispatcher runs, and the loader now accepts disc reads: DMA3 transfers reach main RAM and the position check at `0x80089A58` passes, so `CdRead: sector error` is gone; the frame is still black because the HLE interrupt model never returns - 144 of 151 vblank handlers overrun their step budget and spin in guest wait loops |
 
 No games are currently completed.
 

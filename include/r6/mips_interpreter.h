@@ -64,6 +64,7 @@ public:
     void set_trace_reg(std::uint32_t address) { trace_reg_ = address; }
     void set_find_value(std::uint32_t value) { find_value_ = value; }
     const std::vector<std::string>& trace_log() const { return trace_log_; }
+    const std::vector<std::string>& dma3_log() const { return dma3_log_; }
     const std::map<std::uint32_t, std::uint64_t>& hot() const { return hot_; }
     const std::vector<std::pair<std::uint32_t, std::uint64_t>>& watched() const {
         return watched_;
@@ -162,6 +163,7 @@ private:
     std::uint32_t trace_reg_{0};
     std::uint32_t find_value_{0};
     std::vector<std::string> trace_log_;
+    std::vector<std::string> dma3_log_;
     std::vector<std::uint32_t> watch_args_;
     std::vector<std::string> watched_args_log_;
     std::vector<std::uint32_t> cdrom_polls_;

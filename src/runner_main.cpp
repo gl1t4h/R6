@@ -324,6 +324,9 @@ int main(int argc, char** argv) {
         }
         std::cout << std::endl;
     }
+    for (const auto& entry : interpreter.dma3_log()) {
+        std::cout << "dma3 " << entry << std::endl;
+    }
     for (const auto& entry : interpreter.trace_log()) {
         std::cout << entry << std::endl;
     }

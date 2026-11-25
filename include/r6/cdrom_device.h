@@ -58,10 +58,22 @@ public:
     }
 
     // Data pushed to DMA channel 3, in 32-bit words.
-    std::uint32_t read_word() {
+    //
+    // A short transfer collects a command's answer, which the drive reports as
+    // status, track, index and then the position in BCD; callers hand the
+    // buffer straight to a position converter, so the packet starts at the
+    // position. A long transfer is sector data.
+    std::uint32_t read_word(bool position_packet = false) {
         std::uint32_t result = 0;
         for (int shift = 0; shift < 32; shift += 8) {
-            result |= static_cast<std::uint32_t>(pop_data()) << shift;
+            std::uint8_t byte = 0;
+            if (position_packet && response_index_ < response_.size()) {
+                if (response_index_ < 3) response_index_ = 3;
+                byte = response_[response_index_++];
+            } else {
+                byte = pop_data();
+            }
+            result |= static_cast<std::uint32_t>(byte) << shift;
         }
         return result;
     }
@@ -218,11 +230,17 @@ private:
                 load_sector();
                 break;
             case 0x09:  // Pause
-            case 0x08:  // Stop
+            case 0x08: {  // Stop
+                // Stopping a drive that was reading ends the transfer: the
+                // drive answers with INT3 (data end), which is what the read
+                // completion path waits for.
+                const bool was_reading = reading_;
                 reading_ = false;
                 data_end_raised_ = false;
-                begin_command(kIntAcknowledge, kIntComplete);
+                begin_command(kIntAcknowledge,
+                              was_reading ? kIntDataEnd : kIntComplete);
                 break;
+            }
             case 0x0E:  // GetlocL: minute, second, frame in BCD, then mode.
                 begin_command(kIntAcknowledge, kIntComplete);
                 response_.clear();

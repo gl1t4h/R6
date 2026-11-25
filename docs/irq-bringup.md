@@ -199,38 +199,67 @@ transferred, the loader now reports `CdRead: sector error`, then re-runs
 rejection is on sector content/position validation in the game's own wrapper,
 not in the CD controller.
 
-## The sector check itself
+## The sector check, and why it failed
 
-The message comes from one comparison at `0x80089A58`:
+The message came from one comparison:
 
 ```
-0x80089A40  jal 0x80087220        ; convert a CdlPos to an LBA (BCD decode)
-0x80089A50  lw  v1, 0x800B1C5C    ; recorded value
-0x80089A58  beq v0, v1, ok
-0x80089A60  print "CdRead: sector error"
-0x80089A6C  status = -1
+0x80089A38  jal  0x80087084        ; $a0 = $sp+16, $a1 = 3
+0x80089A40  jal  0x80087220        ; position (BCD) -> LBA
+0x80089A44  addiu $a0, $sp, 0x10
+0x80089A50  lw   $v1, 0x800B1C5C   ; expected sector, 16 here
+0x80089A58  beq  $v0, $v1, ok      ; else "CdRead: sector error"
 ```
 
-Two fixes were needed to get the numbers close:
+`0x80087220` is a BCD position converter whose delay slot is
+`addiu $v0, $v0, -0x96`, so it returns `disc_sector - 150`: the two-second
+pregap. `0x800B1C5C` is field `+0x20` of the loader state at `0x800B1C3C` and
+holds the expected *user* sector - 16 for disc sector 166, exactly what
+`Setloc(00:02:16)` addresses. The function returned `-150` because its input,
+`$sp+16`, was all zeros.
 
-- **Commands must answer with eight bytes.** The drive replies with status,
-  track, index and the position in BCD. We sent only the status byte, so
-  libcd's location buffer (`0x800B3B2C`) held zeros and any position it
-  converted was meaningless. It now gets the full eight bytes and reads
-  `00 02 16` for sector 166, which is correct.
-- **The position advances as sectors are read**, which is what the caller
-  expects to verify.
+Three separate defects produced that:
 
-Measured at the comparison after both fixes: `v0 = 0xFFFFFF6A` (-150) versus
-`v1 = 0x00000010` (16). So one side of the check still produces an error code
-rather than a position, which is the single remaining item in the CD path.
+1. **Commands answered with one byte.** The drive replies with status, track,
+   index and the position in BCD. Only the status was sent, so libcd's
+   location buffer (`0x800B3B2C`) held zeros.
+2. **DMA3 stores were dropped.** `dma_address()` returns the masked physical
+   address, and `run_dma3_transfer` handed that straight to `write32`, which
+   expects a virtual address. Every transfer went to `0x000B382C` instead of
+   `0x800B382C` and was discarded, so neither the sector buffer nor the
+   position buffer ever received its data.
+3. **Short transfers read the wrong FIFO.** The 3-word (`BCR = 0x00010003`)
+   transfer carries a command's answer into the caller's buffer and the caller
+   converts it as `mm, ss, ff`. Those bytes are the response from offset 3
+   onwards, not sector data.
+
+With all three fixed the comparison reads `v0 = 0x10` against `v1 = 0x10` and
+passes; `CdRead: sector error` and the retry loop are gone. `Pause` on a
+reading drive now reports INT3 (data end), which is what the completion path
+waits for.
+
+## The blocker left: handlers that never return
+
+The disc path is no longer the obstacle. With reads accepted the guest reaches
+its own frame loop and waits on vertical blank, and the HLE interrupt model
+cannot satisfy it:
+
+- `144` of `151` delivered vblank handlers hit the 50k-step budget.
+- The last handler spins in guest wait loops (`0x800880AC`, earlier
+  `0x8008949C`), a few hundred iterations each time it is entered.
+- Raising the budget to 400k only lowers the vblank rate (75 ticks in 30M
+  instructions) and leaves the run inside libetc's dispatcher, because the
+  handler is not waiting on a step count - it is waiting on hardware events
+  that never arrive while we jump straight into the routine.
+- The game's own `VSync: timeout` messages follow from that.
+
+Injecting a handler by setting the PC and later restoring the context cannot
+model nesting or a handler that blocks, which is why the budget keeps getting
+hit. The fix is to run the guest's real exception path instead: take vector
+`0x80000080`, set EPC/CAUSE/SR, let a handler return through `RFE`, and deliver
+new interrupts only at safe points.
 
 ## Still open
 
-- That `-150` versus `16` comparison. Either the helper at `0x80087220` is not
-  the pure BCD converter it looks like on this path, or the recorded value at
-  `0x800B1C5C` is not an LBA (16 looks like a sector count).
-- Handlers still overrun their 50k-step budget on nearly every interrupt.
-- No display programming at all: `2 primitives (1 fills)`, draw area
-  `0,0 to 0,0`, display off, `0` rasterised pixels, and a `--shot` PPM of
-  320x240x3 is 230,400 bytes of zeroes. The frame is still black.
+- Frame is black: `2 primitives (1 fills)`, display off, draw area `0,0`, and a
+  `--dump-frame` PPM of 320x240x3 is 230,400 bytes of zeroes.

@@ -219,6 +219,15 @@ void MipsInterpreter::write32(std::uint32_t address, std::uint32_t value) {
         if (physical >= kDmaBase && physical < kDmaEnd) {
             ++dma_writes_;
         }
+        if (physical >= hardware::kDma3BaseAddress &&
+            physical <= hardware::kDma3ChannelControl &&
+            dma3_log_.size() < 40) {
+            // Channel 3 register traffic, so a response transfer that the model
+            // does not execute can be seen instead of guessed at.
+            dma3_log_.push_back("dma3 reg 0x" + format_hex(physical) +
+                                " = 0x" + format_hex(value) + " pc=0x" +
+                                format_hex(cpu_.pc));
+        }
         hardware_.write32(physical, value);
         if (physical == hardware::kDma2ChannelControl) {
             const auto start = (value & (1u << 24)) != 0;
@@ -372,11 +381,28 @@ void MipsInterpreter::run_dma3_transfer() {
     constexpr std::uint32_t kDefaultWords = 512;
     constexpr std::uint32_t kMaxWords = 1024;
 
-    auto words = hardware_.dma_counter(3) & 0xFFFFu;
-    if (words == 0 || words > kMaxWords) words = kDefaultWords;
-    const auto address = hardware_.dma_address(3);
+    // Channel 3 runs in request mode: the counter holds the number of blocks in
+    // the high half and the block size in words in the low half.
+    const auto counter = hardware_.dma_counter(3);
+    const auto blocks = counter >> 16;
+    auto words = counter & 0xFFFFu;
+    if (words == 0) words = kDefaultWords;
+    if (blocks > 1) words *= blocks;
+    if (words > kMaxWords) words = kMaxWords;
+    // The counter holds a physical address; the CPU only sees KSEG0, so map it
+    // back before storing. Dropping the segment is why every transfer used to
+    // land outside RAM and vanish.
+    const auto address = 0x80000000u | hardware_.dma_address(3);
+    if (dma3_log_.size() < 40) {
+        dma3_log_.push_back("dma3 run madr=0x" + format_hex(address) +
+                            " bcr=0x" + format_hex(hardware_.dma_counter(3)) +
+                            " words=" + std::to_string(words) + " pc=0x" +
+                            format_hex(cpu_.pc));
+    }
     for (std::uint32_t index = 0; index < words; ++index) {
-        write32(address + index * 4, hardware_.cdrom().read_word());
+        // Short transfers carry a command's answer rather than a sector.
+        write32(address + index * 4,
+                hardware_.cdrom().read_word(words < 64));
     }
     hardware_.refresh_cdrom_interrupt();
 }
