@@ -32,11 +32,15 @@ None.
   304 bytes per sector; `tests/test_inspect_disc.py` covers this with a
   synthetic image. The interpreter now stops on the guest's own `BREAK`
   instead of falling through it, matching PsyQ startup code that ends with
-  `BREAK` after `main` returns.
-- **Next step:** Give the guest a valid stack. The startup computes `$sp` from
-  a `.data` global that holds `0x800000`, producing `0x807FFFF8`, which is
-  outside main RAM; the constructor epilogue then restores a dropped `$ra` and
-  the guest exits at PC `0x0`. After that, GTE geometry, DMA and interrupts.
+  `BREAK` after `main` returns. The runner reports the recent guest PCs, warns
+  when the guest stack leaves RAM, and accepts `--entry` and `--poke` for
+  bring-up. The hardware map models the three root counters, DMA channel
+  control with instant completion, and `I_STAT`/`I_MASK`, which took a run of
+  the USA executable from one kernel call to 49.
+- **Next step:** Vertical-blank interrupts and kernel callback dispatch. With a
+  valid stack the guest now reaches its library initialisation, prints
+  `ResetGraph`/`CD_init` diagnostics and then waits in a loop that only an
+  interrupt handler can release. After that, GTE geometry and DMA2 lists.
 - **Playable native build:** No
 - **Distributed game assets:** No
 

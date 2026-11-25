@@ -130,9 +130,9 @@ void MipsInterpreter::write32(std::uint32_t address, std::uint32_t value) {
     if (physical >= kHardwareBase && physical < kHardwareEnd) {
         ++hardware_writes_[physical & ~3u];
         if (physical >= kDmaBase && physical < kDmaEnd) {
-            // DMA is not executed yet; record it so the gap is visible.
+            // Transfers complete immediately in the hardware map, so a guest
+            // polling the channel control register sees the busy bit clear.
             ++dma_writes_;
-            return;
         }
         hardware_.write32(physical, value);
         return;

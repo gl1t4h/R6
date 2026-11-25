@@ -276,8 +276,52 @@ That zero is a stack-mapping problem, not a game problem. `0x800B3E70` holds
 stack fields are empty (`0x00000000`, and a garbage size), so nothing in the
 image supplies a usable stack.
 
-This is the concrete blocker to resolve next: the startup expects a stack
-above `main` that the retail loader establishes. The runner should either map
-that region explicitly or reject a guest stack pointer outside RAM instead of
-dropping stores silently. Until then the guest cannot get past its own
-constructors, and GTE/DMA/interrupt work cannot show any effect.
+Runs now print a warning when the guest stack pointer leaves main RAM, so this
+class of failure is visible instead of surfacing later as a return to zero.
+
+## 2026-11-24 — Boot progress with a valid stack
+
+`--poke ADDRESS=VALUE` patches one guest word before the run starts, so a
+startup global can be corrected without editing the image. Patching
+`0x800B3E70` to `0x801FFFF0` gives the guest a real stack and changes the run
+completely: the C++ constructors return, `main` continues, and the executable
+reaches its own library initialisation.
+
+Observed with the corrected stack (20,000,000-instruction budget):
+
+- 49 kernel calls instead of one: `A(0x13)`, `A(0x28)`, `A(0x2a)`, `A(0x39)`,
+  `A(0x3f)`, `A(0x44)` (`FlushCache`, four times), `A(0x49)`, `A(0x70)`,
+  `A(0x72)`, plus the `B(0x08)`/`B(0x0c)` event pair eight times each and a
+  dozen more `B` vectors.
+- Guest TTY output from the game's own library:
+  `VSync: timeout`, `ResetGraph:jtb=800b0de0,env=800b0e28` and
+  `CD_init:addr=800b3df4`.
+- Traffic on the GPU status register, GP0 reads, the DMA control block at
+  `0x1F8010E8`/`0x1F8010F0`, DMA2 channel control and the interrupt mask.
+- 28 kernel vectors still unhandled, which is the accurate measure of how much
+  of the kernel this title expects.
+
+The run then settles in a seven-instruction loop at `0x80084C04` that loads a
+word through `0x800B0FA4` twice and branches until the value changes. Nothing
+in the guest writes that word, so it is waiting for a VBlank-driven update.
+That is the next real milestone: deliver vertical-blank interrupts and dispatch
+registered callbacks, because library timeouts are not a substitute for them.
+
+## 2026-11-24 — Hardware map: timers, DMA and interrupt flags
+
+`r6::HardwareMap` now models the registers a booting game polls:
+
+- Three root counters. The value register reads the platform clock in the low
+  16 bits and the offset is captured when the guest writes the value register.
+  Mode and target registers read back what was written. A real counter is a
+  wall-clock device, so library timeouts behave the way they do on hardware;
+  this is why the counters are not derived from executed instructions.
+- DMA channel control registers. A start or trigger write is accepted and the
+  busy and trigger bits read back clear, because the transfer is already done.
+  Previously the writes were counted and dropped, so any guest polling for
+  completion spun forever.
+- `I_STAT`/`I_MASK` with write-one-to-acknowledge semantics on the status
+  register.
+
+`r6-tests` covers the two behaviours that matter for bring-up: a started DMA
+channel reads back idle, and a timer mode register reads back its value.

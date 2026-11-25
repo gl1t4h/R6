@@ -209,6 +209,7 @@ int main(int argc, char** argv) {
     std::uint64_t steps = 5000000;
     std::filesystem::path frame_path;
     std::uint32_t entry_override = 0;
+    std::vector<std::pair<std::uint32_t, std::uint32_t>> pokes;
 
     for (int index = 1; index < argc; ++index) {
         const std::string argument = argv[index];
@@ -219,6 +220,17 @@ int main(int argc, char** argv) {
         } else if (argument == "--entry" && index + 1 < argc) {
             entry_override = static_cast<std::uint32_t>(
                 std::stoul(argv[++index], nullptr, 0));
+        } else if (argument == "--poke" && index + 1 < argc) {
+            // Debug aid: patch one guest word before the run starts, so a
+            // startup global can be corrected without editing the image.
+            const std::string poke = argv[++index];
+            const auto split = poke.find('=');
+            if (split == std::string::npos) {
+                std::cerr << "r6-run: --poke expects ADDRESS=VALUE\n";
+                return 2;
+            }
+            pokes.emplace_back(std::stoul(poke.substr(0, split), nullptr, 0),
+                               std::stoul(poke.substr(split + 1), nullptr, 0));
         } else if (input.empty()) {
             input = argument;
         }
@@ -226,7 +238,8 @@ int main(int argc, char** argv) {
 
     if (input.empty()) {
         std::cerr << "usage: r6-run <game.cue|game.bin> [--steps N]"
-                     " [--entry 0xADDR] [--dump-frame frame.ppm]\n"
+                     " [--entry 0xADDR] [--poke 0xADDR=0xVALUE]"
+                     " [--dump-frame frame.ppm]\n"
                   << "Runs your own local copy. No game data is copied or"
                      " uploaded.\n";
         return 2;
@@ -289,6 +302,10 @@ int main(int argc, char** argv) {
         ram.write8((image.load_address + static_cast<std::uint32_t>(index)) &
                        kRamMask,
                    image.payload[index]);
+    }
+
+    for (const auto& [address, value] : pokes) {
+        ram.write32(address & kRamMask, value);
     }
 
     r6::MipsInterpreter interpreter(ram, services);

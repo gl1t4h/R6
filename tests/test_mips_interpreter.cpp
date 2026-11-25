@@ -182,6 +182,44 @@ void break_stops_execution() {
     R6_CHECK(interpreter.cpu().gpr[8] == 1);
 }
 
+void dma_start_reads_back_idle() {
+    Memory ram(2u * 1024u * 1024u);
+    TestServices services;
+    MipsInterpreter interpreter(ram, services);
+    auto& cpu = interpreter.cpu();
+    cpu.pc = 0x80010000u;
+
+    ram.write32(0x10000, 0x3C081F80u);  // lui t0, 0x1F80
+    ram.write32(0x10004, 0x350810A8u);  // ori t0, t0, 0x10A8 (DMA2 CHCR)
+    ram.write32(0x10008, 0x3C090100u);  // lui t1, 0x0100
+    ram.write32(0x1000Cu, 0x35290010u);  // ori t1, t1, 0x0010
+    ram.write32(0x10010, 0xAD090000u);   // sw t1, 0(t0)  start + trigger
+    ram.write32(0x10014, 0x8D020000u);   // lw v0, 0(t0)
+
+    interpreter.run(6);
+    // The transfer is already finished, so busy (bit 24) and trigger (bit 28)
+    // must read back clear or the guest would wait on them forever.
+    R6_CHECK((cpu.gpr[2] & 0x11000000u) == 0u);
+}
+
+void timer_mode_reads_back() {
+    Memory ram(2u * 1024u * 1024u);
+    TestServices services;
+    MipsInterpreter interpreter(ram, services);
+    auto& cpu = interpreter.cpu();
+    cpu.pc = 0x80010000u;
+
+    ram.write32(0x10000, 0x3C081F80u);  // lui t0, 0x1F80
+    ram.write32(0x10004, 0x35081114u);  // ori t0, t0, 0x1114 (timer 1 mode)
+    ram.write32(0x10008, 0x3C090040u);  // lui t1, 0x0040
+    ram.write32(0x1000Cu, 0x35290002u);  // ori t1, t1, 0x0002
+    ram.write32(0x10010, 0xAD090000u);   // sw t1, 0(t0)
+    ram.write32(0x10014, 0x8D020000u);   // lw v0, 0(t0)
+
+    interpreter.run(6);
+    R6_CHECK(cpu.gpr[2] == 0x00400002u);
+}
+
 }  // namespace
 
 void run_mips_interpreter_tests() {
@@ -193,4 +231,6 @@ void run_mips_interpreter_tests() {
     bios_trap_prints();
     unsupported_instruction_stops();
     break_stops_execution();
+    dma_start_reads_back_idle();
+    timer_mode_reads_back();
 }
