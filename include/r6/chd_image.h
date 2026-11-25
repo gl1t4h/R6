@@ -66,6 +66,7 @@ private:
     std::uint32_t frame_bytes_{0};
     std::uint32_t sector_count_{0};
     std::uint32_t hunk_count_{0};
+    std::uint64_t file_size_{0};
     std::uint64_t logical_bytes_{0};
     std::uint64_t map_offset_{0};
     std::uint32_t compressors_[4]{0, 0, 0, 0};

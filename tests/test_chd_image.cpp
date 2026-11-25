@@ -3,7 +3,11 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <string>
+#include <vector>
 
 #include "r6/chd_image.h"
 
@@ -32,6 +36,27 @@ std::string repeated(const std::string& phrase) {
     while (text.size() < 2048) text += phrase;
     text.resize(2048);
     return text;
+}
+
+std::vector<std::uint8_t> read_file(const std::string& path) {
+    std::ifstream file(path, std::ios::binary);
+    return std::vector<std::uint8_t>(std::istreambuf_iterator<char>(file),
+                                     std::istreambuf_iterator<char>());
+}
+
+std::uint64_t read_be(const std::vector<std::uint8_t>& bytes,
+                      std::size_t at, int width) {
+    std::uint64_t value = 0;
+    for (int i = 0; i < width; ++i) value = (value << 8) | bytes[at + i];
+    return value;
+}
+
+void write_be(std::vector<std::uint8_t>& bytes, std::size_t at,
+              std::uint64_t value, int width) {
+    for (int i = width - 1; i >= 0; --i) {
+        bytes[at + i] = static_cast<std::uint8_t>(value & 0xFF);
+        value >>= 8;
+    }
 }
 
 // Mirrors make_chd_fixtures.py; the fixtures only ever contain this text.
@@ -236,6 +261,58 @@ void past_the_end_is_rejected() {
                                      sizeof user));
 }
 
+// A corrupted map has to be refused at open time, not turned into a pile of
+// bad offsets that only fail once sectors are read.
+void corrupt_maps_are_rejected() {
+    const auto temp = std::filesystem::temp_directory_path() /
+                      "r6-corrupt-map.chd";
+    const auto reject = [&temp](const std::vector<std::uint8_t>& bytes,
+                                const char* expected) {
+        std::ofstream file(temp, std::ios::binary | std::ios::trunc);
+        file.write(reinterpret_cast<const char*>(bytes.data()),
+                   static_cast<std::streamsize>(bytes.size()));
+        file.close();
+
+        ChdImage image;
+        std::string error;
+        const bool opened = image.open(temp.string(), error);
+        if (opened || error.find(expected) == std::string::npos) {
+            std::printf("  expected \"%s\", got \"%s\"\n", expected,
+                        error.c_str());
+        }
+        R6_CHECK(!opened);
+        R6_CHECK(error.find(expected) != std::string::npos);
+    };
+
+    auto bytes = read_file(fixture("synthetic-cdlz.chd"));
+    auto map_offset = read_be(bytes, 40, 8);
+    write_be(bytes, static_cast<std::size_t>(map_offset) + 4,
+             map_offset + 4096, 6);
+    reject(bytes, "outside the hunk data area");
+
+    bytes = read_file(fixture("synthetic-cdlz.chd"));
+    write_be(bytes, static_cast<std::size_t>(map_offset) + 4, map_offset, 6);
+    reject(bytes, "does not fit in the hunk data area");
+
+    bytes = read_file(fixture("synthetic-many-hunks.chd"));
+    map_offset = read_be(bytes, 40, 8);
+    const auto payload =
+        read_be(bytes, static_cast<std::size_t>(map_offset), 4);
+    write_be(bytes, static_cast<std::size_t>(map_offset), payload - 8, 4);
+    reject(bytes, "bits but its payload holds");
+
+    bytes = read_file(fixture("synthetic-none.chd"));
+    map_offset = read_be(bytes, 40, 8);
+    const auto hunk = read_be(bytes, 56, 4);
+    const auto hunks = (read_be(bytes, 32, 8) + hunk - 1) / hunk;
+    write_be(bytes, static_cast<std::size_t>(map_offset) +
+                    static_cast<std::size_t>(hunks - 1) * 4, 0x00FFFFFF, 4);
+    reject(bytes, "points outside the file");
+
+    std::error_code ignored;
+    std::filesystem::remove(temp, ignored);
+}
+
 void invalid_images_are_rejected() {
     ChdImage missing;
     std::string error;
@@ -264,5 +341,6 @@ void run_chd_image_tests() {
     data_track_reads_before_audio();
     unsupported_codec_is_reported();
     past_the_end_is_rejected();
+    corrupt_maps_are_rejected();
     invalid_images_are_rejected();
 }

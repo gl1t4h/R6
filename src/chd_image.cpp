@@ -106,7 +106,12 @@ public:
         return value;
     }
 
-    bool overflowed() const { return bit_ / 8 > size_; }
+    std::size_t bit_position() const { return bit_; }
+    std::size_t size_bits() const { return size_ * 8; }
+
+    // Reads past the end return zeros, so a map that needs more bits than
+    // the payload holds has to be reported instead of trusted.
+    bool overflowed() const { return bit_ > size_ * 8; }
 
 private:
     const std::uint8_t* data_;
@@ -819,6 +824,7 @@ bool ChdImage::open(const std::filesystem::path& path, std::string& error) {
         error = "not a CHD file (missing MComprHD tag)";
         return false;
     }
+    file_size_ = file_size;
     const auto version = be32(header + 12);
     version_ = version;
     if (version != 5) {
@@ -841,6 +847,11 @@ bool ChdImage::open(const std::filesystem::path& path, std::string& error) {
     }
     logical_bytes_ = be64(header + 32);
     map_offset_ = be64(header + 40);
+    if (map_offset_ < 124 || map_offset_ > file_size_) {
+        error = "hunk map offset " + std::to_string(map_offset_) +
+                " is outside the file";
+        return false;
+    }
     hunk_bytes_ = be32(header + 56);
     frame_bytes_ = be32(header + 60);
 
@@ -909,6 +920,12 @@ bool ChdImage::load_map(std::string& error) {
             entry.type = kTypeNone;
             entry.length = hunk_bytes_;
             entry.offset = static_cast<std::uint64_t>(value) * hunk_bytes_;
+            if (entry.offset > file_size_ ||
+                hunk_bytes_ > file_size_ - entry.offset) {
+                error = "hunk " + std::to_string(index) +
+                        " points outside the file";
+                return false;
+            }
         }
         return true;
     }
@@ -928,6 +945,12 @@ bool ChdImage::load_compressed_map(std::string& error) {
     const auto parent_bits = header[14];
     if (payload_size == 0 || payload_size > 64 * 1024 * 1024) {
         error = "compressed hunk map has an invalid size";
+        return false;
+    }
+    if (data_start < 124 || data_start > map_offset_) {
+        error = "compressed hunk map starts at byte " +
+                std::to_string(data_start) +
+                ", outside the hunk data area";
         return false;
     }
 
@@ -993,15 +1016,32 @@ bool ChdImage::load_compressed_map(std::string& error) {
             case kTypeCodec0 + 3:
                 length = bits.read(length_bits);
                 bits.read(16);  // CRC-16 of the uncompressed hunk
+                if (length == 0 || offset > map_offset_ ||
+                    length > map_offset_ - offset) {
+                    error = "hunk " + std::to_string(index) +
+                            " does not fit in the hunk data area";
+                    return false;
+                }
                 offset += length;
                 break;
             case kTypeNone:
                 length = hunk_bytes_;
                 bits.read(16);
+                if (offset > map_offset_ ||
+                    length > map_offset_ - offset) {
+                    error = "hunk " + std::to_string(index) +
+                            " does not fit in the hunk data area";
+                    return false;
+                }
                 offset += length;
                 break;
             case kTypeSelf:
                 block_offset = bits.read(self_bits);
+                if (block_offset >= index) {
+                    error = "hunk " + std::to_string(index) +
+                            " refers to a later hunk";
+                    return false;
+                }
                 last_self = static_cast<std::uint32_t>(block_offset);
                 break;
             case kTypeParent:
@@ -1032,8 +1072,29 @@ bool ChdImage::load_compressed_map(std::string& error) {
                 error = "compressed hunk map has an unknown entry type";
                 return false;
         }
+        if (bits.overflowed()) {
+            error = "compressed hunk map needs " +
+                    std::to_string(bits.bit_position()) +
+                    " bits but its payload holds " +
+                    std::to_string(bits.size_bits());
+            return false;
+        }
+        if (entry.type == kTypeParent) {
+            error = "hunk " + std::to_string(index) +
+                    " requires a parent image (delta CHD)";
+            return false;
+        }
         entry.length = length;
         entry.offset = block_offset;
+    }
+
+    // A misparsed map usually ends somewhere other than the start of the
+    // map, so the stored hunk blocks must exactly fill the data region.
+    if (offset != map_offset_) {
+        error = "hunk data ends at byte " + std::to_string(offset) +
+                " but the compressed map starts at " +
+                std::to_string(map_offset_);
+        return false;
     }
     return true;
 }
