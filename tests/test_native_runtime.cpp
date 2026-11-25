@@ -5,7 +5,11 @@
 #include <stdexcept>
 #include <string>
 
+#include "r6/bios_services.h"
+#include "r6/cdrom_device.h"
 #include "r6/function_dispatch.h"
+#include "r6/gte.h"
+#include "r6/hardware_map.h"
 #include "r6/native_runtime.h"
 #include "r6/ram_snapshot.h"
 
@@ -115,6 +119,79 @@ void run_memory_snapshot_test() {
     R6_CHECK(!memory.same_data(same));
 }
 
+void run_device_state_test() {
+    NullPlatformServices services;
+
+    r6::HardwareMap hardware_a(services);
+    r6::HardwareMap hardware_b(services);
+    R6_CHECK(hardware_a.same_state(hardware_b));
+    hardware_a.advance_cycles(1);
+    R6_CHECK(hardware_a.state_difference(hardware_b) == "cycles");
+    hardware_b.advance_cycles(1);
+    R6_CHECK(hardware_a.same_state(hardware_b));
+
+    hardware_a.complete_dma(4);
+    R6_CHECK(hardware_a.state_difference(hardware_b) == "dma interrupt");
+    hardware_b.complete_dma(4);
+    R6_CHECK(hardware_a.same_state(hardware_b));
+
+    r6::CdromDevice cd_a(services);
+    r6::CdromDevice cd_b(services);
+    R6_CHECK(cd_a.same_state(cd_b));
+    cd_a.write(0, 1);
+    R6_CHECK(!cd_a.same_state(cd_b));
+    cd_b.write(0, 1);
+    R6_CHECK(cd_a.same_state(cd_b));
+
+    r6::Gte gte_a;
+    r6::Gte gte_b;
+    R6_CHECK(gte_a.same_state(gte_b));
+    gte_a.write_data(r6::Gte::kVxy0, 0x12345678u);
+    R6_CHECK(!gte_a.same_state(gte_b));
+    gte_b.write_data(r6::Gte::kVxy0, 0x12345678u);
+    R6_CHECK(gte_a.same_state(gte_b));
+
+    Memory memory(2 * 1024 * 1024, true);
+    r6::BiosServices bios_a;
+    r6::BiosServices bios_b;
+    CpuState cpu_a{};
+    CpuState cpu_b{};
+    cpu_a.gpr[9] = 0x3Du;
+    cpu_a.gpr[4] = 'A';
+    cpu_b.gpr[9] = 0x3Du;
+    cpu_b.gpr[4] = 'A';
+    bios_a.dispatch(r6::BiosTable::b0, cpu_a, memory);
+    R6_CHECK(!bios_a.same_state(bios_b));
+    bios_b.dispatch(r6::BiosTable::b0, cpu_b, memory);
+    R6_CHECK(bios_a.same_state(bios_b));
+}
+
+void run_scratchpad_and_dma_test() {
+    Memory memory(2 * 1024 * 1024, true);
+    NullPlatformServices services;
+
+    r6::NativeBus bus(memory, services);
+    bus.write32(0x1F800000u, 0x12345678u);
+    R6_CHECK(bus.scratchpad()[0] == 0x78u);
+    R6_CHECK(bus.scratchpad()[1] == 0x56u);
+    R6_CHECK(bus.scratchpad()[2] == 0x34u);
+    R6_CHECK(bus.scratchpad()[3] == 0x12u);
+
+    memory.write32(0x000B4394u, 1u);
+    bus.write32(r6::hardware::kDma3BaseAddress, 0x00100000u);
+    bus.write32(r6::hardware::kDma3BaseAddress + 4u, 1u);
+    bus.write32(r6::hardware::kDma3ChannelControl, 1u << 24);
+    R6_CHECK((bus.hardware().read32(r6::hardware::kDmaInterrupt) &
+              (1u << 27)) != 0u);
+    R6_CHECK((bus.hardware().interrupt_status() &
+              r6::hardware::kDmaInterruptBit) != 0u);
+
+    r6::NativeBus dma4_bus(memory, services);
+    dma4_bus.write32(r6::hardware::kDma4ChannelControl, (1u << 24) | 1u);
+    R6_CHECK((dma4_bus.hardware().read32(r6::hardware::kDmaInterrupt) &
+              (1u << 28)) != 0u);
+}
+
 void run_ram_snapshot_round_trip() {
     Memory memory(4096, true);
     memory.write32(0x100u, 0x12345678u);
@@ -150,5 +227,7 @@ void run_native_runtime_tests() {
     run_persistent_bus_test();
     run_unsupported_test();
     run_memory_snapshot_test();
+    run_device_state_test();
+    run_scratchpad_and_dma_test();
     run_ram_snapshot_round_trip();
 }

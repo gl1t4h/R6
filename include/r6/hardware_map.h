@@ -330,6 +330,50 @@ public:
     std::uint32_t interrupt_status() const { return interrupt_status_; }
     std::uint32_t interrupt_mask() const { return interrupt_mask_; }
 
+    // Full guest-visible hardware state, excluding diagnostic logs and the
+    // platform service reference. Timer values are derived from cycles_ and
+    // the timer registers, so comparing both covers the timer reads too.
+    bool same_state(const HardwareMap& other) const {
+        return state_difference(other).empty();
+    }
+
+    // Names the first divergent hardware group, for a failed differential.
+    std::string state_difference(const HardwareMap& other) const {
+        if (!cdrom_.same_state(other.cdrom_)) return "cdrom";
+        if (cycles_ != other.cycles_) return "cycles";
+        if (dma_interrupt_ != other.dma_interrupt_) return "dma interrupt";
+        if (spu_transfer_address_ != other.spu_transfer_address_)
+            return "spu transfer address";
+        if (spu_control_ != other.spu_control_) return "spu control";
+        if (spu_transfer_control_ != other.spu_transfer_control_)
+            return "spu transfer control";
+        if (dma_address_ != other.dma_address_) return "dma address";
+        if (dma_counter_ != other.dma_counter_) return "dma counter";
+        if (dma_control_ != other.dma_control_) return "dma control";
+        if (pad_data_ != other.pad_data_) return "pad data";
+        if (pad_irq_delay_ != other.pad_irq_delay_) return "pad irq delay";
+        if (pad_mode_ != other.pad_mode_) return "pad mode";
+        if (pad_control_ != other.pad_control_) return "pad control";
+        if (pad_baud_ != other.pad_baud_) return "pad baud";
+        if (interrupt_status_ != other.interrupt_status_)
+            return "interrupt status";
+        if (cdrom_interrupt_enabled_ != other.cdrom_interrupt_enabled_)
+            return "cdrom interrupt enable";
+        if (gpu_field_ != other.gpu_field_) return "gpu field";
+        if (gpu_vblank_cycles_ != other.gpu_vblank_cycles_)
+            return "gpu vblank cycles";
+        if (interrupt_mask_ != other.interrupt_mask_) return "interrupt mask";
+        for (std::size_t index = 0; index < timers_.size(); ++index) {
+            if (timers_[index].mode != other.timers_[index].mode)
+                return "timer " + std::to_string(index) + " mode";
+            if (timers_[index].target != other.timers_[index].target)
+                return "timer " + std::to_string(index) + " target";
+            if (timers_[index].offset != other.timers_[index].offset)
+                return "timer " + std::to_string(index) + " offset";
+        }
+        return {};
+    }
+
 private:
     static constexpr std::uint32_t kDmaBusy = 1u << 24;
     static constexpr std::uint32_t kDmaTrigger = 1u << 28;

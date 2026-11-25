@@ -305,6 +305,9 @@ public:
     }
 
     HardwareMap& hardware() { return hardware_; }
+    const std::vector<std::uint8_t>& scratchpad() const {
+        return scratchpad_;
+    }
 
 private:
     std::uint64_t unknown_hardware_reads_{0};

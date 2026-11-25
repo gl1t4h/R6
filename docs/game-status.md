@@ -100,19 +100,20 @@ None.
   captured the resident image. The loader's call to `0x80032EE0` is the real
   entry; it calls the resource startup at `0x8002E630`, then the resident
   runtime. The persistent 4,361-block translation matched 200,000 executed
-  blocks on GPRs, HI/LO, COP0, hardware cycles and all 2 MiB of RAM. One
-  native bus and one oracle interpreter keep COP0, hardware, GTE/scratchpad
-  and BIOS state across block boundaries. The run advances to `0x800154CC`;
+  blocks on GPRs, HI/LO, COP0, hardware registers, GTE, scratchpad, BIOS
+  bookkeeping and all 2 MiB of RAM. One native bus and one oracle interpreter
+  keep COP0, hardware, GTE/scratchpad and BIOS state across block boundaries. The run advances to `0x800154CC`;
   the earlier reset-per-block 3,316-block slice parked at `0x80013130`.
   The startup trace still does not execute the dispatcher at `0x80087360`.
   That dispatcher indexes the six-entry table at `0x8002AB54` from
   `[0x800B9FD0]`; index 3 (`0x8002AB60`) calls `0x80087448`, so this is a mode
   handler, not a constructor. A targeted mode-3 checkpoint matched and a
-  watch read `0x8002AB60` exactly once.
-- **Next step:** Add the remaining device seams, including native DMA
-  transfer execution and hardware-register equality checks, before chasing
-  the movie path. MDEC only becomes relevant if the captured native path
-  reaches it.
+  watch read `0x8002AB60` exactly once. Native DMA2/3/4 channels now execute
+  their transfers, and the per-block differential compares full hardware
+  registers, GTE registers, scratchpad and BIOS bookkeeping, not just cycles.
+- **Next step:** Add the remaining device seams, starting with the movie path,
+  before chasing the frame loop. MDEC only becomes relevant if the captured
+  native path reaches it.
 - **Playable native build:** No
 - **Distributed game assets:** No
 

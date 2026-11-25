@@ -618,7 +618,7 @@ reported:
 | Item | Result |
 | --- | --- |
 | Blocks executed and matched | 200,000 |
-| Mismatches | none (GPRs, HI/LO, COP0, hardware cycles, 2 MiB RAM) |
+| Mismatches | none (GPRs, HI/LO, COP0, hardware registers, GTE, scratchpad, BIOS bookkeeping, 2 MiB RAM) |
 | Stop | block budget at `0x800154CC` |
 | Dispatcher hits | none at `0x80087360`, `0x800873A4` or `0x80087448` |
 
@@ -634,7 +634,9 @@ also matched 5,000 startup blocks.
 
 This is a mode dispatcher/handler, not a constructor runner; the earlier
 label was wrong for this image. The startup slice still does not reach the
-frame loop. COP0, hardware cycles, timers, DMA registers, CD state and BIOS
-bookkeeping persist; native DMA transfer execution and full hardware-register
-equality checks are still missing. The snapshot also omits COP0 and hardware
-registers; only RAM and the integer CPU state are captured.
+frame loop. COP0, hardware registers, timers, DMA registers, CD state and BIOS
+bookkeeping persist. Native DMA2/3/4 transfers now execute with the same
+`DICR`/`I_STAT` completion the interpreter produces, and the full-state
+differential compares every hardware register, GTE register, scratchpad byte
+and BIOS bookkeeping field after every block. The snapshot still omits COP0
+and hardware registers; only RAM and the integer CPU state are captured.

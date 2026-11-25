@@ -188,6 +188,9 @@ public:
     const HardwareMap& hardware() const { return hardware_; }
     Gte& gte() { return gte_; }
     const Gte& gte() const { return gte_; }
+    const std::array<std::uint8_t, 0x400>& scratchpad() const {
+        return scratchpad_;
+    }
 
     void write32(std::uint32_t address, std::uint32_t value) {
         note_watch(address, "write32");
@@ -217,10 +220,78 @@ public:
         }
         if (physical >= kHardwareBase && physical < kHardwareEnd) {
             hardware_.write32(physical, value);
+            if (physical == hardware::kDma2ChannelControl) {
+                const auto start = (value & (1u << 24)) != 0;
+                const auto sync_mode = (value >> 9) & 3u;
+                const auto from_ram = (value & 1u) != 0;
+                if (start && sync_mode == 2 && from_ram) run_dma2_list();
+            }
+            if (physical == hardware::kDma3ChannelControl) {
+                const auto start = (value & (1u << 24)) != 0;
+                const auto to_ram = (value & 1u) == 0;
+                if (start && to_ram) run_dma3_transfer();
+            }
+            if (physical == hardware::kDma4ChannelControl) {
+                const auto start = (value & (1u << 24)) != 0;
+                const auto to_device = (value & 1u) != 0;
+                if (start && to_device) run_dma4_transfer();
+            }
         }
     }
 
 private:
+    // DMA2 walks a packet list in main RAM and forwards its payload to GP0.
+    void run_dma2_list() {
+        constexpr std::uint32_t kEndMarker = 0x00FFFFFFu;
+        constexpr std::uint32_t kRamAddressMask = 0x001FFFFCu;
+        constexpr std::size_t kMaxNodes = 4096;
+        constexpr std::uint64_t kMaxWords = 1u << 20;
+
+        auto address = hardware_.dma_address(2) & kRamAddressMask;
+        std::uint64_t words_sent = 0;
+        for (std::size_t node = 0;
+             node < kMaxNodes && words_sent < kMaxWords; ++node) {
+            const auto tag = ram_.read32(address & kRamMask);
+            const auto words = tag >> 24;
+            const auto next = tag & kEndMarker;
+            for (std::uint32_t word = 0; word < words; ++word) {
+                const auto source = (address + 4 + word * 4) & kRamAddressMask;
+                hardware_.write32(hardware::kGpuCommand,
+                                 ram_.read32(source & kRamMask));
+                ++words_sent;
+            }
+            if (next == kEndMarker) break;
+            address = next & kRamAddressMask;
+        }
+    }
+
+    // DMA3 request-mode transfer from the CD data FIFO into main RAM.
+    void run_dma3_transfer() {
+        constexpr std::uint32_t kDefaultWords = 512;
+        constexpr std::uint32_t kMaxWords = 1024;
+
+        const auto counter = hardware_.dma_counter(3);
+        const auto blocks = counter >> 16;
+        auto words = counter & 0xFFFFu;
+        if (words == 0) words = kDefaultWords;
+        if (blocks > 1) words *= blocks;
+        if (words > kMaxWords) words = kMaxWords;
+        const auto address = 0x80000000u | hardware_.dma_address(3);
+        for (std::uint32_t index = 0; index < words; ++index) {
+            ram_.write32((address + index * 4) & kRamMask,
+                         hardware_.cdrom().read_word());
+        }
+        hardware_.refresh_cdrom_interrupt();
+        // Match the interpreter: only raise the channel-3 completion when a
+        // handler is installed in the streaming table.
+        if (ram_.read32(0x800B4394u & kRamMask) != 0) {
+            hardware_.complete_dma(3);
+        }
+    }
+
+    // DMA4's SPU data is not consumed yet, but its completion flag is.
+    void run_dma4_transfer() { hardware_.complete_dma(4); }
+
     static void note_watch(std::uint32_t address, const char* kind) {
         if (watch_address_ == 0) return;
         const auto physical = address & 0x1FFFFFFFu;

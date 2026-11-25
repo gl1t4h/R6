@@ -184,6 +184,41 @@ public:
         return (interrupt_ & interrupt_mask_) != 0;
     }
 
+    // Full functional state, excluding diagnostic logs and the platform
+    // service reference. The differential uses this to prove that the
+    // persistent controller has not diverged from the oracle.
+    bool same_state(const CdromDevice& other) const {
+        return index_ == other.index_ && status_ == other.status_ &&
+               event_counter_ == other.event_counter_ &&
+               interrupt_ == other.interrupt_ &&
+               interrupt_mask_ == other.interrupt_mask_ &&
+               request_register_ == other.request_register_ &&
+               complete_pending_ == other.complete_pending_ &&
+               parameters_ == other.parameters_ &&
+               command_delay_cycles_ == other.command_delay_cycles_ &&
+               pending_delay_ == other.pending_delay_ &&
+               pending_command_ == other.pending_command_ &&
+               pending_parameters_ == other.pending_parameters_ &&
+               command_pending_ == other.command_pending_ &&
+               response_ == other.response_ &&
+               response_index_ == other.response_index_ &&
+               data_ == other.data_ && data_index_ == other.data_index_ &&
+               sector_ == other.sector_ &&
+               sectors_read_ == other.sectors_read_ &&
+               status_reads_ == other.status_reads_ &&
+               response_seen_ == other.response_seen_ &&
+               response_reads_ == other.response_reads_ &&
+               reading_ == other.reading_ &&
+               data_end_raised_ == other.data_end_raised_ &&
+               start_read_after_ack_ == other.start_read_after_ack_ &&
+               next_sector_pending_ == other.next_sector_pending_ &&
+               sector_pending_ == other.sector_pending_ &&
+               sector_delay_cycles_ == other.sector_delay_cycles_ &&
+               sector_delay_ == other.sector_delay_ &&
+               data_acknowledged_ == other.data_acknowledged_ &&
+               xa_enabled_ == other.xa_enabled_;
+    }
+
 private:
     static constexpr std::uint8_t kMotorOn = 0x02;
     // A command always answers in two steps: INT3 acknowledges it, then the

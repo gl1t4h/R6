@@ -98,6 +98,16 @@ public:
     bool execute(u32 instruction);
 
     u32 flags() const { return control_[kFlag]; }
+
+    // Full register file plus command counters, for the differential harness.
+    bool same_state(const Gte& other) const {
+        return data_ == other.data_ && control_ == other.control_ &&
+               unsupported_by_opcode_ == other.unsupported_by_opcode_ &&
+               executed_ == other.executed_ &&
+               unsupported_ == other.unsupported_ &&
+               last_unsupported_ == other.last_unsupported_;
+    }
+
     std::uint64_t executed() const { return executed_; }
     std::uint64_t unsupported() const { return unsupported_; }
     u32 last_unsupported() const { return last_unsupported_; }

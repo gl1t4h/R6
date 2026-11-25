@@ -84,6 +84,35 @@ public:
         return unhandled_log_;
     }
 
+    // Full BIOS bookkeeping, excluding the host GPU callbacks. Event slots,
+    // interrupt hooks and call logs all have to agree for the persistent
+    // native service to be a faithful copy of the oracle service.
+    bool same_state(const BiosServices& other) const {
+        if (interrupt_entries_ != other.interrupt_entries_ ||
+            entry_int_ != other.entry_int_ ||
+            return_from_exception_ != other.return_from_exception_ ||
+            clear_pad_ != other.clear_pad_ ||
+            unhandled_calls_ != other.unhandled_calls_ ||
+            unhandled_log_ != other.unhandled_log_ ||
+            call_counts_ != other.call_counts_ || tty_ != other.tty_ ||
+            exited_ != other.exited_ || exit_code_ != other.exit_code_ ||
+            events_.size() != other.events_.size()) {
+            return false;
+        }
+        for (std::size_t index = 0; index < events_.size(); ++index) {
+            const auto& left = events_[index];
+            const auto& right = other.events_[index];
+            if (left.open != right.open ||
+                left.event_class != right.event_class ||
+                left.spec != right.spec || left.mode != right.mode ||
+                left.handler != right.handler ||
+                left.delivered != right.delivered) {
+                return false;
+            }
+        }
+        return true;
+    }
+
 private:
     struct EventSlot {
         bool open{false};

@@ -3,8 +3,8 @@
 // This front end boots the user's own executable, registers the generated
 // basic blocks, and runs them through r6::NativeBlockDispatcher. With
 // --compare it also runs the interpreter from the same checkpoint and checks
-// the register file, HI/LO, COP0, hardware cycles and all 2 MiB of RAM after
-// every block. The interpreter is the reference implementation only; the
+// the register file, HI/LO, COP0, hardware registers, GTE, scratchpad, BIOS
+// bookkeeping and all 2 MiB of RAM after every block. The interpreter is the reference implementation only; the
 // generated code is the product target.
 //
 // The generated translation unit is a local, derived artifact. It is never
@@ -63,6 +63,8 @@ public:
         bios_.dispatch(table, cpu, memory);
         return true;
     }
+
+    const r6::BiosServices& bios() const { return bios_; }
 
 private:
     r6::BiosServices bios_;
@@ -402,12 +404,35 @@ int run_native(
                 failed = true;
                 break;
             }
-            if (native_bus.hardware().cycles() !=
-                reference.hardware().cycles()) {
-                std::cout << "Hardware cycle mismatch after block " << block
-                          << ": native "
-                          << native_bus.hardware().cycles() << ", oracle "
-                          << reference.hardware().cycles() << "\n";
+            const auto hardware_difference =
+                native_bus.hardware().state_difference(reference.hardware());
+            if (!hardware_difference.empty()) {
+                std::cout << "Hardware state mismatch after block " << block
+                          << " (" << hardware_difference << ", native PC "
+                          << hex32(native.pc) << ")\n";
+                failed = true;
+                break;
+            }
+            if (!native_bus.gte().same_state(reference.gte())) {
+                std::cout << "GTE state mismatch after block " << block
+                          << " (native PC " << hex32(native.pc) << ")\n";
+                failed = true;
+                break;
+            }
+            if (native_bus.scratchpad().size() == 0u ||
+                native_bus.scratchpad().size() !=
+                    reference.scratchpad().size() ||
+                std::memcmp(native_bus.scratchpad().data(),
+                            reference.scratchpad().data(),
+                            native_bus.scratchpad().size()) != 0) {
+                std::cout << "Scratchpad mismatch after block " << block
+                          << " (native PC " << hex32(native.pc) << ")\n";
+                failed = true;
+                break;
+            }
+            if (!native_services.bios().same_state(oracle_services.bios())) {
+                std::cout << "BIOS state mismatch after block " << block
+                          << " (native PC " << hex32(native.pc) << ")\n";
                 failed = true;
                 break;
             }
@@ -434,8 +459,8 @@ int run_native(
     if (compare) {
         std::cout << "Differential check: " << matched << " block(s) matched"
                   << (failed ? " before the first mismatch" : "")
-                  << " (registers, HI/LO, COP0, hardware cycles,"
-                     " 2 MiB RAM)\n";
+                  << " (registers, HI/LO, COP0, hardware, GTE,"
+                     " scratchpad, BIOS, 2 MiB RAM)\n";
     }
     if (watch_address != 0) {
         std::cout << "Watch hits: " << r6::NativeBus::watch_hits() << "\n";
