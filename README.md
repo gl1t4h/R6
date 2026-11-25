@@ -23,7 +23,7 @@ images that are never included in this repository.
 | CD-ROM / DMA | In progress | DMA3 disc reads, CD command responses, and sector delivery are implemented enough for early file streaming; timing-sensitive loader behavior is still being debugged. |
 | GPU / display | In progress | Software GPU handles common GP0/GP1 commands and presents a VRAM display window; guest scene submission depends on further CPU/GTE/timing coverage. |
 | GTE / COP2 | Not implemented | Geometry instructions are accepted/counted but not executed, so 3D scene generation is blocked. |
-| Native player | In progress | `r6-player` opens a Win32 window and presents the emulated display from a user-supplied local disc image. |
+| Native player | In progress | `r6-player` opens a Win32 window and presents the translated display from a user-supplied local disc image. |
 
 Progress is measured by bring-up milestones, not playable game content. On-screen
 counters report interpreter/player state; a black or incomplete display usually
