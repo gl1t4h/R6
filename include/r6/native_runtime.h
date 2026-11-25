@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <stdexcept>
+#include <unordered_map>
 
 #include "r6/cpu_state.h"
 #include "r6/gte.h"
@@ -19,7 +20,11 @@ namespace r6 {
 class NativeBus {
 public:
     NativeBus(Memory& ram, PlatformServices& services)
-        : ram_(ram), hardware_(services) {}
+        : ram_(ram), hardware_(services) {
+        // Match the interpreter's kernel hand-off: the disc controller asserts
+        // its interrupt line once its enable bit has been programmed.
+        hardware_.set_cdrom_interrupt_enabled(true);
+    }
 
     // The differential runner uses this to prove that a translated block
     // actually reads a specific guest address, not merely that it is present
@@ -179,6 +184,11 @@ public:
         hardware_.advance_cycles(count);
     }
 
+    HardwareMap& hardware() { return hardware_; }
+    const HardwareMap& hardware() const { return hardware_; }
+    Gte& gte() { return gte_; }
+    const Gte& gte() const { return gte_; }
+
     void write32(std::uint32_t address, std::uint32_t value) {
         note_watch(address, "write32");
         const auto physical = address & 0x1FFFFFFFu;
@@ -236,6 +246,33 @@ private:
     HardwareMap hardware_;
     Gte gte_;
     std::array<std::uint8_t, 0x400> scratchpad_{};
+};
+
+using NativeBlock = std::uint32_t (*)(CpuState&, NativeBus&);
+
+// Dispatches generated blocks that share one persistent NativeBus. The bus
+// owns the device, GTE and scratchpad state for the whole run, so a block
+// boundary no longer resets hardware state.
+class NativeBlockDispatcher {
+public:
+    void register_function(std::uint32_t address, NativeBlock function) {
+        functions_[address] = function;
+    }
+
+    bool contains(std::uint32_t address) const {
+        return functions_.find(address) != functions_.end();
+    }
+
+    std::uint32_t step(CpuState& cpu, NativeBus& bus) const {
+        const auto found = functions_.find(cpu.pc);
+        if (found == functions_.end()) {
+            throw std::out_of_range("no translated block registered for PC");
+        }
+        return found->second(cpu, bus);
+    }
+
+private:
+    std::unordered_map<std::uint32_t, NativeBlock> functions_;
 };
 
 [[noreturn]] inline void unsupported_instruction(

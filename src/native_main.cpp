@@ -1,10 +1,11 @@
 // r6-native: execute the locally generated native translation.
 //
 // This front end boots the user's own executable, registers the generated
-// basic blocks, and runs them through r6::FunctionDispatcher. With --compare it
-// also runs the interpreter from the same checkpoint and checks the register
-// file, HI/LO and all 2 MiB of RAM after every block. The interpreter is the
-// reference implementation only; the generated code is the product target.
+// basic blocks, and runs them through r6::NativeBlockDispatcher. With
+// --compare it also runs the interpreter from the same checkpoint and checks
+// the register file, HI/LO, COP0, hardware cycles and all 2 MiB of RAM after
+// every block. The interpreter is the reference implementation only; the
+// generated code is the product target.
 //
 // The generated translation unit is a local, derived artifact. It is never
 // committed: configure this target with -DR6_GENERATED_TRANSLATION=<path>.
@@ -32,7 +33,7 @@
 
 #ifdef R6_HAS_GENERATED_TRANSLATION
 namespace r6_generated {
-void register_functions(r6::FunctionDispatcher& dispatcher);
+void register_functions(r6::NativeBlockDispatcher& dispatcher);
 std::size_t block_count();
 }  // namespace r6_generated
 #endif
@@ -264,12 +265,11 @@ int run_native(
 
     // The interpreter resets COP0 with SR=0x401 at construction. Snapshots
     // do not carry COP0 yet, so the native checkpoint starts from that same
-    // reset value and the oracle is given it before every block.
+    // reset value. COP0, hardware and BIOS state then persist for the run.
     boot.initial.cop0[12] = 0x00000401u;
 
-    r6::FunctionDispatcher dispatcher;
+    r6::NativeBlockDispatcher dispatcher;
     r6_generated::register_functions(dispatcher);
-    r6::NativeBus::set_watch_address(watch_address);
 
     const auto start_pc =
         entry_override != 0 ? entry_override : boot.initial.pc;
@@ -284,7 +284,8 @@ int run_native(
     std::cout << "Entry " << hex32(start_pc) << ", GP "
               << hex32(boot.initial.gpr[28]) << ", SP "
               << hex32(boot.initial.gpr[29]) << "\n"
-              << "Translated blocks: " << r6_generated::block_count() << "\n";
+              << "Translated blocks: " << r6_generated::block_count() << "\n"
+              << "Continuous state: COP0, hardware and BIOS\n";
     if (watch_address != 0) {
         std::cout << "Watch address: " << hex32(watch_address) << "\n";
     }
@@ -298,7 +299,21 @@ int run_native(
     r6::CpuState native = boot.initial;
     native.pc = start_pc;
 
+    // One native bus and one oracle interpreter live for the whole run. Their
+    // hardware, GTE, scratchpad, COP0 and BIOS bookkeeping therefore continue
+    // across block boundaries instead of resetting at each checkpoint.
+    NativePlatformServices native_services;
+    r6::NativeBus native_bus(native_ram, native_services);
+    r6::NativeBus::set_watch_address(watch_address);
+
     r6::Memory oracle_ram = boot.ram;
+    NativePlatformServices oracle_services;
+    r6::MipsInterpreter reference(oracle_ram, oracle_services);
+    auto& oracle = reference.cpu();
+    oracle = boot.initial;
+    oracle.pc = start_pc;
+    reference.set_cop0(boot.initial.cop0);
+
     std::uint64_t matched = 0;
     bool failed = false;
     bool reached_stop = false;
@@ -312,8 +327,6 @@ int run_native(
         }
 
         const auto before_cpu = native;
-        const auto before_ram = native_ram.snapshot();
-        NativePlatformServices native_services;
         try {
             if (bios) {
                 if (!native_services.bios_call(native.pc, native, native_ram)) {
@@ -323,8 +336,7 @@ int run_native(
                 }
                 native.pc = native.gpr[31];
             } else {
-                native.pc =
-                    dispatcher.step(native, native_ram, native_services);
+                native.pc = dispatcher.step(native, native_bus);
             }
         } catch (const std::exception& exception) {
             std::cout << "Native fault at " << hex32(native.pc) << ": "
@@ -337,12 +349,13 @@ int run_native(
         }
 
         if (compare) {
-            oracle_ram.restore(before_ram);
-            NativePlatformServices oracle_services;
-            r6::MipsInterpreter reference(oracle_ram, oracle_services);
-            auto& oracle = reference.cpu();
-            oracle = before_cpu;
-            reference.set_cop0(before_cpu.cop0);
+            if (!same_cpu(oracle, before_cpu)) {
+                std::cout << "Oracle checkpoint mismatch before block " << block
+                          << " (native PC " << hex32(before_cpu.pc)
+                          << ", oracle PC " << hex32(oracle.pc) << ")\n";
+                failed = true;
+                break;
+            }
 
             bool reached = false;
             for (std::uint64_t step = 0; step < oracle_steps; ++step) {
@@ -389,7 +402,16 @@ int run_native(
                 failed = true;
                 break;
             }
-            if (native_ram.snapshot() != oracle_ram.snapshot()) {
+            if (native_bus.hardware().cycles() !=
+                reference.hardware().cycles()) {
+                std::cout << "Hardware cycle mismatch after block " << block
+                          << ": native "
+                          << native_bus.hardware().cycles() << ", oracle "
+                          << reference.hardware().cycles() << "\n";
+                failed = true;
+                break;
+            }
+            if (!native_ram.same_data(oracle_ram)) {
                 print_ram_difference(native_ram.snapshot(), oracle_ram.snapshot());
                 std::cout << "RAM mismatch after block " << block << " (native PC "
                           << hex32(native.pc) << ")\n";
@@ -412,7 +434,8 @@ int run_native(
     if (compare) {
         std::cout << "Differential check: " << matched << " block(s) matched"
                   << (failed ? " before the first mismatch" : "")
-                  << " (registers, HI/LO, COP0, 2 MiB RAM)\n";
+                  << " (registers, HI/LO, COP0, hardware cycles,"
+                     " 2 MiB RAM)\n";
     }
     if (watch_address != 0) {
         std::cout << "Watch hits: " << r6::NativeBus::watch_hits() << "\n";

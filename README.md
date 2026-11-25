@@ -23,7 +23,7 @@ images that are never included in this repository.
 | CD-ROM / DMA | In progress | DMA3 disc reads, CD command responses, and sector delivery are implemented enough for early file streaming; timing-sensitive loader behavior is still being debugged. |
 | GPU / display | In progress | Software GPU handles common GP0/GP1 commands and presents a VRAM display window; guest scene submission depends on further CPU/GTE/timing coverage. |
 | GTE / COP2 | In progress | RTPS/RTPT, NCLIP, AVSZ3/4, MVMVA and SQR compute with the documented saturation and FLAG behaviour, as do the lighting commands NCS, NCCS, NCDS and their triple forms NCT, NCCT and NCDT; the colour commands that work from existing IR (CC, CDP, DPCS, DPCT, INTPL, DCPL) are counted per opcode and named in the `r6-run` report. See `docs/gte-scope.md`. |
-| Native translation | Boot and loaded-image slices | `tools/generate-native-stub.py` emits one native function per basic block, and `r6-native` executes them through the dispatcher. The bootstrap runs 1,975 blocks while matching the interpreter's registers, HI/LO and 2 MiB RAM, then stops at `InitHeap`. A 130M-instruction RAM snapshot starts the resident main at `0x80032EE0`; the 3,316-block loaded slice matched 200,000 blocks with GPRs, HI/LO, COP0 and all RAM compared after every block, and a 4,361-block superset adds the resident mode dispatcher at `0x80087360`. The startup trace does not reach that dispatcher; a targeted mode-3 checkpoint does, reading `0x8002AB60` and executing `0x80087448`. Generated code stays outside the repository. |
+| Native translation | Boot and loaded-image slices | `tools/generate-native-stub.py` emits one native function per basic block, and `r6-native` executes them through the dispatcher. The bootstrap runs 1,975 blocks while matching the interpreter's registers, HI/LO and 2 MiB RAM, then stops at `InitHeap`. A 130M-instruction RAM snapshot starts the resident main at `0x80032EE0`; the 4,361-block loaded slice matched 200,000 blocks with GPRs, HI/LO, COP0, hardware cycles and all RAM compared after every block. One native bus and one interpreter persist COP0, hardware, GTE/scratchpad and BIOS state across block boundaries, so the run advances to `0x800154CC` instead of resetting into the `0x80013130` wait. The startup trace does not reach the mode dispatcher at `0x80087360`; a targeted mode-3 checkpoint does, reading `0x8002AB60` and executing `0x80087448`. Generated code stays outside the repository. |
 | Native player | In progress | `r6-player` is the development interpreter front end; it presents the reference display, not a recompiled build. |
 
 Progress is measured by bring-up milestones, not playable game content. On-screen
@@ -184,14 +184,16 @@ python .\tools\generate-native-stub.py `
 
 The snapshot is `R6S1` (GPRs, HI/LO, PC and 2 MiB RAM) and stays outside the
 repository. Indirect entries such as BIOS stubs are added with
-`--extra-entry ADDRESS`; the Silent Hill loaded slice emits 3,316 blocks and
-matched 200,000 executed blocks. Adding the resident mode dispatcher at
-`0x80087360` and its table targets produced 4,361 blocks. The startup trace
-does not reach that dispatcher; with `[0x800B9FD0]=3` a targeted checkpoint
+`--extra-entry ADDRESS`; the Silent Hill loaded slice emits 4,361 blocks and
+matched 200,000 executed blocks. The runner keeps one native bus and one
+oracle interpreter alive, so COP0, hardware, GTE/scratchpad and BIOS state
+persist across block boundaries instead of resetting at each checkpoint. The
+run advances to `0x800154CC`; the earlier per-block-reset 3,316-block slice
+parked at `0x80013130`. The startup trace still does not reach the resident
+mode dispatcher at `0x80087360`; with `[0x800B9FD0]=3` a targeted checkpoint
 runs `0x80087360 -> 0x800873A4 -> 0x80087448`, and
 `--watch-address 0x8002AB60` reports one read. This is still a verification
-slice, not a playable build: per-block hardware, BIOS and COP0 state is reset
-for the oracle comparison, and the run stops at the block budget.
+slice, not a playable build, and the run stops at the block budget.
 
 ## Disc formats
 
@@ -327,7 +329,7 @@ None.
 | Game | Status | Next milestone |
 | --- | --- | --- |
 | Spider-Man (USA) | Native interpreter runs the guest, its vblank dispatcher, VSync callbacks and the CD loader (whole files stream); emulated-cycle timers, DMA interrupt/DMA4 completion and SPU transfer stubs are committed | Confirm the emulated-cycle timers remove the remaining `CdSync`/loader stalls on disc, then chase the first display/GPU scene and GTE geometry |
-| Silent Hill (USA) | The interpreter streams 1,402 CD sectors (LBA 102-1402), draws 217,138 primitives and 91,379 VRAM pixels, and stops with the loader paused at LBA 1403 and the display off. The boot executable's startup runs 1,975 generated native blocks to the `InitHeap` seam. A 130M-instruction RAM snapshot then starts the resident main at `0x80032EE0`, which calls the loaded startup at `0x8002E630`; 200,000 generated blocks matched the interpreter on GPRs, HI/LO, COP0 and all 2 MiB RAM. The startup trace does not reach the six-entry mode dispatcher at `0x8002AB54`; a targeted mode-3 checkpoint executes its `0x8002AB60` entry and `0x80087448` | Persist hardware/BIOS/COP0 state across blocks and add the remaining device seams; the interpreter's post-load idle is an oracle question, not the native milestone |
+| Silent Hill (USA) | The interpreter streams 1,402 CD sectors (LBA 102-1402), draws 217,138 primitives and 91,379 VRAM pixels, and stops with the loader paused at LBA 1403 and the display off. The boot executable's startup runs 1,975 generated native blocks to the `InitHeap` seam. A 130M-instruction RAM snapshot then starts the resident main at `0x80032EE0`, which calls the loaded startup at `0x8002E630`; 200,000 generated blocks matched the interpreter on GPRs, HI/LO, COP0, hardware cycles and all 2 MiB RAM. One persistent native bus/interpreter keeps COP0, hardware, GTE/scratchpad and BIOS state across blocks, and the run advances to `0x800154CC`; the old reset-per-block slice stopped at `0x80013130`. The startup trace does not reach the six-entry mode dispatcher at `0x8002AB54`; a targeted mode-3 checkpoint executes its `0x8002AB60` entry and `0x80087448` | Add the remaining device seams, including native DMA transfer execution and hardware-register equality checks; the interpreter's post-load idle is an oracle question, not the native milestone |
 | Air Hockey (USA) | The interpreter opens the retail CHD directly, finds the ISO9660 volume, loads `SLUS_014.67` and runs 40M instructions: 71 interrupts delivered with no pending vectors, `ResetGraph` and `CD_init` printed through `B(0x35)`, and the same correct `GetStat` INT3 handshake; still no guest CD sectors or GPU primitives, and the run ends in a TIM1/GPUSTAT wait loop | Run with a larger step budget to clear the init wait, then follow CD init to its first sector reads and the first display/GPU scene |
 
 ## Contributing

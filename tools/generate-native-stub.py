@@ -436,11 +436,8 @@ def emit_block(
 ) -> tuple[list[str], int, bool]:
     """Emit one block. Returns (lines, next_address, ended_at_control)."""
     lines = [
-        f"std::uint32_t block_{entry:08X}(r6::CpuState& cpu, r6::Memory& memory,",
-        "                            r6::PlatformServices& services) {",
-        "    r6::NativeBus bus(memory, services);",
+        f"std::uint32_t block_{entry:08X}(r6::CpuState& cpu, r6::NativeBus& bus) {{",
         "    (void)bus;",
-        "    (void)services;",
         f"    // Block at 0x{entry:08X}",
     ]
     pc = entry
@@ -666,7 +663,6 @@ def main() -> int:
     lines = [
         "// GENERATED LOCALLY FROM A USER-SUPPLIED PS-X EXE.",
         "// Do not commit or distribute this file.",
-        '#include "r6/function_dispatch.h"',
         '#include "r6/native_runtime.h"',
         "",
         "#include <cstddef>",
@@ -680,7 +676,9 @@ def main() -> int:
     lines.append(f"    return {len(blocks)}u;")
     lines.append("}")
     lines.append("")
-    lines.append("void register_functions(r6::FunctionDispatcher& dispatcher) {")
+    lines.append(
+        "void register_functions(r6::NativeBlockDispatcher& dispatcher) {"
+    )
     for entry, _ in blocks:
         lines.append(
             f"    dispatcher.register_function(0x{entry:08X}u, &block_{entry:08X});"

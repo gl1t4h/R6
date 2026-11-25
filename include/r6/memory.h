@@ -58,6 +58,12 @@ public:
     // of RAM without routing through the hardware map.
     std::vector<std::uint8_t> snapshot() const { return bytes_; }
 
+    // Allocation-free comparison for the per-block differential check.
+    bool same_data(const Memory& other) const noexcept {
+        return translate_kseg_ == other.translate_kseg_ &&
+               bytes_ == other.bytes_;
+    }
+
     void restore(const std::vector<std::uint8_t>& bytes) {
         if (bytes.size() != bytes_.size()) {
             throw std::invalid_argument("R6 memory snapshot size mismatch");

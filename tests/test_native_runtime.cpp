@@ -38,6 +38,13 @@ std::uint32_t tail_block(
     return cpu.pc;
 }
 
+std::uint32_t persistent_block(CpuState& cpu, r6::NativeBus& bus) {
+    bus.advance_cycles(1);
+    cpu.gpr[2] = static_cast<std::uint32_t>(bus.hardware().cycles());
+    cpu.pc = 0x00003000u;
+    return cpu.pc;
+}
+
 void run_dispatcher_test() {
     Memory memory(64 * 1024, true);
     NullPlatformServices services;
@@ -62,6 +69,22 @@ void run_dispatcher_test() {
     R6_CHECK(cpu.gpr[3] == 1u);
 }
 
+void run_persistent_bus_test() {
+    Memory memory(64 * 1024, true);
+    NullPlatformServices services;
+    r6::NativeBus bus(memory, services);
+    r6::NativeBlockDispatcher dispatcher;
+    dispatcher.register_function(0x3000u, &persistent_block);
+
+    CpuState cpu{};
+    cpu.pc = 0x3000u;
+    cpu.pc = dispatcher.step(cpu, bus);
+    R6_CHECK(cpu.gpr[2] == 1u);
+    cpu.pc = dispatcher.step(cpu, bus);
+    R6_CHECK(cpu.gpr[2] == 2u);
+    R6_CHECK(bus.hardware().cycles() == 2u);
+}
+
 void run_unsupported_test() {
     CpuState cpu{};
     bool threw = false;
@@ -84,6 +107,12 @@ void run_memory_snapshot_test() {
     R6_CHECK(memory.read32(0x100u) == 0u);
     memory.restore(saved);
     R6_CHECK(memory.read32(0x100u) == 0x12345678u);
+
+    Memory same(4096, true);
+    same.restore(saved);
+    R6_CHECK(memory.same_data(same));
+    same.write32(0x100u, 1u);
+    R6_CHECK(!memory.same_data(same));
 }
 
 void run_ram_snapshot_round_trip() {
@@ -118,6 +147,7 @@ void run_ram_snapshot_round_trip() {
 
 void run_native_runtime_tests() {
     run_dispatcher_test();
+    run_persistent_bus_test();
     run_unsupported_test();
     run_memory_snapshot_test();
     run_ram_snapshot_round_trip();

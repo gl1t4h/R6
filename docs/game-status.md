@@ -99,20 +99,20 @@ None.
 - **Loaded image:** A 130M-instruction `--vblank` run with `--dump-snapshot`
   captured the resident image. The loader's call to `0x80032EE0` is the real
   entry; it calls the resource startup at `0x8002E630`, then the resident
-  runtime. Translating from `0x80032EE0` emitted 3,316 blocks and matched
-  50,000 executed blocks on GPRs, HI/LO, COP0 and all 2 MiB of RAM. A
-  200,000-block background replay matched every block; it spent the budget in
-  the loader/library waits at `0x80012A44` and `0x80013130` and never executed
-  the dispatcher at `0x80087360`. That dispatcher indexes the six-entry table
-  at `0x8002AB54` from `[0x800B9FD0]`; index 3 (`0x8002AB60`) calls
-  `0x80087448`, so this is a mode handler, not a constructor. Adding the
-  dispatcher and its table targets produced 4,361 blocks; 5,000 startup blocks
-  and a targeted mode-3 checkpoint matched, and a watch read `0x8002AB60`
-  exactly once.
-- **Next step:** Persist hardware, BIOS and COP0 state across blocks; the
-  current differential resets those at each checkpoint. Add the remaining
-  device seams before chasing the movie path. MDEC only becomes relevant if
-  the captured native path reaches it.
+  runtime. The persistent 4,361-block translation matched 200,000 executed
+  blocks on GPRs, HI/LO, COP0, hardware cycles and all 2 MiB of RAM. One
+  native bus and one oracle interpreter keep COP0, hardware, GTE/scratchpad
+  and BIOS state across block boundaries. The run advances to `0x800154CC`;
+  the earlier reset-per-block 3,316-block slice parked at `0x80013130`.
+  The startup trace still does not execute the dispatcher at `0x80087360`.
+  That dispatcher indexes the six-entry table at `0x8002AB54` from
+  `[0x800B9FD0]`; index 3 (`0x8002AB60`) calls `0x80087448`, so this is a mode
+  handler, not a constructor. A targeted mode-3 checkpoint matched and a
+  watch read `0x8002AB60` exactly once.
+- **Next step:** Add the remaining device seams, including native DMA
+  transfer execution and hardware-register equality checks, before chasing
+  the movie path. MDEC only becomes relevant if the captured native path
+  reaches it.
 - **Playable native build:** No
 - **Distributed game assets:** No
 

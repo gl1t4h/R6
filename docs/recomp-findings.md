@@ -597,39 +597,44 @@ gave the actual transition:
   and GTE commands are translated. `syscall` is a PC advance, matching the
   interpreter. REGIMM (`bgez` and friends) is decoded, including the link bit.
 - BIOS entries `0xA0`/`0xB0`/`0xC0` are serviced natively by `BiosServices`
-  instead of stopping the slice. Each block gets a fresh native and oracle
-  platform service, so BIOS flags start equal on both sides.
+  instead of stopping the slice. The native and oracle service objects now
+  live for the whole run, so event slots, HookEntryInt and BIOS flags persist
+  across blocks.
 - Generated blocks advance `HardwareMap` by one cycle after every
-  instruction. Without that, a timer-stabilization loop at `0x80013130`
-  exited natively while the interpreter kept looping; with the ticks both
-  sides see the same timer values.
+  instruction. A single persistent `NativeBus` owns the hardware map, GTE and
+  scratchpad; a single persistent `MipsInterpreter` is the oracle. COP0,
+  hardware cycles, timers, DMA registers, CD state and BIOS bookkeeping
+  therefore continue across block boundaries instead of resetting at each
+  checkpoint.
 
 ### Verification
 
 The generator was run with `--snapshot`, `--entry 0x80032EE0`,
-`--max-functions 512`, the 32 BIOS trampolines as extra entries, and the
-resident C-library entry `0x8001228C`. It emitted 3,316 blocks. A background
-differential replay with `--blocks 200000 --verbose` reported:
+`--max-functions 512`, the 32 BIOS trampolines as extra entries, the resident
+C-library entry `0x8001228C`, and the dispatcher targets. It emitted 4,361
+blocks. A background differential replay with `--blocks 200000 --verbose`
+reported:
 
 | Item | Result |
 | --- | --- |
 | Blocks executed and matched | 200,000 |
-| Mismatches | none (GPRs, HI/LO, COP0, 2 MiB RAM) |
-| Stop | block budget at `0x80013130` |
+| Mismatches | none (GPRs, HI/LO, COP0, hardware cycles, 2 MiB RAM) |
+| Stop | block budget at `0x800154CC` |
 | Dispatcher hits | none at `0x80087360`, `0x800873A4` or `0x80087448` |
 
-The 200,000 blocks were spent in the loader/library waits, not in the
-dispatcher. The real call site is the `jr` at `0x800873A4`; `0x8002AB60` is
-read by the `lw` at `0x800873B4`. Adding `0x80087360`, its six table targets
-and the seven targets of the nested `0x8002AB1C` table produced a 4,361-block
-translation. With `[0x800B9FD0]=3`, a targeted checkpoint ran
+The earlier reset-per-block 3,316-block slice matched 200,000 blocks but
+parked at `0x80013130`. With one persistent native bus and one persistent
+oracle, the same budget advances to `0x800154CC`, so the timer/hardware state
+is now continuous. The real dispatcher call site is the `jr` at
+`0x800873A4`; `0x8002AB60` is read by the `lw` at `0x800873B4`. With
+`[0x800B9FD0]=3`, a targeted checkpoint ran
 `0x80087360 -> 0x800873A4 -> 0x80087448`, matched 10 blocks, and
 `--watch-address 0x8002AB60` reported one read. The 4,361-block translation
 also matched 5,000 startup blocks.
 
 This is a mode dispatcher/handler, not a constructor runner; the earlier
 label was wrong for this image. The startup slice still does not reach the
-frame loop. Hardware, BIOS and COP0 state is reset at each block boundary, so
-a continuous native run still needs persistent device state. The snapshot
-also omits COP0 and hardware registers; only RAM and the integer CPU state are
-captured.
+frame loop. COP0, hardware cycles, timers, DMA registers, CD state and BIOS
+bookkeeping persist; native DMA transfer execution and full hardware-register
+equality checks are still missing. The snapshot also omits COP0 and hardware
+registers; only RAM and the integer CPU state are captured.
