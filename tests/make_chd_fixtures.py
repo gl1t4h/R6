@@ -8,7 +8,8 @@ to produce the committed files) is the only external tool:
     python3 tests/make_chd_fixtures.py                # chdman from PATH
     CHDMAN=/path/to/chdman python3 tests/make_chd_fixtures.py
 
-Every fixture is a 40-sector Mode 2 image (8 sectors per hunk by default):
+Every fixture is a 40-sector Mode 2 image (8 sectors per hunk by default),
+except the many-hunk image used to check the capped `--chd-info` dump:
 
     synthetic-none.chd       uncompressed hunks, 4-byte map
     synthetic-cdzl.chd       DEFLATE hunks, compressed map
@@ -18,6 +19,7 @@ Every fixture is a 40-sector Mode 2 image (8 sectors per hunk by default):
     synthetic-sparse.chd     zero-heavy sectors, exercising LZMA rep distances
     synthetic-small-hunk.chd two-sector hunks, exercising the distance tree
     synthetic-large-hunk.chd 32-sector hunks, 3-byte compressed lengths
+    synthetic-many-hunks.chd 4,096 sectors, 512 hunks for the dump cap
     synthetic-audio.chd      data track followed by an audio track
     synthetic-zstd.chd       Zstandard hunks, which R6 rejects by design
 """
@@ -78,6 +80,14 @@ def write_duplicate_image(path):
     path.write_bytes(bytes(data))
 
 
+def write_many_image(path, sectors):
+    data = bytearray()
+    for lba in range(sectors):
+        body = text_body("r6 synthetic sector {index:04d} ", lba)
+        data += sector(lba, body)
+    path.write_bytes(bytes(data))
+
+
 def write_sparse_image(path):
     """Mostly zero sectors, so LZMA emits long matches and rep rotations."""
     data = bytearray()
@@ -121,6 +131,8 @@ def main():
         write_duplicate_image(duplicate)
         sparse = work / "sparse.bin"
         write_sparse_image(sparse)
+        many = work / "many.bin"
+        write_many_image(many, 4096)
         audio = work / "audio.bin"
         write_audio_track(audio)
 
@@ -136,6 +148,10 @@ def main():
         sparse_cue.write_text('FILE "sparse.bin" BINARY\n'
                               '  TRACK 01 MODE2/2352\n'
                               '    INDEX 01 00:00:00\n', encoding="ascii")
+        many_cue = work / "many.cue"
+        many_cue.write_text('FILE "many.bin" BINARY\n'
+                            '  TRACK 01 MODE2/2352\n'
+                            '    INDEX 01 00:00:00\n', encoding="ascii")
         audio_cue = work / "audio.cue"
         audio_cue.write_text('FILE "data.bin" BINARY\n'
                              '  TRACK 01 MODE2/2352\n'
@@ -153,6 +169,7 @@ def main():
             ("synthetic-sparse.chd", sparse_cue, ["-c", "cdlz"]),
             ("synthetic-small-hunk.chd", cue,
              ["-hs", "4896", "-c", "cdlz"]),
+            ("synthetic-many-hunks.chd", many_cue, []),
             ("synthetic-large-hunk.chd", cue, ["-hs", "78336"]),
             ("synthetic-audio.chd", audio_cue, []),
             ("synthetic-zstd.chd", cue, ["-c", "cdzs"]),

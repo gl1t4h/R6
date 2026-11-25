@@ -32,6 +32,7 @@ public:
     bool is_open() const { return open_; }
     std::uint32_t sector_count() const { return sector_count_; }
     std::uint32_t hunk_bytes() const { return hunk_bytes_; }
+    std::uint32_t hunk_count() const { return hunk_count_; }
     std::uint32_t frame_bytes() const { return frame_bytes_; }
     const std::string& error() const { return error_; }
 

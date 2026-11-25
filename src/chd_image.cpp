@@ -1166,7 +1166,7 @@ std::string ChdImage::describe() const {
         }
         text += ", compressed map";
     }
-    for (std::uint32_t index = 0; index < hunk_count_; ++index) {
+    const auto append_hunk = [&text, this](std::uint32_t index) {
         const auto& entry = map_[index];
         text += "\nhunk " + std::to_string(index) + ": ";
         if (entry.type == kTypeNone) {
@@ -1180,6 +1180,26 @@ std::string ChdImage::describe() const {
         }
         text += " offset " + std::to_string(entry.offset) + " length " +
                 std::to_string(entry.length);
+    };
+
+    // A full disc has thousands of hunks, so only the edges are useful.
+    constexpr std::uint32_t kHeadHunks = 8;
+    constexpr std::uint32_t kTailHunks = 4;
+    if (hunk_count_ <= kHeadHunks + kTailHunks) {
+        for (std::uint32_t index = 0; index < hunk_count_; ++index) {
+            append_hunk(index);
+        }
+    } else {
+        for (std::uint32_t index = 0; index < kHeadHunks; ++index) {
+            append_hunk(index);
+        }
+        text += "\n... " +
+                std::to_string(hunk_count_ - kHeadHunks - kTailHunks) +
+                " hunks omitted ...";
+        for (std::uint32_t index = hunk_count_ - kTailHunks;
+             index < hunk_count_; ++index) {
+            append_hunk(index);
+        }
     }
     return text;
 }

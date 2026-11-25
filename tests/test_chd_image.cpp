@@ -180,6 +180,23 @@ void small_hunks_read_match() {
     check_sectors(image, false, kSectors);
 }
 
+void many_hunks_are_summarised() {
+    ChdImage image;
+    if (!open_fixture(image, "synthetic-many-hunks.chd")) return;
+    R6_CHECK(image.sector_count() == 4096u);
+    R6_CHECK(image.hunk_count() == 512u);
+    check_sectors(image, false, 4096);
+
+    // 8 leading and 4 trailing hunks stay visible; the other 500 collapse.
+    const auto summary = image.describe();
+    R6_CHECK(summary.find("\nhunk 0:") != std::string::npos);
+    R6_CHECK(summary.find("\nhunk 7:") != std::string::npos);
+    R6_CHECK(summary.find("\nhunk 8:") == std::string::npos);
+    R6_CHECK(summary.find("500 hunks omitted") != std::string::npos);
+    R6_CHECK(summary.find("\nhunk 508:") != std::string::npos);
+    R6_CHECK(summary.find("\nhunk 511:") != std::string::npos);
+}
+
 void large_hunks_read_match() {
     ChdImage image;
     if (!open_fixture(image, "synthetic-large-hunk.chd")) return;
@@ -242,6 +259,7 @@ void run_chd_image_tests() {
     self_references_read_match();
     sparse_hunks_read_match();
     small_hunks_read_match();
+    many_hunks_are_summarised();
     large_hunks_read_match();
     data_track_reads_before_audio();
     unsupported_codec_is_reported();
