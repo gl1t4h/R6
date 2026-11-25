@@ -105,15 +105,16 @@ None.
   66,888 sectors, `cdlz`/`cdzl` codecs, Huffman-compressed map). The ISO9660
   volume is discovered and the PS-X EXE identified (`SLUS_014.67`, 280,576
   bytes at LBA 28, entry `0x80010d54`). A 40M-instruction run executes early
-  init: 70 vblanks pass, and four `B(0x35)` kernel calls are logged as
-  unhandled. That run read no guest CD sectors, submitted no GPU primitives
-  and delivered no interrupts, because the guest installs no handler at
+  init: 70 vblanks pass and four `B(0x35)` calls write to descriptor 1
+  (stdout); the kernel shim now services those `FileWrite` calls as TTY text.
+  That run read no guest CD sectors, submitted no GPU primitives and
+  delivered no interrupts, because the guest installs no handler at
   `0x80000080`; the interpreter now falls back to the guest's `HookEntryInt`
   buffer, and the on-disc run with that change has not been reconfirmed yet.
 - **Next step:** Rerun on disc with `--vblank` to confirm the `HookEntryInt`
-  fallback raises `interrupts delivered`, implement or route the `B(0x35)`
-  calls if they sit on the boot path, then follow CD init to its first sector
-  reads and capture when the first draw-environment and polygon packets appear.
+  fallback raises `interrupts delivered`, then follow CD init to its first
+  sector reads and capture when the first draw-environment and polygon
+  packets appear.
 - **Playable native build:** No
 - **Distributed game assets:** No
 

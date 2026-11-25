@@ -113,6 +113,10 @@ private:
     std::uint32_t set_event_enabled(std::uint32_t handle);
 
     void putchar(char character);
+    // B(35h) FileWrite(fd, src, length), same as A(03h). Descriptor 1 is the
+    // TTY console; the shim has no file system behind any other descriptor.
+    std::uint32_t file_write(std::uint32_t fd, std::uint32_t source,
+                             std::uint32_t length, Memory& memory);
     void write_text(const std::string& text);
     std::uint32_t puts(Memory& memory, std::uint32_t address);
     std::uint32_t print_format(Memory& memory, const CpuState& cpu);

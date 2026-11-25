@@ -148,6 +148,29 @@ void event_slots() {
     R6_CHECK(cpu.gpr[2] == 0);
 }
 
+// B(35h) is FileWrite(fd,src,length), the same function as A(03h); games
+// reach it through the kernel table while printing boot-time messages.
+void file_write_reaches_stdout() {
+    BiosServices bios;
+    Memory memory(0x2000);
+    CpuState cpu;
+
+    write_string(memory, 0x300, "boot log\n");
+    cpu.gpr[9] = 0x35;  // FileWrite(fd, src, length)
+    cpu.gpr[4] = 1;     // stdout
+    cpu.gpr[5] = 0x300;
+    cpu.gpr[6] = 8;
+    bios.dispatch(BiosTable::b0, cpu, memory);
+    R6_CHECK(cpu.gpr[2] == 8);
+    R6_CHECK(bios.tty_output() == "boot log");
+
+    cpu.gpr[4] = 2;  // no file system behind other descriptors
+    bios.dispatch(BiosTable::b0, cpu, memory);
+    R6_CHECK(cpu.gpr[2] == 0xFFFFFFFFu);
+    R6_CHECK(bios.tty_output() == "boot log");
+    R6_CHECK(bios.unhandled_call_count() == 0);
+}
+
 void unhandled_vectors_are_recorded() {
     BiosServices bios;
     Memory memory(0x2000);
@@ -175,5 +198,6 @@ void run_bios_services_tests() {
     printf_reads_stack_arguments();
     exit_sets_state();
     event_slots();
+    file_write_reaches_stdout();
     unhandled_vectors_are_recorded();
 }

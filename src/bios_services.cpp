@@ -434,6 +434,8 @@ std::uint32_t BiosServices::handle_b0(std::uint32_t vector, CpuState& cpu,
             clear_pad_ = cpu.gpr[4] != 0;
             return previous;
         }
+        case 0x35:  // FileWrite(fd, src, length), same as A(03h).
+            return file_write(cpu.gpr[4], cpu.gpr[5], cpu.gpr[6], memory);
         case 0x3D:  // putchar
             putchar(static_cast<char>(cpu.gpr[4] & 0xFFu));
             return cpu.gpr[4];
@@ -542,6 +544,24 @@ std::uint32_t BiosServices::set_event_enabled(std::uint32_t handle) {
 
 void BiosServices::putchar(char character) {
     write_text(std::string(1, character));
+}
+
+std::uint32_t BiosServices::file_write(std::uint32_t fd,
+                                       std::uint32_t source,
+                                       std::uint32_t length,
+                                       Memory& memory) {
+    // The console is descriptor 1 (putchar itself is write(1, buf, 1)). A
+    // kernel without a file system has nothing behind any other descriptor,
+    // so report the documented failure value.
+    if (fd != 1) return 0xFFFFFFFFu;
+    std::uint32_t written = 0;
+    while (written < length) {
+        std::uint8_t value = 0;
+        if (!memory.try_read8(source + written, value)) break;
+        putchar(static_cast<char>(value));
+        ++written;
+    }
+    return written;
 }
 
 void BiosServices::write_text(const std::string& text) {
