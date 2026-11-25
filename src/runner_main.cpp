@@ -64,6 +64,8 @@ int main(int argc, char** argv) {
     bool search_code = false;
     bool trace_cd = false;
     bool dump_stream = false;
+    // Guest ranges to print after the run, for reading a hot loop's code.
+    std::vector<std::pair<std::uint32_t, std::uint32_t>> dump_ranges;
     bool chd_info = false;
     std::vector<std::uint32_t> watch_writes;
     std::string search_text;
@@ -93,6 +95,19 @@ int main(int argc, char** argv) {
             search_text = argv[++index];
         } else if (argument == "--trace-cd") {
             trace_cd = true;
+        } else if (argument == "--dump-range" && index + 1 < argc) {
+            // ADDR:COUNT, both base 0, e.g. 0x80015400:96.
+            const std::string spec = argv[++index];
+            const auto split = spec.find(':');
+            if (split == std::string::npos) {
+                std::cerr << "r6-run: --dump-range expects ADDR:COUNT\n";
+                return 2;
+            }
+            dump_ranges.emplace_back(
+                static_cast<std::uint32_t>(
+                    std::stoul(spec.substr(0, split), nullptr, 0)),
+                static_cast<std::uint32_t>(
+                    std::stoul(spec.substr(split + 1), nullptr, 0)));
         } else if (argument == "--dump-stream") {
             dump_stream = true;
         } else if (argument == "--chd-info") {
@@ -130,7 +145,8 @@ int main(int argc, char** argv) {
     if (input.empty()) {
         std::cerr << "usage: r6-run <game.cue|game.bin|game.chd> [--steps N]"
                      " [--entry 0xADDR] [--poke 0xADDR=0xVALUE] [--vblank]"
-                     " [--dump-frame frame.ppm] [--chd-info]\n"
+                     " [--dump-frame frame.ppm] [--dump-range 0xADDR:COUNT]"
+                     " [--chd-info]\n"
                   << "Runs your own local copy. No game data is copied or"
                      " uploaded.\n";
         return 2;
@@ -651,6 +667,9 @@ int main(int argc, char** argv) {
         dump_words(0x80139AC0u, 16u, "heap@80139AC0");
         dump_words(0x80065340u, 32u, "code@65340");
         dump_words(0x80064F80u, 16u, "code@64f80");
+        for (const auto& range : dump_ranges) {
+            dump_words(range.first, range.second, "range");
+        }
     }
 
     if (!frame_path.empty()) {
