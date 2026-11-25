@@ -173,6 +173,11 @@ MAME 0.289 `chdman` output is the tested case. The fixtures under
 text (no game data), and every sector they expose is compared against the
 original synthetic image. No retail disc has been run through this path yet.
 
+If a CHD opens but a sector read fails, `r6-run --chd-info file.chd` prints the
+header, the codecs and every hunk's type, offset and length without booting
+anything, and the error itself names the failing hunk. That output is enough to
+tell a map the reader misparsed from a container it does not support.
+
 If a file still cannot be read, expand it once with `chdman` (shipped with
 MAME) and point the front ends at the `.cue` instead:
 

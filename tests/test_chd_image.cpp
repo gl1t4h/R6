@@ -171,6 +171,15 @@ void sparse_hunks_read_match() {
     }
 }
 
+void small_hunks_read_match() {
+    // Two-sector hunks make LZMA use the shortest match distances, where
+    // distance slot 4 indexes the first model entry.
+    ChdImage image;
+    if (!open_fixture(image, "synthetic-small-hunk.chd")) return;
+    R6_CHECK(image.hunk_bytes() == 4896u);
+    check_sectors(image, false, kSectors);
+}
+
 void large_hunks_read_match() {
     ChdImage image;
     if (!open_fixture(image, "synthetic-large-hunk.chd")) return;
@@ -232,6 +241,7 @@ void run_chd_image_tests() {
     mixed_codecs_read_match();
     self_references_read_match();
     sparse_hunks_read_match();
+    small_hunks_read_match();
     large_hunks_read_match();
     data_track_reads_before_audio();
     unsupported_codec_is_reported();

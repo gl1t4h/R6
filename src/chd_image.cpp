@@ -498,12 +498,18 @@ std::uint32_t decode_tree(RangeDecoder& range, std::uint16_t* probabilities,
     return symbol - (1u << bits);
 }
 
+// `root` is the index of the tree's first node (the one a 1-based tree
+// would call node 1).  A root of 0 is therefore a legal tree; passing a
+// pointer instead would step one element before the array for distance
+// slot 4, and the unsigned offset would wrap into a wild address.
 std::uint32_t decode_reverse_tree(RangeDecoder& range,
-                                  std::uint16_t* probabilities, int bits) {
+                                  std::uint16_t* probabilities, int root,
+                                  int bits) {
     std::uint32_t symbol = 0;
     std::uint32_t index = 1;
     for (int bit_index = 0; bit_index < bits; ++bit_index) {
-        const std::uint32_t value = range.bit(probabilities[index]);
+        const auto offset = root + static_cast<int>(index) - 1;
+        const std::uint32_t value = range.bit(probabilities[offset]);
         index = (index << 1) | value;
         symbol |= value << bit_index;
     }
@@ -662,11 +668,12 @@ private:
         const auto direct_bits = static_cast<int>((pos_slot >> 1) - 1);
         std::uint32_t distance = (2u | (pos_slot & 1u)) << direct_bits;
         if (pos_slot < 14) {
-            distance += decode_reverse_tree(
-                range, pos_decoders_ + (distance - pos_slot - 1), direct_bits);
+            const auto root = static_cast<int>(distance - pos_slot);
+            distance +=
+                decode_reverse_tree(range, pos_decoders_, root, direct_bits);
         } else {
             distance += range.direct(direct_bits - 4) << 4;
-            distance += decode_reverse_tree(range, align_, 4);
+            distance += decode_reverse_tree(range, align_, 1, 4);
         }
         return distance;
     }
@@ -737,7 +744,9 @@ bool decode_cd_hunk(std::uint32_t codec, const std::uint8_t* source,
         base_length = (base_length << 8) | source[ecc_bytes + index];
     }
     if (base_length > source_size - header_bytes) {
-        error = "CD hunk payload is truncated";
+        error = "CD hunk payload is truncated (header says " +
+                std::to_string(base_length) + " bytes, block has " +
+                std::to_string(source_size - header_bytes) + ")";
         return false;
     }
 
@@ -804,6 +813,7 @@ bool ChdImage::open(const std::filesystem::path& path, std::string& error) {
         return false;
     }
     const auto version = be32(header + 12);
+    version_ = version;
     if (version != 5) {
         error = "CHD version " + std::to_string(version) +
                 " is not supported (version 5 only)";
@@ -1072,7 +1082,10 @@ bool ChdImage::decode_hunk(std::uint32_t index, std::string& error) {
                                          compressed.size(), buffer_.data(),
                                          buffer_.size(), error);
         }
-        if (!decoded) return false;
+        if (!decoded) {
+            error = "hunk " + std::to_string(target) + ": " + error;
+            return false;
+        }
     } else if (entry.type == kTypeParent) {
         error = "hunk requires a parent image (delta CHD)";
         return false;
@@ -1133,6 +1146,42 @@ bool ChdImage::read_sector_header(std::uint32_t lba, std::uint8_t* destination,
     }
     std::memcpy(destination, frame + kHeaderOffset, kHeaderBytes);
     return true;
+}
+
+std::string ChdImage::describe() const {
+    std::string text = "CHD v" + std::to_string(version_) + ", " +
+                       std::to_string(hunk_count_) + " hunks of " +
+                       std::to_string(hunk_bytes_) + " bytes (" +
+                       std::to_string(hunk_bytes_ / kFrameBytes) +
+                       " frames), " + std::to_string(sector_count_) +
+                       " sectors, ";
+    if (compressors_[0] == 0) {
+        text += "uncompressed, plain map";
+    } else {
+        text += "codecs ";
+        text += codec_name(compressors_[0]);
+        if (compressors_[1] != 0) {
+            text += "+";
+            text += codec_name(compressors_[1]);
+        }
+        text += ", compressed map";
+    }
+    for (std::uint32_t index = 0; index < hunk_count_; ++index) {
+        const auto& entry = map_[index];
+        text += "\nhunk " + std::to_string(index) + ": ";
+        if (entry.type == kTypeNone) {
+            text += "none";
+        } else if (entry.type == kTypeSelf) {
+            text += "self";
+        } else if (entry.type == kTypeParent) {
+            text += "parent";
+        } else {
+            text += codec_name(compressors_[codec_at(entry.type)]);
+        }
+        text += " offset " + std::to_string(entry.offset) + " length " +
+                std::to_string(entry.length);
+    }
+    return text;
 }
 
 }  // namespace r6

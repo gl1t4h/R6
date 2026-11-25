@@ -18,6 +18,7 @@
 #include <vector>
 
 #include "r6/boot_image.h"
+#include "r6/chd_image.h"
 #include "r6/mips_interpreter.h"
 #include "r6/software_gpu.h"
 #include "r6/windows_platform_services.h"
@@ -63,6 +64,7 @@ int main(int argc, char** argv) {
     bool search_code = false;
     bool trace_cd = false;
     bool dump_stream = false;
+    bool chd_info = false;
     std::vector<std::uint32_t> watch_writes;
     std::string search_text;
 
@@ -93,6 +95,8 @@ int main(int argc, char** argv) {
             trace_cd = true;
         } else if (argument == "--dump-stream") {
             dump_stream = true;
+        } else if (argument == "--chd-info") {
+            chd_info = true;
         } else if (argument == "--watch-write" && index + 1 < argc) {
             watch_writes.push_back(static_cast<std::uint32_t>(
                 std::stoul(argv[++index], nullptr, 0)));
@@ -126,10 +130,21 @@ int main(int argc, char** argv) {
     if (input.empty()) {
         std::cerr << "usage: r6-run <game.cue|game.bin|game.chd> [--steps N]"
                      " [--entry 0xADDR] [--poke 0xADDR=0xVALUE] [--vblank]"
-                     " [--dump-frame frame.ppm]\n"
+                     " [--dump-frame frame.ppm] [--chd-info]\n"
                   << "Runs your own local copy. No game data is copied or"
                      " uploaded.\n";
         return 2;
+    }
+
+    if (chd_info) {
+        r6::ChdImage image;
+        std::string chd_error;
+        if (!image.open(input, chd_error)) {
+            std::cerr << "r6-run: " << chd_error << "\n";
+            return 1;
+        }
+        std::cout << image.describe() << "\n";
+        return 0;
     }
 
     const auto bin_path = resolve_bin(input);

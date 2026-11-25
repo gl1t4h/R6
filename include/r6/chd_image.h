@@ -35,6 +35,9 @@ public:
     std::uint32_t frame_bytes() const { return frame_bytes_; }
     const std::string& error() const { return error_; }
 
+    // Container summary plus one line per hunk, for `r6-run --chd-info`.
+    std::string describe() const;
+
     bool read_user_sector(std::uint32_t lba, std::uint8_t* destination,
                           std::size_t destination_size);
     bool read_sector_header(std::uint32_t lba, std::uint8_t* destination,
@@ -51,15 +54,13 @@ private:
     bool load_map(std::string& error);
     bool load_compressed_map(std::string& error);
     bool decode_hunk(std::uint32_t index, std::string& error);
-    bool decode_cd(const std::uint8_t* source, std::size_t source_size,
-                   std::size_t destination_size, std::uint8_t* destination,
-                   std::string& error);
     bool read_at(std::uint64_t offset, std::uint8_t* destination,
                  std::size_t size);
     const std::uint8_t* sector(std::uint32_t lba, std::string& error);
 
     std::ifstream file_;
     bool open_{false};
+    std::uint32_t version_{0};
     std::uint32_t hunk_bytes_{0};
     std::uint32_t frame_bytes_{0};
     std::uint32_t sector_count_{0};

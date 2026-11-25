@@ -16,6 +16,7 @@ Every fixture is a 40-sector Mode 2 image (8 sectors per hunk by default):
     synthetic-default.chd    chdman's default codec set
     synthetic-duplicate.chd  repeated hunks, exercising SELF references
     synthetic-sparse.chd     zero-heavy sectors, exercising LZMA rep distances
+    synthetic-small-hunk.chd two-sector hunks, exercising the distance tree
     synthetic-large-hunk.chd 32-sector hunks, 3-byte compressed lengths
     synthetic-audio.chd      data track followed by an audio track
     synthetic-zstd.chd       Zstandard hunks, which R6 rejects by design
@@ -150,6 +151,8 @@ def main():
             ("synthetic-default.chd", cue, []),
             ("synthetic-duplicate.chd", duplicate_cue, []),
             ("synthetic-sparse.chd", sparse_cue, ["-c", "cdlz"]),
+            ("synthetic-small-hunk.chd", cue,
+             ["-hs", "4896", "-c", "cdlz"]),
             ("synthetic-large-hunk.chd", cue, ["-hs", "78336"]),
             ("synthetic-audio.chd", audio_cue, []),
             ("synthetic-zstd.chd", cue, ["-c", "cdzs"]),
