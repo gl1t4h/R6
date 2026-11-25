@@ -78,22 +78,24 @@ None.
 - **Status:** Interpreter execution runner (early boot)
 - **Progress:** 10%
 - **Completed:** Opens the retail CHD version 5 image directly (`cdlz`
-  hunks, Huffman-compressed map, 32,765 hunks, 262,116 sectors) after the map
-  reader
-  was fixed to parse it correctly and to reject incoherent maps. The ISO9660
-  volume is discovered and the PS-X EXE identified (`SLUS_007.07`, 79,872
-  bytes at LBA 24, entry `0x80012f7c`). A 40M-instruction on-disc run now
-  delivers 71 interrupts (70 vertical blanks and one CD interrupt), with no
-  pending vectors and no handler overruns, and the guest TTY prints
-  `CD_init:addr=80022998`. The CD trace shows the driver's first command is
-  `GetStat` (01h): the controller raises INT3, the guest reads the flag as
-  `0x04`, drains the eight-byte reply, acknowledges with `07h` and enables
-  interrupts 1-3. No guest CD sectors have been read and no GPU primitives
-  submitted; the run ends in a TIM1/GPUSTAT wait loop at the step budget.
-- **Next step:** Rerun with a larger step budget (120M-200M instructions) to
-  see whether the loop is a timed init delay, and use `--dump-range` on the
-  loop PCs if it does not move; then follow CD init to its first sector
-  reads and capture the first draw-environment and polygon packets.
+  hunks, Huffman-compressed map, 32,765 hunks, 262,116 sectors) and discovers
+  the ISO9660 volume and PS-X EXE (`SLUS_007.07`, 79,872 bytes at LBA 24,
+  entry `0x80012f7c`). The CD controller now matches the driver's handshake
+  closely enough to stream: interrupt types are reported as the type value
+  (INT1/INT2/INT3), banks 2/3 +2/+3 stay audio volumes instead of clearing the
+  interrupt mask, and the next sector arrives on a timer instead of inside the
+  acknowledge, so the guest's handler returns between sectors. The kernel
+  HookEntryInt path is exercised, and the CD dispatcher may legitimately run
+  for a streaming read, so the handler-overrun guard is configurable
+  (2,000,000 instructions by default; its test pins a small value). A
+  130M-instruction run reads 1,402 sectors (LBA 102 through 1402) without
+  loader retries, draws 217,138 GPU primitives (31,250 fills) and 91,379
+  VRAM pixels, and stops with the loader paused at LBA 1403 and the display
+  still disabled.
+- **Next step:** The game idles after the last CD Pause with the display off;
+  identify the post-load wait and add MDEC decoding for the movie that
+  follows, which is the remaining bootstrap device. Use a 150M+ instruction
+  budget.
 - **Playable native build:** No
 - **Distributed game assets:** No
 

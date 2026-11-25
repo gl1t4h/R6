@@ -19,7 +19,6 @@ constexpr std::uint32_t kDmaBase = 0x1F801080u;
 constexpr std::uint32_t kDmaEnd = 0x1F801100u;
 // Sentinel return address used to call a guest interrupt routine from the run
 // loop and notice when it returns.
-constexpr std::uint64_t kInterruptStepBudget = 50000u;
 constexpr std::uint64_t kMaxInterruptOverruns = 1000;
 
 constexpr std::uint32_t reg(std::uint32_t instruction, std::uint32_t shift) {
@@ -564,7 +563,7 @@ RunResult MipsInterpreter::run(std::uint64_t max_steps) {
 
         if (in_interrupt_) {
             ++irq_hot_[current_pc];
-            if (++interrupt_steps_ > kInterruptStepBudget) {
+            if (++interrupt_steps_ > interrupt_step_budget_) {
                 // The routine left its own context, so drop the call and resume
                 // the interrupted stream. After a few of these, stop delivering
                 // interrupts rather than burning the budget on them.

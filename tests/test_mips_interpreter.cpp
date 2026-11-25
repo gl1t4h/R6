@@ -419,6 +419,42 @@ void cdrom_command_answer_is_delayed() {
     R6_CHECK((hardware.interrupt_status() & 0x04u) != 0);
 }
 
+// A read sector only becomes visible after the drive's sector time, so the
+// guest's interrupt loop can return between sectors instead of draining a
+// whole file inside one handler.
+void cdrom_read_sector_arrives_after_delay() {
+    Memory ram(2u * 1024u * 1024u);
+    TestServices services;
+    MipsInterpreter interpreter(ram, services);
+    auto& hardware = interpreter.hardware();
+    auto& cdrom = hardware.cdrom();
+    cdrom.set_command_delay(0);
+    cdrom.set_sector_delay(1000);
+
+    hardware.write_cdrom(0x1F801800u, 0);
+    hardware.write_cdrom(0x1F801801u, 0x06);  // ReadN
+    R6_CHECK((hardware.interrupt_status() & 0x04u) != 0);  // INT3
+
+    hardware.write_cdrom(0x1F801800u, 1);
+    hardware.write_cdrom(0x1F801803u, 0x07);  // ack INT3, arms first sector
+    R6_CHECK((hardware.interrupt_status() & 0x04u) == 0);
+    hardware.advance_cycles(999);
+    R6_CHECK((hardware.interrupt_status() & 0x04u) == 0);
+    hardware.advance_cycles(1);
+    R6_CHECK((hardware.interrupt_status() & 0x04u) != 0);  // INT1
+
+    // Drain the 2060-byte FIFO, then acknowledge. The next sector is armed but
+    // must wait for its own delay rather than appear during the handler.
+    for (int index = 0; index < 515; ++index) cdrom.read_word();
+    hardware.write_cdrom(0x1F801800u, 1);
+    hardware.write_cdrom(0x1F801803u, 0x07);  // ack INT1
+    R6_CHECK((hardware.interrupt_status() & 0x04u) == 0);
+    hardware.advance_cycles(999);
+    R6_CHECK((hardware.interrupt_status() & 0x04u) == 0);
+    hardware.advance_cycles(1);
+    R6_CHECK((hardware.interrupt_status() & 0x04u) != 0);
+}
+
 // GPUSTAT bit 31 is the drawing field: zero through vertical blank and the
 // field polarity afterwards. Bit 22 is colour depth, so it must not follow
 // the field.
@@ -568,6 +604,7 @@ void interrupt_overrun_returns_to_epc() {
     auto& cpu = interpreter.cpu();
     cpu.pc = 0x80010000u;
 
+    interpreter.set_interrupt_budget(50000);
     ram.write32(0x80, 0x1000FFFFu);      // b . (handler that never returns)
     ram.write32(0x10000, 0x24080001u);   // addiu t0, zero, 1
     ram.write32(0x10004, 0x0000000Du);   // break
@@ -627,6 +664,7 @@ void run_mips_interpreter_tests() {
     cdrom_command_acknowledges_then_completes();
     cdrom_interrupt_line_honours_the_enable_mask();
     cdrom_command_answer_is_delayed();
+    cdrom_read_sector_arrives_after_delay();
     interrupt_takes_the_exception_vector();
     interrupt_handler_returns_through_rfe();
     interrupt_without_a_vector_stays_pending();

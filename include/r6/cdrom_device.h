@@ -26,6 +26,12 @@ public:
     // the state byte the handler had just set; the command is lost and the
     // driver waits forever. Holding it briefly lets the guest get there.
     static constexpr std::uint64_t kCommandDelayCycles = 8000;
+    // The drive delivers one sector every so often, not the instant the FIFO
+    // empties. Presenting it synchronously made the guest's interrupt loop
+    // drain a whole file inside one exception, which no real handler does and
+    // which the interpreter's handler budget eventually has to break. A short
+    // asynchronous delay lets the handler return after each sector.
+    static constexpr std::uint64_t kSectorDelayCycles = 4000;
 
     explicit CdromDevice(PlatformServices& services) : services_(services) {}
 
@@ -34,22 +40,39 @@ public:
     void set_command_delay(std::uint64_t cycles) {
         command_delay_cycles_ = cycles;
     }
+    void set_sector_delay(std::uint64_t cycles) {
+        sector_delay_cycles_ = cycles;
+    }
 
-    // Advances the command-acceptance timer. Returns true when a command was
-    // executed, so the caller can refresh the interrupt line.
+    // Advances the command-acceptance and sector-delivery timers. Returns true
+    // when something became visible to the guest, so the caller can refresh the
+    // interrupt line.
     bool advance_cycles(std::uint64_t count) {
-        if (!command_pending_) return false;
-        if (count < pending_delay_) {
-            pending_delay_ -= count;
-            return false;
+        bool changed = false;
+        if (command_pending_) {
+            if (count < pending_delay_) {
+                pending_delay_ -= count;
+            } else {
+                const auto command = pending_command_;
+                command_pending_ = false;
+                pending_delay_ = 0;
+                parameters_ = pending_parameters_;
+                pending_parameters_.clear();
+                execute_command(command);
+                changed = true;
+            }
         }
-        const auto command = pending_command_;
-        command_pending_ = false;
-        pending_delay_ = 0;
-        parameters_ = pending_parameters_;
-        pending_parameters_.clear();
-        execute_command(command);
-        return true;
+        if (sector_pending_) {
+            if (count < sector_delay_) {
+                sector_delay_ -= count;
+            } else {
+                sector_pending_ = false;
+                sector_delay_ = 0;
+                present_sector();
+                changed = true;
+            }
+        }
+        return changed;
     }
 
     // Byte access to 0x1F801800..0x1F801803.
@@ -191,14 +214,25 @@ private:
     std::uint8_t pop_data() {
         if (data_index_ >= data_.size()) return 0;
         const auto value = data_[data_index_++];
-        if (reading_ && data_index_ >= data_.size()) {
+        if (data_index_ >= data_.size()) {
             // The driver acknowledges the sector interrupt first and only then
             // runs the DMA that empties the FIFO, so the next sector can become
             // ready either before or after the drain. Handle both orders.
-            next_sector_pending_ = true;
-            if (data_acknowledged_) present_sector();
+            if (reading_) {
+                next_sector_pending_ = true;
+                if (data_acknowledged_) schedule_sector();
+            }
         }
         return value;
+    }
+
+    // Arms the next sector for delivery after the drive's sector time. The
+    // presentation itself happens from advance_cycles(), outside the guest's
+    // interrupt handler.
+    void schedule_sector() {
+        next_sector_pending_ = false;
+        sector_pending_ = true;
+        sector_delay_ = sector_delay_cycles_;
     }
 
     void present_sector() {
@@ -287,12 +321,12 @@ private:
         // the previous data-ready interrupt.
         if (start_read_after_ack_) {
             start_read_after_ack_ = false;
-            present_sector();
+            schedule_sector();
             return;
         }
         if (previous == kIntDataReady && reading_) {
             data_acknowledged_ = true;
-            if (next_sector_pending_) present_sector();
+            if (next_sector_pending_) schedule_sector();
         }
     }
 
@@ -414,6 +448,8 @@ private:
                 reading_ = false;
                 data_end_raised_ = false;
                 next_sector_pending_ = false;
+                sector_pending_ = false;
+                sector_delay_ = 0;
                 data_acknowledged_ = false;
                 begin_command(kIntAcknowledge, kIntComplete);
                 break;
@@ -553,6 +589,9 @@ private:
     bool data_end_raised_{false};
     bool start_read_after_ack_{false};
     bool next_sector_pending_{false};
+    bool sector_pending_{false};
+    std::uint64_t sector_delay_cycles_{kSectorDelayCycles};
+    std::uint64_t sector_delay_{0};
     bool data_acknowledged_{false};
     // SetMode bit 6: the drive decodes XA-ADPCM audio sectors and keeps them
     // out of the data FIFO.

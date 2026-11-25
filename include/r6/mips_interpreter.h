@@ -139,6 +139,12 @@ public:
     // Delivering vertical-blank interrupts is opt-in: the guest handler needs
     // devices that are still stubs, so it can park inside the handler.
     void set_vblank_enabled(bool enabled) { vblank_enabled_ = enabled; }
+    // Handler budget for the overrun guard. The CD dispatcher drains sectors
+    // inside its own loop, so too small a budget unwinds it mid-read; tests
+    // that check the guard pin their own value here.
+    void set_interrupt_budget(std::uint64_t steps) {
+        interrupt_step_budget_ = steps;
+    }
     std::uint64_t unknown_hardware_reads() const { return unknown_hardware_reads_; }
     std::uint64_t unknown_hardware_writes() const {
         return unknown_hardware_writes_;
@@ -264,6 +270,9 @@ private:
     bool vblank_enabled_{false};
     bool in_interrupt_{false};
     std::uint64_t interrupt_steps_{0};
+    // Long enough for the CD streaming dispatcher, short enough to catch a
+    // handler that never returns.
+    std::uint64_t interrupt_step_budget_{2000000u};
     // SR before the exception push, kept so an abandoned handler can be unwound
     // without leaving interrupts disabled.
     std::uint32_t interrupt_saved_sr_{0};
