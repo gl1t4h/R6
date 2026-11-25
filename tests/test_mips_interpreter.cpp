@@ -263,6 +263,41 @@ void timer_mode_reads_back() {
     R6_CHECK(cpu.gpr[2] == 0x00400002u);
 }
 
+// DuckStation's timer model: timer 0 counts sysclk or dot clock, timer 1
+// sysclk or hblank, timer 2 sysclk or sysclk/8 (bit 1 of the selector).
+void timer_clock_sources_match_the_hardware() {
+    Memory ram(2u * 1024u * 1024u);
+    TestServices services;
+    MipsInterpreter interpreter(ram, services);
+    auto& hardware = interpreter.hardware();
+
+    hardware.write32(0x1F801110u, 0);        // timer 1 counter
+    hardware.write32(0x1F801114u, 0u << 8);  // source 0: sysclk
+    hardware.advance_cycles(2146 * 2);
+    R6_CHECK(hardware.read32(0x1F801110u) == 2146 * 2);
+
+    hardware.write32(0x1F801110u, 0);
+    hardware.write32(0x1F801114u, 1u << 8);  // source 1: hblank
+    hardware.advance_cycles(2146 * 2);
+    R6_CHECK(hardware.read32(0x1F801110u) == 2);
+
+    hardware.write32(0x1F801120u, 0);        // timer 2 counter
+    hardware.write32(0x1F801124u, 1u << 8);  // source 1: sysclk
+    hardware.advance_cycles(80);
+    R6_CHECK(hardware.read32(0x1F801120u) == 80);
+
+    hardware.write32(0x1F801120u, 0);
+    hardware.write32(0x1F801124u, 2u << 8);  // source 2: sysclk/8
+    hardware.advance_cycles(80);
+    R6_CHECK(hardware.read32(0x1F801120u) == 10);
+
+    // A mode write restarts the counter.
+    hardware.advance_cycles(40);
+    hardware.write32(0x1F801124u, 2u << 8);
+    hardware.advance_cycles(8);
+    R6_CHECK(hardware.read32(0x1F801120u) == 1);
+}
+
 void dma2_linked_list_reaches_the_gpu() {
     Memory ram(2u * 1024u * 1024u);
     CaptureServices services;
@@ -487,6 +522,7 @@ void run_mips_interpreter_tests() {
     irq_status_acknowledges_zero_bits();
     dma_start_reads_back_idle();
     timer_mode_reads_back();
+    timer_clock_sources_match_the_hardware();
     dma2_linked_list_reaches_the_gpu();
     cdrom_command_acknowledges_then_completes();
     interrupt_takes_the_exception_vector();

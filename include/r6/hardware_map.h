@@ -171,7 +171,9 @@ public:
                 return;
             }
             if (address == base + 4) {
+                // Writing a mode register also restarts its counter.
                 timers_[timer].mode = value;
+                timers_[timer].offset = static_cast<std::uint32_t>(cycles_);
                 return;
             }
             if (address == base + 8) {
@@ -337,22 +339,23 @@ private:
     }
 
     std::uint32_t timer_value(std::size_t timer) const {
-        // Bits 8-9 of the mode register select the clock source. Timer 1's
-        // source 1 is the horizontal blank, which ticks once per scanline
-        // (~2146 CPU cycles). Sony's VSync/CD timeouts count those ticks: a
-        // 960-tick timeout is about four fields. Modelling it as sysclk/8 made
-        // an "until two reads agree" loop exactly eight cycles long, so its two
-        // reads landed on the same phase for ever.
+        // Bits 8-9 select the clock: timer 0 counts sysclk or the dot clock,
+        // timer 1 sysclk or hblank, and timer 2 sysclk or sysclk/8 (selected
+        // by bit 1).  The dot clock depends on the display mode, which this
+        // map does not track, so it falls back to sysclk.
         const auto source = (timers_[timer].mode >> 8) & 3u;
         const std::uint64_t elapsed = cycles_ - timers_[timer].offset;
-        if (timer == 1 && source == 1) {
+        if (timer == 1 && (source & 1u) != 0) {
+            // One tick per scanline (~2146 CPU cycles).  Sony's VSync/CD
+            // timeouts count these, and an "until two reads agree" loop would
+            // land on the same phase for ever at the wrong rate.
             return static_cast<std::uint32_t>(elapsed / kHBlankCycles) &
                    0xFFFFu;
         }
-        // The remaining sources are sysclk/8 (or /16 for source 3). Treating
-        // mode 0 as /8 keeps the kernel's default time base.
-        const std::uint32_t divisor = source == 3 ? 16u : 8u;
-        return static_cast<std::uint32_t>(elapsed / divisor) & 0xFFFFu;
+        if (timer == 2 && (source & 2u) != 0) {
+            return static_cast<std::uint32_t>(elapsed / 8u) & 0xFFFFu;
+        }
+        return static_cast<std::uint32_t>(elapsed) & 0xFFFFu;
     }
 
     void note_irq(const char* what, std::uint32_t bits) {
