@@ -54,7 +54,12 @@ public:
         // I_STAT bit 2 is the disc controller. Games route this through the
         // kernel's interrupt callback, so a pending CD interrupt has to show
         // up here or the guest waits forever.
-        if (cdrom_.interrupt() != 0) interrupt_status_ |= kInterruptCdrom;
+        // The disc interrupt is raised only when the guest has enabled it
+        // through the controller's own enable bits, so a stale flag cannot
+        // starve the vblank path that drives the frame loop.
+        if (cdrom_.interrupt() != 0 && cdrom_interrupt_enabled_) {
+            interrupt_status_ |= kInterruptCdrom;
+        }
     }
     CdromDevice& cdrom() { return cdrom_; }
 
@@ -144,6 +149,14 @@ public:
     }
 
     void raise_interrupt(std::uint32_t bit) { interrupt_status_ |= bit; }
+    // The kernel acknowledges a serviced interrupt by clearing its I_STAT bit.
+    void acknowledge_interrupts(std::uint32_t bits) {
+        interrupt_status_ &= ~bits;
+    }
+
+    void set_cdrom_interrupt_enabled(bool enabled) {
+        cdrom_interrupt_enabled_ = enabled;
+    }
 
     static constexpr std::uint32_t kInterruptVblank = 1u << 0;
     static constexpr std::uint32_t kInterruptCdrom = 1u << 2;
@@ -186,6 +199,7 @@ private:
     std::array<std::uint32_t, 7> dma_counter_{};
     std::array<std::uint32_t, 7> dma_control_{};
     std::uint32_t interrupt_status_{0};
+    bool cdrom_interrupt_enabled_{false};
     std::uint32_t interrupt_mask_{0};
 };
 

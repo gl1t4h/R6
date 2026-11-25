@@ -187,6 +187,20 @@ int main(int argc, char** argv) {
         }
     }
 
+    for (const auto& [site, value] : interpreter.sr_writes()) {
+        std::cout << "SR write at 0x" << std::hex << site << " = 0x" << value
+                  << std::dec << "\n";
+    }
+    if (!interpreter.irq_pcs().empty()) {
+        std::cout << "IRQ first PCs:";
+        for (auto pc : interpreter.irq_pcs()) {
+            std::cout << " 0x" << std::hex << pc;
+        }
+        std::cout << std::dec << std::endl;
+    }
+    std::cout << "IRQ: SR=0x" << std::hex << interpreter.cop0_status()
+              << " I_STAT=0x" << interpreter.irq_status() << " I_MASK=0x"
+              << interpreter.irq_mask() << std::dec << "\n";
     std::cout << "\nExecuted " << result.steps << " instructions\n"
               << "Stopped at PC 0x" << std::hex << result.pc << std::dec;
     switch (result.reason) {

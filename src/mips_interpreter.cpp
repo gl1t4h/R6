@@ -41,7 +41,12 @@ MipsInterpreter::MipsInterpreter(Memory& ram, PlatformServices& services)
       hardware_(services),
       scratchpad_(0x400, 0),
       cop0_(32, 0),
-      gte_data_(32, 0) {}
+      gte_data_(32, 0) {
+    // The retail kernel hands an application a status register with the global
+    // interrupt enable and the hardware (IP2) mask already set; guest code
+    // read-modify-writes SR to enable COP2 and relies on those bits surviving.
+    cop0_[12] = 0x00000401u;
+}
 
 std::uint32_t MipsInterpreter::read8(std::uint32_t address) {
     const auto physical = address & 0x1FFFFFFFu;
@@ -212,6 +217,12 @@ void MipsInterpreter::record_call_site(std::uint32_t pc) {
 
 void MipsInterpreter::deliver_interrupt() {
     if (!interrupts_enabled_) return;
+    // The R3000A only takes an external interrupt when COP0 SR has the global
+    // enable and the hardware (IP2) mask bit set. Guest code sits in masked
+    // critical sections constantly during init, and entering a handler there
+    // resumes into half-updated state.
+    const auto status = cop0_[12];
+    if ((status & 0x1u) == 0 || (status & 0x400u) == 0) return;
     const auto pending = hardware_.interrupt_status() & hardware_.interrupt_mask();
     if (pending == 0) return;
 
@@ -223,7 +234,15 @@ void MipsInterpreter::deliver_interrupt() {
         if (routine < 0x80000000u || routine >= 0x80200000u) return;
         interrupt_return_pc_ = cpu_.pc;
         interrupt_saved_ra_ = cpu_.gpr[31];
+        for (std::size_t index = 0; index < 32; ++index) {
+            interrupt_saved_gpr_[index] = cpu_.gpr[index];
+        }
+        interrupt_saved_hi_ = cpu_.hi;
+        interrupt_saved_lo_ = cpu_.lo;
+        interrupt_saved_cause_ = cop0_[13];
+        interrupt_pending_bits_ = pending;
         interrupt_steps_ = 0;
+        irq_pcs_.clear();
         // The retail kernel enters the dispatcher with the hardware interrupt
         // pending bit set in CAUSE and defined argument registers. Leaving the
         // interrupted values in $a0-$a3 makes handlers act on stale pointers.
@@ -305,9 +324,15 @@ RunResult MipsInterpreter::run(std::uint64_t max_steps) {
 
         if (current_pc == kInterruptReturnAddress) {
             // The queued interrupt routine returned; resume the interrupted
-            // instruction stream where it left off.
+            // instruction stream exactly where it left off, with its registers.
             cpu_.pc = interrupt_return_pc_;
-            cpu_.gpr[31] = interrupt_saved_ra_;
+            for (std::size_t index = 0; index < 32; ++index) {
+                cpu_.gpr[index] = interrupt_saved_gpr_[index];
+            }
+            cpu_.hi = interrupt_saved_hi_;
+            cpu_.lo = interrupt_saved_lo_;
+            cop0_[13] = interrupt_saved_cause_;
+            hardware_.acknowledge_interrupts(interrupt_pending_bits_);
             in_interrupt_ = false;
             continue;
         }
@@ -318,7 +343,13 @@ RunResult MipsInterpreter::run(std::uint64_t max_steps) {
                 // the interrupted stream. After a few of these, stop delivering
                 // interrupts rather than burning the budget on them.
                 cpu_.pc = interrupt_return_pc_;
-                cpu_.gpr[31] = interrupt_saved_ra_;
+                for (std::size_t index = 0; index < 32; ++index) {
+                cpu_.gpr[index] = interrupt_saved_gpr_[index];
+            }
+                cpu_.hi = interrupt_saved_hi_;
+                cpu_.lo = interrupt_saved_lo_;
+                cop0_[13] = interrupt_saved_cause_;
+                hardware_.acknowledge_interrupts(interrupt_pending_bits_);
                 in_interrupt_ = false;
                 if (++interrupt_overruns_ >= kMaxInterruptOverruns) {
                     interrupts_enabled_ = false;
@@ -353,6 +384,7 @@ RunResult MipsInterpreter::run(std::uint64_t max_steps) {
 
         if (recent_pcs_.size() >= 16) recent_pcs_.erase(recent_pcs_.begin());
         recent_pcs_.push_back(current_pc);
+        if (in_interrupt_ && irq_pcs_.size() < 64) irq_pcs_.push_back(current_pc);
 
         if (step.unsupported) {
             result.reason = StopReason::unsupported_instruction;
@@ -625,6 +657,9 @@ MipsInterpreter::StepResult MipsInterpreter::execute(
             if (rs == 0x00) {
                 gpr[rt] = cop0_[rd];
             } else if (rs == 0x04) {
+                if (rd == 12 && sr_writes_.size() < 24) {
+                    sr_writes_.emplace_back(pc, gpr[rt]);
+                }
                 cop0_[rd] = gpr[rt];
             } else if ((instruction & 0x3Fu) == 0x10) {  // rfe
                 const auto status = cop0_[12];

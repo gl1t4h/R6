@@ -77,7 +77,8 @@ adding one would not change whether the game runs.
 
 ## Running it today
 
-`R6.exe` (built from `src/player_main.cpp`, also `build\R6.exe`) is a
+`spider-man-r6.exe` (built from `src/spiderman_player.cpp`, also
+`build\spider-man-r6.exe`) is a
 double-clickable windowed player. It finds your own `.cue`/`.bin`, boots the
 disc's executable and runs it at roughly six million instructions a second
 with a live status line. It does not render the game yet: the guest parks in

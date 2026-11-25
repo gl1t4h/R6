@@ -52,6 +52,14 @@ public:
     std::uint64_t dma_words() const { return dma_words_; }
     std::uint64_t vblanks() const { return vblank_count_; }
     std::uint64_t interrupts() const { return interrupts_delivered_; }
+    std::uint32_t cop0_status() { return cop0_[12]; }
+    const std::vector<std::uint32_t>& irq_pcs() const { return irq_pcs_; }
+    const std::vector<std::pair<std::uint32_t, std::uint32_t>>& sr_writes()
+        const {
+        return sr_writes_;
+    }
+    std::uint32_t irq_status() { return hardware_.interrupt_status(); }
+    std::uint32_t irq_mask() { return hardware_.interrupt_mask(); }
     std::uint32_t cd_sectors_read() { return hardware_.cdrom().sectors_read(); }
     std::uint64_t interrupt_overruns() const { return interrupt_overruns_; }
     // Delivering vertical-blank interrupts is opt-in: the guest handler needs
@@ -111,6 +119,13 @@ private:
     std::vector<std::uint8_t> scratchpad_;
     std::vector<std::uint32_t> cop0_;
     std::vector<std::uint32_t> gte_data_;
+    // Every guest write to COP0 SR, as (pc, value), so interrupt-enable
+    // transitions during bring-up are visible.
+    std::vector<std::pair<std::uint32_t, std::uint32_t>> sr_writes_;
+
+    // First PCs executed inside the last delivered interrupt routine.
+    std::vector<std::uint32_t> irq_pcs_;
+
     std::vector<std::uint32_t> recent_pcs_;
     std::vector<std::uint32_t> recent_calls_;
 
@@ -128,6 +143,15 @@ private:
     std::uint64_t interrupt_steps_{0};
     std::uint32_t interrupt_return_pc_{0};
     std::uint32_t interrupt_saved_ra_{0};
+    // The kernel saves the interrupted context before entering a handler, so
+    // entering one here must not leave the handler's registers behind.
+    std::array<std::uint32_t, 32> interrupt_saved_gpr_{};
+    std::uint32_t interrupt_saved_hi_{0};
+    std::uint32_t interrupt_saved_lo_{0};
+    std::uint32_t interrupt_saved_cause_{0};
+    // Pending I_STAT bits taken when the handler was entered; acknowledged
+    // when it returns, the way the kernel does.
+    std::uint32_t interrupt_pending_bits_{0};
     std::uint64_t unknown_hardware_reads_{0};
     std::uint64_t unknown_hardware_writes_{0};
     std::map<std::uint32_t, std::uint64_t> hardware_reads_;

@@ -84,6 +84,12 @@ std::uint32_t BiosServices::handle_a0(std::uint32_t vector, CpuState& cpu,
             return print_format(memory, cpu);
         case 0x44:  // FlushCache: the host has no instruction cache to write
             return 0;
+        case 0x70:  // _bu_init(): memory-card BIOS init, no host side to set up.
+            return 0;
+        case 0x71:  // _96_init(): the disc controller is modelled natively.
+            return 0;
+        case 0x72:  // _96_remove(): dequeues the CD interrupt; none is queued.
+            return 0;
         default:
             record_unhandled(BiosTable::a0, vector, cpu);
             return 0;
@@ -108,6 +114,19 @@ std::uint32_t BiosServices::handle_b0(std::uint32_t vector, CpuState& cpu,
             return set_event_enabled(cpu.gpr[4]);
         case 0x20:  // UnDeliverEvent(class, spec)
             return undeliver_event(cpu.gpr[4], cpu.gpr[5]);
+        case 0x4A:  // InitCARD2(pad_enable): the card BIOS is not emulated.
+            return 0;
+        case 0x4B:  // StartCARD2()
+        case 0x4C:  // StopCARD2()
+            return 0;
+        case 0x56:  // GetC0Table(): there is no retail jump table to hand out.
+        case 0x57:  // GetB0Table()
+            return 0;
+        case 0x5B: {  // ChangeClearPAD(mode): returns the previous flag.
+            const std::uint32_t previous = clear_pad_ ? 1u : 0u;
+            clear_pad_ = cpu.gpr[4] != 0;
+            return previous;
+        }
         case 0x3D:  // putchar
             putchar(static_cast<char>(cpu.gpr[4] & 0xFFu));
             return cpu.gpr[4];
@@ -391,6 +410,8 @@ void BiosServices::record_unhandled(BiosTable table, std::uint32_t vector,
         entry += index == 4 ? " a=" : ",";
         entry += format_unsigned(cpu.gpr[index], 16, false);
     }
+    entry += " ra=";
+    entry += format_unsigned(cpu.gpr[31], 16, false);
     unhandled_log_.push_back(entry);
 }
 

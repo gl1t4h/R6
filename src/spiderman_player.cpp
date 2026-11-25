@@ -238,7 +238,7 @@ void present(Player& player, HDC dc) {
     // presenting an unexplained black window.
     char text[512]{};
     std::snprintf(text, sizeof(text),
-                  "R6 development build - no frame yet\n\n"
+                  "Spider-Man R6 development build - no frame yet\n\n"
                   "Instruction: %llu\n"
                   "GPU primitives: %llu\n"
                   "Disc sectors read: %u\n"
@@ -311,7 +311,7 @@ void step(Player& player) {
 void save_screenshot(Player& player) {
     const auto path = own_directory() / "r6-frame.ppm";
     r6::boot::write_ppm(player.services->gpu().display_frame(), 320, 240, path);
-    MessageBoxW(nullptr, (L"Saved " + path.wstring()).c_str(), L"R6",
+    MessageBoxW(nullptr, (L"Saved " + path.wstring()).c_str(), L"Spider-Man R6",
                 MB_OK | MB_ICONINFORMATION);
 }
 
@@ -419,14 +419,14 @@ int WINAPI WinMain(HINSTANCE instance, HINSTANCE, LPSTR command_line, int) {
         MessageBoxW(nullptr,
                     L"No disc image was selected.\n\nRun this again and pick "
                     L"your Spider-Man (USA) .cue file.",
-                    L"R6", MB_OK | MB_ICONWARNING);
+                    L"Spider-Man R6", MB_OK | MB_ICONWARNING);
         return 0;
     }
 
     player.image = image;
     std::string error;
     if (!load_image(player, error)) {
-        MessageBoxA(nullptr, error.c_str(), "R6", MB_OK | MB_ICONERROR);
+        MessageBoxA(nullptr, error.c_str(), "Spider-Man R6", MB_OK | MB_ICONERROR);
         return 1;
     }
 
@@ -448,7 +448,7 @@ int WINAPI WinMain(HINSTANCE instance, HINSTANCE, LPSTR command_line, int) {
     AdjustWindowRect(&rect, WS_OVERLAPPEDWINDOW, FALSE);
 
     const std::string start_title =
-        "R6 - " + player.image.filename().string();
+        "Spider-Man R6 - " + player.image.filename().string();
     const std::wstring window_title(start_title.begin(), start_title.end());
     const auto window = CreateWindowExW(
         0, kWindowClass, window_title.c_str(), WS_OVERLAPPEDWINDOW, CW_USEDEFAULT,

@@ -102,6 +102,8 @@ private:
                           const CpuState& cpu);
 
     std::array<std::uint32_t, 3> interrupt_entries_{};
+    // B(5Bh) ChangeClearPAD: the kernel's pad/card auto-acknowledge flag.
+    bool clear_pad_{false};
     std::vector<EventSlot> events_{16};
     std::vector<std::uint32_t> unhandled_calls_;
     std::vector<std::string> unhandled_log_;
