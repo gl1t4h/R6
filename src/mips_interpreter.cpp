@@ -154,11 +154,35 @@ void MipsInterpreter::write16(std::uint32_t address, std::uint32_t value) {
         scratchpad_[index + 1] = static_cast<std::uint8_t>(value >> 8);
         return;
     }
-    ++unknown_hardware_writes_;
+    // Hardware registers are 32 bits wide, and guest code stores to them a
+    // half at a time (the interrupt dispatcher acknowledges I_STAT that way).
+    const auto aligned = physical & ~3u;
+    const auto shift = (physical & 3u) * 8u;
+    if (aligned == hardware::kInterruptStatus ||
+        aligned == hardware::kInterruptMask) {
+        // I_STAT clears every bit written as one, so the untouched half has to
+        // be zero rather than read back and written again.
+        write32(aligned, (value & 0xFFFFu) << shift);
+        return;
+    }
+    const auto current = hardware_.read32(aligned);
+    const auto mask = 0xFFFFu << shift;
+    write32(aligned, (current & ~mask) | ((value & 0xFFFFu) << shift));
 }
 
 void MipsInterpreter::write32(std::uint32_t address, std::uint32_t value) {
     const auto physical = address & 0x1FFFFFFFu;
+    if (trace_log_.size() < 24) {
+        if (trace_reg_ != 0 && (physical & 0x1FFFFFFCu) == (trace_reg_ & 0x1FFFFFFCu)) {
+            trace_log_.push_back("reg 0x" + format_hex(physical) + " = 0x" +
+                                 format_hex(value) + " pc=0x" + format_hex(cpu_.pc));
+        } else if (find_value_ != 0 && value == find_value_ &&
+                   physical <= kRamMask) {
+            trace_log_.push_back("store 0x" + format_hex(value) + " at 0x" +
+                                 format_hex(physical) + " pc=0x" +
+                                 format_hex(cpu_.pc));
+        }
+    }
     if (hardware_.is_cdrom(physical)) {
         for (std::uint32_t index = 0; index < 4; ++index) {
             if (hardware_.is_cdrom(physical + index)) {
@@ -232,9 +256,8 @@ void MipsInterpreter::deliver_interrupt() {
     if (pending == 0) return;
 
     interrupt_routines_.clear();
-    // A(13h) HookEntryInt hands the kernel a *buffer* to save the exception
-    // entry into, not a routine, so the SysEnqIntRP chain below remains the
-    // dispatch path.
+    // The priority chains are the handlers; B(19h) HookEntryInt adds an entry
+    // point the kernel runs once those chains have finished.
     for (std::uint32_t priority = 0; priority < 3; ++priority) {
         // SysEnqIntRP keeps a linked list per priority: each node is
         // { next, void (*routine)() }, and every node is serviced.
@@ -247,7 +270,8 @@ void MipsInterpreter::deliver_interrupt() {
             entry = read32(entry);
         }
     }
-    if (interrupt_routines_.empty()) return;
+    const auto has_entry_int = services_.entry_int() != 0;
+    if (interrupt_routines_.empty() && !has_entry_int) return;
     {
         interrupt_return_pc_ = cpu_.pc;
         interrupt_saved_ra_ = cpu_.gpr[31];
@@ -284,11 +308,39 @@ void MipsInterpreter::deliver_interrupt() {
         // An exception entry returns through $k0 as often as through $ra.
         cpu_.gpr[26] = kInterruptReturnAddress;
         interrupt_routine_index_ = 0;
-        cpu_.pc = interrupt_routines_[0];
+        interrupt_hook_done_ = !has_entry_int;
         in_interrupt_ = true;
         ++interrupts_delivered_;
+        interrupt_steps_ = 0;
+        irq_pcs_.clear();
+        irq_hot_.clear();
+        if (has_entry_int) {
+            // libetc's dispatcher runs before the priority chains: the guest's
+            // own handlers acknowledge I_STAT eagerly, and the dispatcher can
+            // only route an interrupt whose bit is still pending.
+            enter_entry_int();
+            return;
+        }
+        cpu_.pc = interrupt_routines_[0];
+        interrupt_routine_index_ = 1;
         return;
     }
+}
+
+void MipsInterpreter::enter_entry_int() {
+    // B(19h) HookEntryInt structure (setjmp layout): the kernel calls the
+    // saved pc with $v0 = 1 and $a0 pointing at the structure.
+    const auto entry_int = services_.entry_int();
+    cpu_.pc = read32(entry_int);
+    cpu_.gpr[2] = 1;
+    cpu_.gpr[4] = entry_int;
+    cpu_.gpr[29] = read32(entry_int + 4);
+    cpu_.gpr[30] = read32(entry_int + 8);
+    for (std::uint32_t index = 0; index < 8; ++index) {
+        cpu_.gpr[16 + index] = read32(entry_int + 12 + index * 4);
+    }
+    cpu_.gpr[28] = read32(entry_int + 0x2C);
+    cpu_.gpr[31] = kInterruptReturnAddress;
 }
 
 void MipsInterpreter::poll_vblank() {
@@ -367,26 +419,34 @@ RunResult MipsInterpreter::run(std::uint64_t max_steps) {
         const auto target = delay_target;
         in_delay_slot = false;
 
-        if (current_pc == kInterruptReturnAddress &&
-            interrupt_routine_index_ + 1 < interrupt_routines_.size()) {
-            // More queued routines belong to this interrupt: enter the next one
-            // from the interrupted context, as the kernel's dispatcher does.
-            ++interrupt_routine_index_;
-            for (std::size_t index = 0; index < 32; ++index) {
-                cpu_.gpr[index] = interrupt_saved_gpr_[index];
-            }
-            cpu_.hi = interrupt_saved_hi_;
-            cpu_.lo = interrupt_saved_lo_;
-            cpu_.gpr[31] = kInterruptReturnAddress;
-            cpu_.pc = interrupt_routines_[interrupt_routine_index_];
-            interrupt_steps_ = 0;
-            irq_pcs_.clear();
-            irq_hot_.clear();
-            continue;
-        }
-
         if (current_pc == kInterruptReturnAddress) {
-            // Every queued routine returned; resume the interrupted instruction
+            if (!interrupt_hook_done_ && services_.entry_int() != 0) {
+                interrupt_hook_done_ = true;
+                ++interrupt_hooks_;
+                enter_entry_int();
+                interrupt_steps_ = 0;
+                irq_pcs_.clear();
+                irq_hot_.clear();
+                continue;
+            }
+            if (interrupt_routine_index_ < interrupt_routines_.size()) {
+                // More queued routines belong to this interrupt: enter the next
+                // one from the interrupted context, as the kernel does.
+                const auto routine =
+                    interrupt_routines_[interrupt_routine_index_++];
+                for (std::size_t index = 0; index < 32; ++index) {
+                    cpu_.gpr[index] = interrupt_saved_gpr_[index];
+                }
+                cpu_.hi = interrupt_saved_hi_;
+                cpu_.lo = interrupt_saved_lo_;
+                cpu_.gpr[31] = kInterruptReturnAddress;
+                cpu_.pc = routine;
+                interrupt_steps_ = 0;
+                irq_pcs_.clear();
+                irq_hot_.clear();
+                continue;
+            }
+            // Every handler returned; resume the interrupted instruction
             // stream exactly where it left off, with its registers.
             cpu_.pc = interrupt_return_pc_;
             for (std::size_t index = 0; index < 32; ++index) {
@@ -421,11 +481,15 @@ RunResult MipsInterpreter::run(std::uint64_t max_steps) {
                 continue;
             }
         } else if (!was_delay_slot && (result.steps & 0x3FFu) == 0) {
+            // A vblank only starts from the main flow: generating one while a
+            // handler runs makes the dispatcher re-enter itself for every poll.
+            if (!in_interrupt_ && vblank_enabled_) poll_vblank();
+            hardware_.pad_tick();
+        }
+        if (!in_interrupt_ && !was_delay_slot && (result.steps & 0x3FFu) == 0) {
             // Never interrupt a delay slot: the pending branch target lives in
             // the run loop, not in guest state, so resuming mid-pair would
             // lose it.
-            if (vblank_enabled_) poll_vblank();
-            hardware_.pad_tick();
             deliver_interrupt();
             // The handler jump replaced cpu_.pc, so current_pc is stale: restart
             // the iteration and execute the handler instead of the instruction
@@ -441,7 +505,9 @@ RunResult MipsInterpreter::run(std::uint64_t max_steps) {
 
         if (service_bios_call()) {
             ++result.steps;
-            cpu_.pc = cpu_.gpr[31];
+            cpu_.pc = services_.take_return_from_exception() && in_interrupt_
+                          ? kInterruptReturnAddress
+                          : cpu_.gpr[31];
             if (recent_pcs_.size() >= 16) recent_pcs_.erase(recent_pcs_.begin());
             recent_pcs_.push_back(current_pc);
             continue;

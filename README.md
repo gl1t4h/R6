@@ -15,7 +15,7 @@ There is not yet a playable native recompilation.
 
 | Game | Region/version | Status | Progress |
 | --- | --- | --- | --- |
-| Spider-Man | USA PlayStation 1 release | Boots into its own frame loop; draws nothing yet | 96% - loads `SLUS_008.75` and executes it on the native CPU (40M+ instructions), kernel interrupts now reach the guest's own handler, but that handler does not finish, so the display stays off |
+| Spider-Man | USA PlayStation 1 release | Boots into its own frame loop; draws nothing yet | 97% - loads `SLUS_008.75` and executes it on the native CPU (40M+ instructions), kernel interrupts reach the guest's handler, libetc's vblank dispatcher runs and `VSync` ticks, but the game still never programs the display, so the frame is black |
 
 No games are currently completed.
 

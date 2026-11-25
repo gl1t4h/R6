@@ -165,12 +165,32 @@ std::uint32_t BiosServices::handle_a0(std::uint32_t vector, CpuState& cpu,
             }
             return 0;
         }
-        case 0x13:  // HookEntryInt(entry): guest exception entry point.
-            hooked_entry_ = cpu.gpr[4];
+        case 0x13:  // setjmp(buf): RA, SP, FP, S0-S7 and GP.
+            if (cpu.gpr[4] != 0) {
+                const std::uint32_t base = cpu.gpr[4] & 0x1FFFFFFFu;
+                memory.write32(base, cpu.gpr[31]);
+                memory.write32(base + 4, cpu.gpr[29]);
+                memory.write32(base + 8, cpu.gpr[30]);
+                for (std::uint32_t index = 0; index < 8; ++index) {
+                    memory.write32(base + 12 + index * 4, cpu.gpr[16 + index]);
+                }
+                memory.write32(base + 0x2C, cpu.gpr[28]);
+            }
             return 0;
-        case 0x14:  // UnHookEntryInt()
-            hooked_entry_ = 0;
-            return 0;
+        case 0x14: {  // longjmp(buf, param): never returns to its caller.
+            const auto base = cpu.gpr[4] & 0x1FFFFFFFu;
+            if (base != 0) {
+                cpu.gpr[31] = memory.read32(base);
+                cpu.gpr[29] = memory.read32(base + 4);
+                cpu.gpr[30] = memory.read32(base + 8);
+                for (std::uint32_t index = 0; index < 8; ++index) {
+                    cpu.gpr[16 + index] = memory.read32(base + 12 + index * 4);
+                }
+                cpu.gpr[28] = memory.read32(base + 0x2C);
+                cpu.gpr[2] = cpu.gpr[5];
+            }
+            return cpu.gpr[2];
+        }
         case 0x39:  // InitHeap: the native runtime owns the heap.
             return 0;
         case 0x3A:  // _exit
@@ -224,6 +244,15 @@ std::uint32_t BiosServices::handle_b0(std::uint32_t vector, CpuState& cpu,
         case 0x56:  // GetC0Table(): there is no retail jump table to hand out.
         case 0x57:  // GetB0Table()
             return 0;
+        case 0x17:  // ReturnFromException(): abandon the rest of the chains.
+            return_from_exception_ = true;
+            return 0;
+        case 0x18:  // ResetEntryInt(): back to the default exit structure.
+            entry_int_ = 0;
+            return 0;
+        case 0x19:  // HookEntryInt(jmp_buf): the kernel runs this on every exit.
+            entry_int_ = cpu.gpr[4];
+            return entry_int_;
         case 0x5B: {  // ChangeClearPAD(mode): returns the previous flag.
             const std::uint32_t previous = clear_pad_ ? 1u : 0u;
             clear_pad_ = cpu.gpr[4] != 0;

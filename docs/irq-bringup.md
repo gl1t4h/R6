@@ -110,41 +110,49 @@ renamed from `R6.exe` to `spider-man-r6.exe` (`src/spiderman_player.cpp`, CMake
 target `spider-man-r6`). Generic tooling keeps the `r6-` prefix: `r6-run`,
 `r6-tests`, `r6-diagnostic` and the `r6::` headers.
 
-## Where the chain actually breaks (latest)
+## What made the vblank callback run
 
-Interrupt plumbing is now correct in the parts that can be verified:
+The game's VSync counter (`*(u32*)0x800B397C`, incremented inside `0x8008C2E8`,
+which also walks the eight `VSyncCallback` slots at `0x800B395C`) is driven by
+libetc, not by the game. Three mistakes kept it from ever executing:
 
-- the queued `SysEnqIntRP` **chain** is walked (each node is `{next, routine}`);
-- every routine in the chain runs with the interrupted context saved/restored;
-- `I_STAT` is acknowledged when the chain finishes;
-- the guest's `memset`/`memcpy`/`bzero` kernel vectors are real, so its
-  structures are initialised;
-- a pad/SIO0 model answers `JOY_STAT`/`JOY_DATA` and raises the controller
-  interrupt (I_STAT bit 7) after a modelled shift-out delay.
+1. **The kernel's exception exit was missing.** `A(13h)` is `setjmp(buf)` and
+   `B(19h)` is `HookEntryInt(jmp_buf)`. After the priority chains have run, the
+   kernel jumps to the pc stored in that structure, with `$v0 = 1` and `$a0`
+   pointing at it (psx-spx "BIOS Interrupt/Exception Handling"). libetc puts
+   its dispatcher (`0x8008B990` -> `0x8008BA00`) there, and *that* is what calls
+   the registered callbacks. `B(17h) ReturnFromException` inside a handler now
+   ends exception handling instead of returning to the caller.
+2. **The hook ran too late.** libetc's dispatcher only routes an interrupt whose
+   bit is still set in `I_STAT`, but the guest's own chain handler acknowledges
+   vblank (`0x80087838`, writes `0xFFFFFFFE`) before the hook used to run. The
+   hook is now entered first, then the `SysEnqIntRP` chain.
+3. **Sub-word hardware writes were dropped.** The dispatcher acknowledges with
+   `sh` to `I_STAT`; `write16` only handled RAM, the disc and the scratchpad, so
+   the vblank bit never cleared and the dispatcher re-entered on every poll.
+   Half-word stores to hardware now reach the 32-bit register model (`I_STAT`
+   keeps its write-one-to-clear meaning).
 
-Result per 40,000,000 instructions with `--vblank`: ~520 deliveries, **0**
-handler overruns. The guest's handler chain (`0x80087660`, the pad/vblank
-dispatcher) runs every tick and returns.
+With those three fixed, `--watch-pc 0x8008C2E8` counts thousands of hits and
+`--peek 0x800B397C` climbs, so the VSync counter moves for the first time.
 
-Two independent blockers remain, both measured:
+## The pad wait
 
-1. The guest spends its time in the pad transfer wait at `0x80088040`. That
-   loop exits only when `I_STAT` bit 7 is set *at the check*, or when
-   `TIMER2` mode has bit 9 (`0x200`) set and its elapsed count exceeds the
-   baseline. `TIMER2` mode reads back as 0 there, so the timeout branch can
-   never fire, and the driver re-acknowledges the pad bit faster than the
-   modelled byte arrives.
-2. The vblank callback registered through libetc (`0x8008C2E8`, the function
-   that increments `*(0x800B397C)` and walks the eight `VSyncCallback`
-   slots) is **never entered** - a watch shows 0 hits. It is reached only
-   through libetc's own exception entry, and `A(13h) HookEntryInt` takes a
-   *save buffer*, not a routine: pointing the interpreter at that buffer
-   derails immediately (`0x800B28BC` is data). Emulating libetc's entry, or
-   registering `0x8008C2E8` as the vblank callback ourselves, is the next
-   step. Until `*(0x800B397C)` moves, `VSync()` times out, the frame loop
-   never advances and the display stays off.
+`pad_tick()` only advanced in the main poll branch, so while a handler ran the
+modelled pad transfer never completed; the driver's wait at `0x80088040` (which
+polls `I_STAT` bit 7) could only be left by overrunning the handler budget. Pad
+timing now advances everywhere, and a received byte raises the controller
+interrupt as well as a sent one. The loop still runs (about 2k entries per 40M
+instructions) but it is no longer where the run ends.
 
-Diagnostics added for that work: `--watch-pc ADDR` (execution count at an
-address), `--peek ADDR` (word at the end of the run), `--hot` (sampled
-whole-run PC histogram), plus the interrupt-entry log, per-handler PC trace and
-handler histogram already present.
+## Still open
+
+- Handlers overrun their 50k-step budget on almost every interrupt (609 of 612
+  in a 40M run): the vblank dispatcher re-enters about 50 times per tick, so the
+  counter races ahead instead of ticking at 60 Hz. The re-entry source is not
+  yet identified.
+- The game never programs the display: `2 primitives (1 fills)`, draw area
+  `0,0 to 0,0`, display off, `0` rasterised pixels. A `--shot` PPM of
+  320x240x3 is 230,400 bytes of zeroes, so the frame is black. The run now ends
+  in the game's own code (`0x800647xx`) retrying `CdRead`, which is the next
+  thing to make work.

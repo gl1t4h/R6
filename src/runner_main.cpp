@@ -50,6 +50,10 @@ int main(int argc, char** argv) {
     std::vector<std::uint32_t> peeks;
     std::vector<std::uint32_t> watched_pcs;
     bool hot_enabled = false;
+    std::uint32_t trace_reg = 0;
+    std::uint32_t find_value = 0;
+    std::uint32_t search_imm = 0;
+    bool search_code = false;
 
     for (int index = 1; index < argc; ++index) {
         const std::string argument = argv[index];
@@ -62,6 +66,16 @@ int main(int argc, char** argv) {
                 std::stoul(argv[++index], nullptr, 0));
         } else if (argument == "--vblank") {
             deliver_vblank = true;
+        } else if (argument == "--trace-reg" && index + 1 < argc) {
+            trace_reg = static_cast<std::uint32_t>(
+                std::stoul(argv[++index], nullptr, 0));
+        } else if (argument == "--find-value" && index + 1 < argc) {
+            find_value = static_cast<std::uint32_t>(
+                std::stoul(argv[++index], nullptr, 0));
+        } else if (argument == "--search-code" && index + 1 < argc) {
+            search_imm = static_cast<std::uint32_t>(
+                std::stoul(argv[++index], nullptr, 0));
+            search_code = true;
         } else if (argument == "--hot") {
             hot_enabled = true;
         } else if (argument == "--watch-pc" && index + 1 < argc) {
@@ -161,6 +175,30 @@ int main(int argc, char** argv) {
     r6::MipsInterpreter interpreter(ram, services);
     for (auto address : watched_pcs) interpreter.watch_pc(address);
     interpreter.set_hot_enabled(hot_enabled);
+    if (search_code) {
+        for (std::uint32_t address = 0x80010000u; address < 0x80200000u;
+             address += 4) {
+            const auto word = interpreter.peek(address);
+            if ((word & 0xFFFFu) != (search_imm & 0xFFFFu)) continue;
+            const char* name = nullptr;
+            switch (word >> 26) {
+                case 0x23: name = "lw"; break;
+                case 0x2B: name = "sw"; break;
+                case 0x21: name = "lh"; break;
+                case 0x29: name = "sh"; break;
+                case 0x25: name = "lhu"; break;
+                case 0x09: name = "addiu"; break;
+                case 0x0D: name = "ori"; break;
+                default: break;
+            }
+            if (name == nullptr) continue;
+            std::cout << "code " << name << " 0x" << std::hex << address
+                      << std::dec << " word=0x" << std::hex << word << std::dec
+                      << std::endl;
+        }
+    }
+    interpreter.set_trace_reg(trace_reg);
+    interpreter.set_find_value(find_value);
     auto& cpu = interpreter.cpu();
     cpu.pc = entry_override != 0 ? entry_override : image.entry;
     cpu.gpr[28] = image.gp;
@@ -255,6 +293,9 @@ int main(int argc, char** argv) {
         }
         std::cout << std::endl;
     }
+    for (const auto& entry : interpreter.trace_log()) {
+        std::cout << entry << std::endl;
+    }
     std::cout << "IRQ: SR=0x" << std::hex << interpreter.cop0_status()
               << " I_STAT=0x" << interpreter.irq_status() << " I_MASK=0x"
               << interpreter.irq_mask() << std::dec << "\n";
@@ -337,6 +378,12 @@ int main(int argc, char** argv) {
               << "VBlank: " << interpreter.vblanks() << " ticks, "
               << interpreter.interrupts() << " interrupts delivered, "
               << interpreter.interrupt_overruns() << " handler overruns\n";
+    if (const auto entry_int = services.entry_int(); entry_int != 0) {
+        std::cout << "EntryInt: 0x" << std::hex << entry_int << " pc=0x"
+                  << ram.read32(entry_int & kRamMask)
+                  << " hooks=" << std::dec << interpreter.hooks()
+                  << std::endl;
+    }
 
     for (std::uint32_t opcode = 0; opcode < 0x100; ++opcode) {
         const auto count =

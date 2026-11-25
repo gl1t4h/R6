@@ -32,8 +32,11 @@ public:
     // Address of the guest interrupt routine registered for this priority with
     // SysEnqIntRP, or zero when none is queued. The interpreter calls it to
     // deliver hardware interrupts, which the retail kernel would do.
-    // A(13h) HookEntryInt: the guest's own exception entry, if it installed one.
-    virtual std::uint32_t hooked_entry() { return 0; }
+    // B(19h) HookEntryInt: the kernel runs this entry at the end of every
+    // exception, which is where libetc dispatches its interrupt callbacks.
+    virtual std::uint32_t entry_int() { return 0; }
+    // B(17h) ReturnFromException: the current handler ended exception handling.
+    virtual bool take_return_from_exception() { return false; }
 
     virtual std::uint32_t interrupt_entry(std::uint32_t /*priority*/) {
         return 0;

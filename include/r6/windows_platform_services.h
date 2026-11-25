@@ -30,7 +30,8 @@ public:
         std::size_t destination_size) override;
     bool bios_call(std::uint32_t pc, CpuState& cpu, Memory& memory) override;
     std::uint32_t interrupt_entry(std::uint32_t priority) override;
-    std::uint32_t hooked_entry() override;
+    std::uint32_t entry_int() override;
+    bool take_return_from_exception() override;
 
     void set_controller_state(std::size_t port, std::uint16_t active_low_state);
     const std::vector<std::uint32_t>& frame_buffer() const { return frame_; }

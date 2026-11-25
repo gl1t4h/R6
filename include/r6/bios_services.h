@@ -48,9 +48,16 @@ public:
     }
     std::uint32_t unhandled_vector(std::size_t index) const;
 
-    // A(13h) HookEntryInt installs the guest's own exception entry, which is
-    // where libraries such as libetc dispatch their interrupt callbacks.
-    std::uint32_t hooked_entry() const { return hooked_entry_; }
+    // B(19h) HookEntryInt: the kernel runs the jmp_buf's pc as the last step
+    // of exception handling, which is how libetc dispatches its IRQ callbacks.
+    std::uint32_t entry_int() const { return entry_int_; }
+    // B(17h) ReturnFromException was called by the current handler: its return
+    // is the end of exception handling, not a normal return to the caller.
+    bool take_return_from_exception() {
+        const bool value = return_from_exception_;
+        return_from_exception_ = false;
+        return value;
+    }
 
     // SysEnqIntRP/SysDeqIntRP bookkeeping. The interpreter calls the queued
     // routine when a hardware interrupt has to be delivered.
@@ -106,7 +113,8 @@ private:
                           const CpuState& cpu);
 
     std::array<std::uint32_t, 3> interrupt_entries_{};
-    std::uint32_t hooked_entry_{0};
+    std::uint32_t entry_int_{0};
+    bool return_from_exception_{false};
     // B(5Bh) ChangeClearPAD: the kernel's pad/card auto-acknowledge flag.
     bool clear_pad_{false};
     std::vector<EventSlot> events_{16};

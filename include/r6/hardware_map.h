@@ -76,7 +76,10 @@ public:
         if (address == hardware::kInterruptMask) return interrupt_mask_;
         if (address == hardware::kGpuStatus) return services_.read_gpu_status();
         if (address == hardware::kGpuCommand) return services_.read_gpu_data();
-        if (address == kPadData) return pad_data_;
+        if (address == kPadData) {
+            pad_byte_received();
+            return pad_data_;
+        }
         if (address == kPadStat) return kPadReadyStatus;
         if (address == kPadMode) {
             return pad_mode_ | (pad_control_ << 16);
@@ -180,6 +183,10 @@ public:
         if (--pad_irq_delay_ == 0) interrupt_status_ |= kInterruptPad;
     }
 
+    // A byte shifted in from the controller raises the same interrupt as one
+    // shifted out, and the driver waits on it after its final transfer.
+    void pad_byte_received() const { pad_irq_delay_ = 4; }
+
     void acknowledge_interrupts(std::uint32_t bits) {
         interrupt_status_ &= ~bits;
     }
@@ -238,7 +245,7 @@ private:
     std::array<std::uint32_t, 7> dma_counter_{};
     std::array<std::uint32_t, 7> dma_control_{};
     std::uint32_t pad_data_{0x41};
-    std::uint32_t pad_irq_delay_{0};
+    mutable std::uint32_t pad_irq_delay_{0};
     std::uint32_t pad_mode_{0};
     std::uint32_t pad_control_{0};
     std::uint32_t pad_baud_{0};

@@ -57,6 +57,9 @@ public:
     std::uint32_t peek(std::uint32_t address) { return read32(address); }
     void watch_pc(std::uint32_t address) { watched_.emplace_back(address, 0); }
     void set_hot_enabled(bool enabled) { hot_enabled_ = enabled; }
+    void set_trace_reg(std::uint32_t address) { trace_reg_ = address; }
+    void set_find_value(std::uint32_t value) { find_value_ = value; }
+    const std::vector<std::string>& trace_log() const { return trace_log_; }
     const std::map<std::uint32_t, std::uint64_t>& hot() const { return hot_; }
     const std::vector<std::pair<std::uint32_t, std::uint64_t>>& watched() const {
         return watched_;
@@ -118,6 +121,7 @@ private:
     void run_dma3_transfer();
     // Raises the vertical-blank interrupt.
     void poll_vblank();
+    void enter_entry_int();
     // Enters the queued guest interrupt routine when a pending interrupt is
     // unmasked, which stands in for the retail kernel's dispatcher.
     void deliver_interrupt();
@@ -150,6 +154,9 @@ private:
     std::vector<std::pair<std::uint32_t, std::uint64_t>> watched_;
     std::map<std::uint32_t, std::uint64_t> hot_;
     bool hot_enabled_{false};
+    std::uint32_t trace_reg_{0};
+    std::uint32_t find_value_{0};
+    std::vector<std::string> trace_log_;
     std::vector<std::string> interrupt_log_;
 
     std::vector<std::uint32_t> recent_pcs_;
@@ -182,6 +189,13 @@ private:
     // the kernel walks the priority list.
     std::vector<std::uint32_t> interrupt_routines_;
     std::size_t interrupt_routine_index_{0};
+    bool interrupt_hook_done_{false};
+    std::uint64_t interrupt_hooks_{0};
+
+public:
+    std::uint64_t hooks() const { return interrupt_hooks_; }
+
+private:
     std::uint64_t unknown_hardware_reads_{0};
     std::uint64_t unknown_hardware_writes_{0};
     std::map<std::uint32_t, std::uint64_t> hardware_reads_;
