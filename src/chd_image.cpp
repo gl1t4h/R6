@@ -524,10 +524,11 @@ struct LengthDecoder {
     std::uint16_t high[256]{};
 
     void reset() {
-        choice = choice2 = 1024;
-        std::fill(std::begin(low), std::end(low), 1024);
-        std::fill(std::begin(mid), std::end(mid), 1024);
-        std::fill(std::begin(high), std::end(high), 1024);
+        constexpr std::uint16_t kProbability = 1024;
+        choice = choice2 = kProbability;
+        std::fill(std::begin(low), std::end(low), kProbability);
+        std::fill(std::begin(mid), std::end(mid), kProbability);
+        std::fill(std::begin(high), std::end(high), kProbability);
     }
 
     std::uint32_t decode(RangeDecoder& range, int pos_state) {
@@ -646,16 +647,22 @@ public:
 
 private:
     void reset() {
-        std::fill(std::begin(is_match_), std::end(is_match_), 1024);
-        std::fill(std::begin(is_rep_), std::end(is_rep_), 1024);
-        std::fill(std::begin(is_rep_g0_), std::end(is_rep_g0_), 1024);
-        std::fill(std::begin(is_rep_g1_), std::end(is_rep_g1_), 1024);
-        std::fill(std::begin(is_rep_g2_), std::end(is_rep_g2_), 1024);
-        std::fill(std::begin(is_rep0_long_), std::end(is_rep0_long_), 1024);
-        std::fill(std::begin(pos_slot_), std::end(pos_slot_), 1024);
-        std::fill(std::begin(pos_decoders_), std::end(pos_decoders_), 1024);
-        std::fill(std::begin(align_), std::end(align_), 1024);
-        std::fill(std::begin(literals_), std::end(literals_), 1024);
+        constexpr std::uint16_t kProbability = 1024;
+        std::fill(std::begin(is_match_), std::end(is_match_), kProbability);
+        std::fill(std::begin(is_rep_), std::end(is_rep_), kProbability);
+        std::fill(std::begin(is_rep_g0_), std::end(is_rep_g0_),
+                  kProbability);
+        std::fill(std::begin(is_rep_g1_), std::end(is_rep_g1_),
+                  kProbability);
+        std::fill(std::begin(is_rep_g2_), std::end(is_rep_g2_),
+                  kProbability);
+        std::fill(std::begin(is_rep0_long_), std::end(is_rep0_long_),
+                  kProbability);
+        std::fill(std::begin(pos_slot_), std::end(pos_slot_), kProbability);
+        std::fill(std::begin(pos_decoders_), std::end(pos_decoders_),
+                  kProbability);
+        std::fill(std::begin(align_), std::end(align_), kProbability);
+        std::fill(std::begin(literals_), std::end(literals_), kProbability);
         length_.reset();
         rep_length_.reset();
     }
@@ -1053,7 +1060,8 @@ bool ChdImage::decode_hunk(std::uint32_t index, std::string& error) {
                 return false;
             }
         } else {
-            std::fill(buffer_.begin(), buffer_.end(), 0);
+            std::fill(buffer_.begin(), buffer_.end(),
+                  std::uint8_t{0});
         }
     } else if (entry.type <= 3) {
         const auto codec = compressors_[codec_at(entry.type)];
