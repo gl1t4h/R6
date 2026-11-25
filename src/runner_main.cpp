@@ -124,17 +124,11 @@ int main(int argc, char** argv) {
     }
 
     if (input.empty()) {
-        std::cerr << "usage: r6-run <game.cue|game.bin> [--steps N]"
+        std::cerr << "usage: r6-run <game.cue|game.bin|game.chd> [--steps N]"
                      " [--entry 0xADDR] [--poke 0xADDR=0xVALUE] [--vblank]"
                      " [--dump-frame frame.ppm]\n"
                   << "Runs your own local copy. No game data is copied or"
                      " uploaded.\n";
-        return 2;
-    }
-
-    if (r6::boot::is_chd_image(input)) {
-        std::cerr << "r6-run: " << input << "\n" << r6::boot::chd_hint()
-                  << "\n";
         return 2;
     }
 
@@ -146,11 +140,19 @@ int main(int argc, char** argv) {
     }
 
     r6::WindowsPlatformServices services(bin_path);
+    if (!services.disc_open()) {
+        std::cerr << "r6-run: " << input << ": " << services.disc_error()
+                  << "\n";
+        return 1;
+    }
     r6::Memory ram(kRamSize, true);
 
     const auto files = list_root(services);
     if (files.empty()) {
         std::cerr << "r6-run: no ISO9660 volume found in " << bin_path << "\n";
+        if (!services.disc_error().empty()) {
+            std::cerr << "r6-run: " << services.disc_error() << "\n";
+        }
         return 1;
     }
 

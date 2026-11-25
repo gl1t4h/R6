@@ -32,6 +32,8 @@ logs/
 *.pbp
 *.chd
 *.m3u
+# Exception: synthetic CHD fixtures are test data, not game images.
+!tests/fixtures/*.chd
 *.rom
 *.exe
 *.elf

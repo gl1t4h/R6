@@ -52,7 +52,10 @@ None.
   clock, GPUSTAT reports interlace/field bits, and DMA interrupt/DMA4 completion
   plus SPU transfer-register stubs are in place. The C++ core and `r6-tests`
   compile and pass under GCC; the batch has not yet been validated through the
-  documented Visual Studio build or an on-disc run. COP2 geometry is no longer
+  documented Visual Studio build or an on-disc run. Both front ends now open
+  CHD version 5 CD images directly (uncompressed, `cdzl` and `cdlz` hunks, and
+  plain or Huffman-compressed maps), verified against synthetic fixtures
+  produced by `chdman` 0.289 rather than a retail image. COP2 geometry is no longer
   only counted: RTPS/RTPT, NCLIP, AVSZ3/4, MVMVA and SQR compute with the
   documented saturation and FLAG behaviour, so transformed vertices, screen
   clipping and ordering-table Z now come out of the GTE. The lighting path
@@ -105,8 +108,8 @@ adding one would not change whether the game runs.
 
 `r6-player.exe` (built from `src/player_main.cpp`, also
 `build\r6-player.exe`) is a
-double-clickable windowed player. It finds your own `.cue`/`.bin`, boots the
-disc's executable and runs it at roughly six million instructions a second
+double-clickable windowed player. It finds your own `.cue`/`.bin`/`.chd`, boots
+the disc's executable and runs it at roughly six million instructions a second
 with a live status line. It does not render the game yet: the vblank handler
 and VSync callbacks run and the loader streams files, but the main loop has
 not submitted a scene. See `docs/recomp-findings.md` for the current blocker.

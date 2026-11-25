@@ -12,6 +12,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 add_library(r6-core STATIC
     src/bios_services.cpp
+    src/chd_image.cpp
     src/gte.cpp
     src/mips_interpreter.cpp
     src/software_gpu.cpp
@@ -46,6 +47,7 @@ endif()
 add_executable(r6-tests
     tests/test_main.cpp
     tests/test_bios_services.cpp
+    tests/test_chd_image.cpp
     tests/test_gte.cpp
     tests/test_mips_interpreter.cpp
     tests/test_software_gpu.cpp
@@ -53,6 +55,12 @@ add_executable(r6-tests
 
 target_include_directories(r6-tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/tests
+)
+
+# The CHD tests read committed fixtures; a direct g++ build from the repository
+# root falls back to the same relative path.
+target_compile_definitions(r6-tests PRIVATE
+    R6_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures"
 )
 
 target_link_libraries(r6-tests PRIVATE r6-core)

@@ -16,11 +16,20 @@ namespace {
 constexpr std::uint64_t kRawSectorSize = 2352;
 constexpr std::uint64_t kUserDataOffset = 24;
 constexpr std::uint64_t kUserDataSize = 2048;
+
+bool has_chd_extension(const std::filesystem::path& path) {
+    auto extension = path.extension().string();
+    for (auto& character : extension) {
+        if (character >= 'A' && character <= 'Z') {
+            character = static_cast<char>(character - 'A' + 'a');
+        }
+    }
+    return extension == ".chd";
 }
+}  // namespace
 
 WindowsPlatformServices::WindowsPlatformServices(
-    const std::filesystem::path& raw_bin_path)
-    : disc_(raw_bin_path, std::ios::binary) {
+    const std::filesystem::path& image_path) {
     // The kernel's GPU vectors write the same registers the interpreter does,
     // so route them at the modelled device instead of duplicating it.
     bios_.set_gpu_access(
@@ -28,6 +37,24 @@ WindowsPlatformServices::WindowsPlatformServices(
             write_gpu_register(register_address, value);
         },
         [this] { return gpu_.status(); });
+
+    // A CHD is a container, not a byte-addressable BIN, so sector reads take
+    // the decoder path instead of seeking in the file.
+    if (has_chd_extension(image_path)) {
+        auto image = std::make_unique<ChdImage>();
+        std::string error;
+        if (image->open(image_path, error)) {
+            chd_ = std::move(image);
+            disc_ready_ = true;
+        } else {
+            disc_error_ = error;
+        }
+        return;
+    }
+
+    disc_.open(image_path, std::ios::binary);
+    disc_ready_ = static_cast<bool>(disc_);
+    if (!disc_ready_) disc_error_ = "cannot open " + image_path.string();
 }
 
 std::uint16_t WindowsPlatformServices::read_controller(std::size_t port) {
@@ -104,6 +131,13 @@ bool WindowsPlatformServices::read_disc_sector(
     std::uint32_t raw_sector,
     std::uint8_t* destination,
     std::size_t destination_size) {
+    if (chd_) {
+        if (chd_->read_user_sector(raw_sector, destination, destination_size)) {
+            return true;
+        }
+        disc_error_ = chd_->error();
+        return false;
+    }
     if (!disc_ || destination == nullptr || destination_size < kUserDataSize) {
         return false;
     }
@@ -121,6 +155,14 @@ bool WindowsPlatformServices::read_disc_header(
     std::uint32_t raw_sector,
     std::uint8_t* destination,
     std::size_t destination_size) {
+    if (chd_) {
+        if (chd_->read_sector_header(raw_sector, destination,
+                                     destination_size)) {
+            return true;
+        }
+        disc_error_ = chd_->error();
+        return false;
+    }
     if (!disc_ || destination == nullptr || destination_size < 12) return false;
     // A raw Mode 2 sector is a 12-byte sync pattern, then the 4-byte address
     // and mode, then the 8-byte subheader: the drive presents the last 12

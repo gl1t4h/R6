@@ -3,9 +3,12 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <memory>
+#include <string>
 #include <vector>
 
 #include "r6/bios_services.h"
+#include "r6/chd_image.h"
 #include "r6/platform_services.h"
 #include "r6/software_gpu.h"
 
@@ -15,7 +18,12 @@ class Memory;
 
 class WindowsPlatformServices final : public PlatformServices {
 public:
-    explicit WindowsPlatformServices(const std::filesystem::path& raw_bin_path);
+    explicit WindowsPlatformServices(const std::filesystem::path& image_path);
+
+    // False when the image could not be opened; the front ends report
+    // disc_error() instead of blaming a missing ISO9660 volume.
+    bool disc_open() const { return disc_ready_; }
+    const std::string& disc_error() const { return disc_error_; }
 
     std::uint16_t read_controller(std::size_t port) override;
     void submit_audio_samples(const std::int16_t* samples, std::size_t count) override;
@@ -46,6 +54,9 @@ public:
 
 private:
     std::ifstream disc_;
+    std::unique_ptr<ChdImage> chd_;
+    bool disc_ready_{false};
+    std::string disc_error_;
     std::uint16_t controller_state_[2]{0xFFFF, 0xFFFF};
     bool controller_override_[2]{false, false};
     std::vector<std::uint32_t> frame_;

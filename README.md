@@ -149,11 +149,32 @@ not yet a playable recompilation.
 
 ## Disc formats
 
-The loader reads raw BIN/CUE images only. A `.cue` sheet points at its `.bin`
-track and `resolve_bin()` follows that pointer; nothing in the toolchain opens a
-compressed container, so a `.chd` is rejected as a missing image.
+`r6-run` and `r6-player` read raw BIN/CUE images and CHD version 5 CD images. A
+`.cue` sheet points at its `.bin` track and `resolve_bin()` follows that
+pointer, so either front end accepts a `.cue`, a `.bin` or a `.chd` directly.
 
-Expand it once with `chdman` (shipped with MAME):
+The CHD reader covers the containers `chdman` writes:
+
+- uncompressed hunks and the 4-byte map produced by `-c none`
+- `cdzl` (DEFLATE) and `cdlz` (LZMA) CD hunks
+- both the plain and the Huffman-compressed hunk map
+- back-references (SELF hunks) and 2- or 3-byte compressed lengths
+
+`cdfl` hunks only hold CD audio frames, which the emulated CD controller never
+requests, so a data track with audio tracks after it is fine. These are
+rejected with a specific message instead of silent garbage:
+
+- Zstandard hunks (`cdzs`)
+- delta CHDs that need a parent image
+- CHD versions 1 to 4
+
+MAME 0.289 `chdman` output is the tested case. The fixtures under
+`tests/fixtures` are built by `tests/make_chd_fixtures.py` from repeated ASCII
+text (no game data), and every sector they expose is compared against the
+original synthetic image. No retail disc has been run through this path yet.
+
+If a file still cannot be read, expand it once with `chdman` (shipped with
+MAME) and point the front ends at the `.cue` instead:
 
 ```powershell
 chdman extractcd -i "$env:USERPROFILE\Downloads\yourgame.chd" `
@@ -164,10 +185,8 @@ chdman extractcd -i "$env:USERPROFILE\Downloads\yourgame.chd" `
 Write the output outside the repository, as those paths do. The expanded image
 is disc data: `.gitignore` already excludes `*.chd`, `*.cue` and `*.bin`, so it
 cannot be committed by accident, but keeping it out of the tree avoids tools
-picking it up. Point `r6-run` or `r6-player` at the new `.cue`.
-
-Adding a `.chd` reader would mean linking a container library, so BIN/CUE stays
-the supported input and conversion happens on the user's machine.
+picking it up. The only committed `.chd` files are the synthetic test fixtures
+under `tests/fixtures`; the ignore rule carries an explicit exception for them.
 
 ## Development rules
 

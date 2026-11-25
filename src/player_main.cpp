@@ -70,7 +70,8 @@ std::filesystem::path scan_for_image(const std::filesystem::path& root,
     std::error_code error;
     if (!std::filesystem::is_directory(root, error)) return {};
 
-    std::filesystem::path fallback;
+    std::filesystem::path chd_fallback;
+    std::filesystem::path bin_fallback;
     std::size_t visited = 0;
     for (auto it = std::filesystem::recursive_directory_iterator(
              root, std::filesystem::directory_options::skip_permission_denied,
@@ -91,9 +92,14 @@ std::filesystem::path scan_for_image(const std::filesystem::path& root,
             }
         }
         if (extension == ".cue") return entry.path();
-        if (extension == ".bin" && fallback.empty()) fallback = entry.path();
+        if (extension == ".chd" && chd_fallback.empty()) {
+            chd_fallback = entry.path();
+        }
+        if (extension == ".bin" && bin_fallback.empty()) {
+            bin_fallback = entry.path();
+        }
     }
-    return fallback;
+    return chd_fallback.empty() ? bin_fallback : chd_fallback;
 }
 
 std::filesystem::path user_profile() {
@@ -130,21 +136,16 @@ std::filesystem::path ask_for_disc() {
     wchar_t buffer[MAX_PATH * 4]{};
     OPENFILENAMEW dialog{};
     dialog.lStructSize = sizeof(dialog);
-    dialog.lpstrFilter = L"PlayStation images (*.cue;*.bin)\0*.cue;*.bin\0All files\0*.*\0";
+    dialog.lpstrFilter = L"PlayStation images (*.cue;*.bin;*.chd)\0*.cue;*.bin;*.chd\0All files\0*.*\0";
     dialog.lpstrFile = buffer;
     dialog.nMaxFile = static_cast<DWORD>(std::size(buffer));
-    dialog.lpstrTitle = L"Select your PlayStation .cue or .bin";
+    dialog.lpstrTitle = L"Select your PlayStation .cue, .bin or .chd";
     dialog.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST;
     if (!GetOpenFileNameW(&dialog)) return {};
     return std::filesystem::path(buffer);
 }
 
 bool load_image(Player& player, std::string& error) {
-    if (r6::boot::is_chd_image(player.image)) {
-        error = r6::boot::chd_hint();
-        return false;
-    }
-
     player.bin = r6::boot::resolve_bin(player.image);
     std::error_code code;
     if (!std::filesystem::exists(player.bin, code)) {
@@ -153,11 +154,19 @@ bool load_image(Player& player, std::string& error) {
     }
 
     player.services = std::make_unique<r6::WindowsPlatformServices>(player.bin);
+    if (!player.services->disc_open()) {
+        error = "The disc image could not be opened:\n" +
+                player.services->disc_error();
+        return false;
+    }
     player.ram = std::make_unique<r6::Memory>(kRamSize, true);
 
     const auto files = r6::boot::list_root(*player.services);
     if (files.empty()) {
         error = "No ISO9660 filesystem was found. Is this a PlayStation 1 disc?";
+        if (!player.services->disc_error().empty()) {
+            error += "\n" + player.services->disc_error();
+        }
         return false;
     }
 
@@ -456,7 +465,7 @@ int WINAPI WinMain(HINSTANCE instance, HINSTANCE, LPSTR command_line, int) {
     if (image.empty()) {
         MessageBoxW(nullptr,
                     L"No disc image was selected.\n\nRun this again and pick "
-                    L"your .cue file.",
+                    L"your .cue, .bin or .chd file.",
                     L"R6 Player", MB_OK | MB_ICONWARNING);
         return 0;
     }
