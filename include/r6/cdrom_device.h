@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <string>
 #include <vector>
 
 #include "r6/platform_services.h"
@@ -62,6 +63,10 @@ public:
         return result;
     }
 
+    // Bounded event log for bring-up: commands, interrupt transitions and
+    // sector loads, most recent last.
+    const std::vector<std::string>& log() const { return log_; }
+
     std::uint32_t sector() const { return sector_; }
     std::uint32_t sectors_read() const { return sectors_read_; }
     std::uint8_t status_byte() const { return status_; }
@@ -71,7 +76,10 @@ private:
     static constexpr std::uint8_t kMotorOn = 0x02;
     static constexpr std::uint32_t kIntAcknowledge = 1;
     static constexpr std::uint32_t kIntComplete = 2;
-    static constexpr std::uint32_t kIntDataReady = 3;
+    // ReadN reports the first sector with INT1 (the same interrupt as the
+    // command acknowledgement), not INT3: libraries treat INT3 as data end.
+    static constexpr std::uint32_t kIntDataReady = 1;
+    static constexpr std::uint32_t kIntDataEnd = 3;
 
     std::uint8_t status() const {
         std::uint32_t value = index_ & 3u;
@@ -88,7 +96,14 @@ private:
     }
 
     std::uint8_t pop_data() {
-        if (reading_ && data_index_ >= data_.size()) load_sector();
+        if (reading_ && data_index_ >= data_.size() && !data_end_raised_) {
+            // The guest has taken the whole sector, so the read reports data
+            // end (INT3): libraries complete a transfer on it, and leaving the
+            // read open makes their sync helper time out instead.
+            data_end_raised_ = true;
+            interrupt_ = kIntDataEnd;
+            complete_pending_ = 0;
+        }
         if (data_index_ >= data_.size()) return 0;
         return data_[data_index_++];
     }
@@ -96,7 +111,11 @@ private:
     void load_sector() {
         data_.assign(2048, 0);
         data_index_ = 0;
-        if (!services_.read_disc_sector(sector_, data_.data(), data_.size())) {
+        const bool loaded =
+            services_.read_disc_sector(sector_, data_.data(), data_.size());
+        note("sector " + std::to_string(sector_) +
+             (loaded ? " loaded" : " FAILED"));
+        if (!loaded) {
             data_.assign(2048, 0);
         }
         if (reading_) ++sector_;
@@ -104,6 +123,8 @@ private:
     }
 
     void acknowledge(std::uint32_t value) {
+        note("ack " + std::to_string(value & 0x07u) + " int=" +
+             std::to_string(interrupt_));
         if ((value & 0x07u) == 0) return;
         if (interrupt_ == 0) return;
         if (interrupt_ == kIntAcknowledge && complete_pending_) {
@@ -111,6 +132,15 @@ private:
             complete_pending_ = 0;
             return;
         }
+        if (interrupt_ == kIntDataReady && reading_ && !data_.empty()) {
+            // Acknowledge of the data-ready interrupt ends this sector's
+            // transfer, so the guest can also see data end even when its
+            // library waits for it without draining the FIFO first.
+            data_end_raised_ = true;
+            interrupt_ = kIntDataEnd;
+            return;
+        }
+
         interrupt_ = 0;
         response_.clear();
         response_index_ = 0;
@@ -127,11 +157,31 @@ private:
         response_.push_back(value);
     }
 
+    void note(const std::string& text) {
+        if (log_.size() >= 96) log_.erase(log_.begin());
+        log_.push_back(text);
+    }
+
+    static std::string hex_byte(std::uint8_t value) {
+        static const char* digits = "0123456789ABCDEF";
+        std::string text(2, '0');
+        text[0] = digits[(value >> 4) & 0xF];
+        text[1] = digits[value & 0xF];
+        return text;
+    }
+
     void execute_command(std::uint8_t command) {
         data_index_ = 0;
         data_.clear();
         response_.clear();
         response_index_ = 0;
+
+        std::string summary = "cmd " + hex_byte(command) + " p=";
+        for (auto parameter : parameters_) {
+            summary += hex_byte(parameter);
+        }
+        summary += " sec=" + std::to_string(sector_);
+        note(summary);
 
         switch (command) {
             case 0x02:  // Setloc(min, sec, frame)
@@ -143,19 +193,25 @@ private:
                 break;
             case 0x06:  // ReadN
                 reading_ = true;
+                data_end_raised_ = false;
+                // The sector is presented together with the data-ready
+                // interrupt, so the FIFO already holds it when the guest starts
+                // its DMA transfer.
                 begin_command(kIntAcknowledge, kIntDataReady);
+                load_sector();
                 break;
             case 0x09:  // Pause
             case 0x08:  // Stop
                 reading_ = false;
+                data_end_raised_ = false;
                 begin_command(kIntAcknowledge, kIntComplete);
                 break;
-            case 0x0E:  // GetlocL
+            case 0x0E:  // GetlocL: minute, second, frame in BCD, then mode.
                 begin_command(kIntAcknowledge, kIntComplete);
-                push_response(static_cast<std::uint8_t>(sector_ / (60 * 75)));
-                push_response(static_cast<std::uint8_t>((sector_ / 75) % 60));
-                push_response(static_cast<std::uint8_t>(sector_ % 75));
-                push_response(0);
+                push_response(to_bcd(sector_ / (60 * 75)));
+                push_response(to_bcd((sector_ / 75) % 60));
+                push_response(to_bcd(sector_ % 75));
+                push_response(0x02);  // Mode 2, form 1.
                 for (int index = 0; index < 4; ++index) push_response(0);
                 break;
             case 0x19:  // Test: sub-function 0x20 reports the BIOS date
@@ -194,6 +250,10 @@ private:
         parameters_.clear();
     }
 
+    static std::uint8_t to_bcd(std::uint32_t value) {
+        return static_cast<std::uint8_t>(((value / 10) << 4) | (value % 10));
+    }
+
     static std::uint32_t bcd(std::uint8_t value) {
         return static_cast<std::uint32_t>((value >> 4) * 10 + (value & 0x0Fu));
     }
@@ -211,6 +271,8 @@ private:
     std::uint32_t sector_{0};
     std::uint32_t sectors_read_{0};
     bool reading_{false};
+    bool data_end_raised_{false};
+    std::vector<std::string> log_;
 };
 
 }  // namespace r6

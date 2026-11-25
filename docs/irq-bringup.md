@@ -145,14 +145,38 @@ timing now advances everywhere, and a received byte raises the controller
 interrupt as well as a sent one. The loop still runs (about 2k entries per 40M
 instructions) but it is no longer where the run ends.
 
+## Disc reads
+
+The CD model was answering commands but never delivering a sector the library
+could accept, and the game sat in `CdRead: retry...` forever.
+
+- `ReadN` reported the second interrupt as INT3, which libraries read as "data
+  end" before any data existed. It now reports INT1 (data ready) and presents
+  the sector in the same step, so the FIFO already holds it when the guest
+  starts its DMA.
+- `GetlocL` returns minute/second/frame in BCD with the sector mode, as the
+  hardware does, instead of raw binary.
+- The read finishes with INT3 once the sector is drained or its data-ready
+  interrupt is acknowledged, which is what libcd's sync helper waits on. Ending
+  it there is what removed `CD timeout: CD_sync:(CdlReadN) Sync=NoIntr`.
+- The disc interrupt is refreshed on register *reads* and after DMA too, not
+  only on writes: the flag can be raised by the data FIFO running dry.
+
+Sector contents were verified against the image directly: sector 166 of
+`Spider-Man (USA).bin` (Mode 2, 2352-byte raw, user data at +24) holds real
+program data, and our reader returns exactly those bytes.
+
+With that, a 40M-instruction run reads real sectors (9-19 per run reached the
+guest through DMA3) and the hard CD timeout is gone. The loader still prints
+`CdRead: retry...` a few times per run and never gets past its own validation,
+so no display command is issued yet.
+
 ## Still open
 
-- Handlers overrun their 50k-step budget on almost every interrupt (609 of 612
-  in a 40M run): the vblank dispatcher re-enters about 50 times per tick, so the
-  counter races ahead instead of ticking at 60 Hz. The re-entry source is not
-  yet identified.
-- The game never programs the display: `2 primitives (1 fills)`, draw area
-  `0,0 to 0,0`, display off, `0` rasterised pixels. A `--shot` PPM of
-  320x240x3 is 230,400 bytes of zeroes, so the frame is black. The run now ends
-  in the game's own code (`0x800647xx`) retrying `CdRead`, which is the next
-  thing to make work.
+- The game's loader still retries its reads. libcd registers no data/ready
+  callbacks in this title (`0x800B3B14`/`0x800B3B18` stay zero), so completion
+  depends on its sync helper, and the retry survives even with INT3 delivered.
+- Handlers still overrun their 50k-step budget on nearly every interrupt.
+- No display programming at all: `2 primitives (1 fills)`, draw area
+  `0,0 to 0,0`, display off, `0` rasterised pixels. A `--shot` PPM of 320x240x3
+  is 230,400 bytes of zeroes, so the frame is still black.

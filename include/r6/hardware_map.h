@@ -47,7 +47,20 @@ public:
                physical <= hardware::kCdromEnd;
     }
     std::uint8_t read_cdrom(std::uint32_t physical) {
-        return cdrom_.read(physical - hardware::kCdromBase);
+        const auto value = cdrom_.read(physical - hardware::kCdromBase);
+        refresh_cdrom_interrupt();
+        return value;
+    }
+
+    // The disc controller asserts its interrupt line whenever it has an
+    // interrupt flag pending, whether that flag was raised by a command or by
+    // the data FIFO running dry.
+    void refresh_cdrom_interrupt() {
+        if (cdrom_.interrupt() != 0) {
+            interrupt_status_ |= kInterruptCdrom;
+        } else {
+            interrupt_status_ &= ~kInterruptCdrom;
+        }
     }
     void write_cdrom(std::uint32_t physical, std::uint8_t value) {
         cdrom_.write(physical - hardware::kCdromBase, value);
@@ -57,9 +70,7 @@ public:
         // The disc interrupt is raised only when the guest has enabled it
         // through the controller's own enable bits, so a stale flag cannot
         // starve the vblank path that drives the frame loop.
-        if (cdrom_.interrupt() != 0 && cdrom_interrupt_enabled_) {
-            interrupt_status_ |= kInterruptCdrom;
-        }
+        refresh_cdrom_interrupt();
     }
     CdromDevice& cdrom() { return cdrom_; }
 

@@ -195,6 +195,8 @@ private:
 public:
     std::uint64_t hooks() const { return interrupt_hooks_; }
 
+    const std::vector<std::string>& cdrom_log() { return hardware_.cdrom().log(); }
+
 private:
     std::uint64_t unknown_hardware_reads_{0};
     std::uint64_t unknown_hardware_writes_{0};

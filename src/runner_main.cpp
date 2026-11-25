@@ -54,6 +54,7 @@ int main(int argc, char** argv) {
     std::uint32_t find_value = 0;
     std::uint32_t search_imm = 0;
     bool search_code = false;
+    bool trace_cd = false;
 
     for (int index = 1; index < argc; ++index) {
         const std::string argument = argv[index];
@@ -76,6 +77,8 @@ int main(int argc, char** argv) {
             search_imm = static_cast<std::uint32_t>(
                 std::stoul(argv[++index], nullptr, 0));
             search_code = true;
+        } else if (argument == "--trace-cd") {
+            trace_cd = true;
         } else if (argument == "--hot") {
             hot_enabled = true;
         } else if (argument == "--watch-pc" && index + 1 < argc) {
@@ -378,6 +381,12 @@ int main(int argc, char** argv) {
               << "VBlank: " << interpreter.vblanks() << " ticks, "
               << interpreter.interrupts() << " interrupts delivered, "
               << interpreter.interrupt_overruns() << " handler overruns\n";
+    if (trace_cd) {
+        std::cout << "CD events:" << std::endl;
+        for (const auto& entry : interpreter.cdrom_log()) {
+            std::cout << "  " << entry << std::endl;
+        }
+    }
     if (const auto entry_int = services.entry_int(); entry_int != 0) {
         std::cout << "EntryInt: 0x" << std::hex << entry_int << " pc=0x"
                   << ram.read32(entry_int & kRamMask)

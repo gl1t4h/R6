@@ -368,6 +368,7 @@ void MipsInterpreter::run_dma3_transfer() {
     for (std::uint32_t index = 0; index < words; ++index) {
         write32(address + index * 4, hardware_.cdrom().read_word());
     }
+    hardware_.refresh_cdrom_interrupt();
 }
 
 void MipsInterpreter::run_dma2_list() {
