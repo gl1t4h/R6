@@ -94,8 +94,10 @@ public:
                 if (index_ == 0) queue_command(value);
                 return;
             case 2:
-                // Banks 1 and 3 redirect +2 to the interrupt enable register.
-                if ((index_ & 1u) != 0) {
+                // Only bank 1 +2 is the interrupt enable register. Banks 2
+                // and 3 +2 are the CD audio volumes; decoding one of those
+                // as the mask disarms the interrupt line mid-transfer.
+                if (index_ == 1) {
                     interrupt_mask_ = value & 0x1Fu;
                     return;
                 }
@@ -104,15 +106,16 @@ public:
                 }
                 return;
             default:
-                if ((index_ & 1u) != 0) {
+                if (index_ == 1) {
                     acknowledge(static_cast<std::uint32_t>(value));
-                } else {
+                } else if (index_ == 0) {
                     // Bank 0 +3 is the request register (BFRD and friends),
                     // not the interrupt mask. Keeping a request-register
                     // write out of the mask stops a sector DMA from
                     // disabling the controller's interrupt line.
                     request_register_ = value;
                 }
+                // Banks 2/3 +3 are the left/right CD volumes; ignore them.
                 return;
         }
     }

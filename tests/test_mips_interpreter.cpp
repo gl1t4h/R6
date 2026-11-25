@@ -382,6 +382,13 @@ void cdrom_interrupt_line_honours_the_enable_mask() {
     hardware.write_cdrom(0x1F801802u, 0x07);  // enable the response type
     R6_CHECK((hardware.interrupt_status() & 0x04u) != 0);
 
+    // Banks 2/3 +2/+3 are CD audio volumes. A driver that sets them right
+    // before sending a command must not lose the interrupt it then waits on.
+    hardware.write_cdrom(0x1F801800u, 3);
+    hardware.write_cdrom(0x1F801802u, 0x00);  // right-to-right volume
+    hardware.write_cdrom(0x1F801803u, 0x20);  // right-to-left volume
+    R6_CHECK((hardware.interrupt_status() & 0x04u) != 0);
+
     hardware.write_cdrom(0x1F801800u, 0);     // bank 0 +3: request register
     hardware.write_cdrom(0x1F801803u, 0x80);  // BFRD, not the mask
     R6_CHECK((hardware.interrupt_status() & 0x04u) != 0);
