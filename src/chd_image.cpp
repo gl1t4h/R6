@@ -964,8 +964,13 @@ bool ChdImage::load_compressed_map(std::string& error) {
             repeat = 2 + static_cast<int>(huffman.decode(bits));
         } else if (value == kTypeRleLarge) {
             entry.type = last;
-            repeat = 2 + 16 + (static_cast<int>(huffman.decode(bits)) << 4) +
-                     static_cast<int>(huffman.decode(bits));
+            // Each decode consumes bits, so the two nibbles must be read in
+            // a fixed order.  Writing both calls inside one expression lets
+            // the compiler pick the order: MSVC evaluates the right operand
+            // first, which swaps the nibbles and shifts the whole map.
+            const auto high = static_cast<int>(huffman.decode(bits));
+            const auto low = static_cast<int>(huffman.decode(bits));
+            repeat = 2 + 16 + (high << 4) + low;
         } else {
             last = value;
             entry.type = value;
