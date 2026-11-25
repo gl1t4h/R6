@@ -11,23 +11,23 @@ platform-specific services with native implementations.
 The project is currently in the **initial investigation and tooling phase**.
 There is not yet a playable native recompilation.
 
-## Current game status
+## Current status
 
-| Game | Region/version | Status | Progress |
-| --- | --- | --- | --- |
-| Spider-Man | USA PlayStation 1 release | Boots into its own frame loop; draws nothing yet | 96% — loads `SLUS_008.75`, executes it on the native CPU, and now services the guest's own interrupt dispatcher correctly. `I_STAT` acknowledgement used the wrong polarity (the PS1 clears a bit by writing zero), which made libetc's dispatcher retry forever and kept every vblank callback from returning. With that corrected the VSync counter and callbacks run (over 1,200 vblanks in an 80M-instruction run, two handler overruns), but the game still waits on its CD streaming path and the display stays off |
+R6 is a general PlayStation 1 bring-up/recompilation research project. It is not
+tied to any single game title. Bring-up is validated against user-supplied disc
+images that are never included in this repository.
 
-No games are currently completed.
+| Area | Status | Notes |
+| --- | --- | --- |
+| Disc boot | In progress | Loads a PS-X EXE from a user-supplied BIN/CUE, executes it on the interpreter, and services kernel/IRQ paths used during early boot. |
+| CD-ROM / DMA | In progress | DMA3 disc reads, CD command responses, and sector delivery are implemented enough for early file streaming; timing-sensitive loader behavior is still being debugged. |
+| GPU / display | In progress | Software GPU handles common GP0/GP1 commands and presents a VRAM display window; guest scene submission depends on further CPU/GTE/timing coverage. |
+| GTE / COP2 | Not implemented | Geometry instructions are accepted/counted but not executed, so 3D scene generation is blocked. |
+| Native player | In progress | `r6-player` opens a Win32 window and presents the emulated display from a user-supplied local disc image. |
 
-### Running what exists
-
-`spider-man-r6.exe` (source: `src/spiderman_player.cpp`) is a windowed player:
-it boots your own disc image and shows a frame-rate readout across the top of
-the game screen. The readout is live, but the screen below it is black - the
-guest's interrupt handler now completes, yet the game is still waiting for its
-CD streaming callback before it submits a scene, so the FPS counter reports
-presented frames, not rendered ones.
-
+Progress is measured by bring-up milestones, not playable game content. On-screen
+counters report interpreter/player state; a black or incomplete display usually
+means the guest has not submitted a renderable scene yet.
 ## What is and is not included
 
 This repository contains only original project code, scripts, documentation,
@@ -124,8 +124,8 @@ Run your own local copy on the development runner:
 Use `build\Release\r6-run.exe` for a Visual Studio build. The runner loads the
 boot executable out of your BIN/CUE, executes it on the native R3000A
 interpreter, and reports the instructions, BIOS calls and GPU traffic it saw. It
-is **not** a playable build: GTE geometry and the CD streaming callback are
-still missing, so the guest parks in its CD wait instead of submitting a scene.
+is **not** a playable build: GTE geometry is still missing, and the loader has
+not yet submitted a scene.
 
 Run the native checks (GPU decoder and BIOS services) and the analysis tests:
 
@@ -203,7 +203,7 @@ None.
 
 | Game | Status | Next milestone |
 | --- | --- | --- |
-| Spider-Man (USA) | Native interpreter runs the guest, its vblank dispatcher and VSync callbacks | CD streaming callback and the first display/GPU scene, then GTE geometry |
+| Spider-Man (USA) | Native interpreter runs the guest, its vblank dispatcher, VSync callbacks and the CD loader (whole files stream); emulated-cycle timer/DMA/SPU groundwork is in the working tree | Validate the cycle-timer working-tree batch, reproduce/eliminate remaining `CdSync`/loader stalls on disc, then chase the first display/GPU scene and GTE geometry |
 
 ## Contributing
 

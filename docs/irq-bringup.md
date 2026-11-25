@@ -176,26 +176,25 @@ instructions) but it is no longer where the run ends.
 The CD model was answering commands but never delivering a sector the library
 could accept, and the game sat in `CdRead: retry...` forever.
 
-- `ReadN` reported the second interrupt as INT3, which libraries read as "data
-  end" before any data existed. It now reports INT1 (data ready) and presents
-  the sector in the same step, so the FIFO already holds it when the guest
-  starts its DMA.
-- `GetlocL` returns minute/second/frame in BCD with the sector mode, as the
-  hardware does, instead of raw binary.
-- The read finishes with INT3 once the sector is drained or its data-ready
-  interrupt is acknowledged, which is what libcd's sync helper waits on. Ending
-  it there is what removed `CD timeout: CD_sync:(CdlReadN) Sync=NoIntr`.
-- The disc interrupt is refreshed on register *reads* and after DMA too, not
-  only on writes: the flag can be raised by the data FIFO running dry.
+The controller now follows the real interrupt protocol: a command is
+acknowledged with INT3, completes with INT2, and each sector raises INT1. The
+result FIFO (`+1`) and data FIFO (`+2`) are readable in every bank; only `+3`
+is banked (interrupt flags in banks 1/3, interrupt mask in banks 0/2). A sector
+is only presented after the guest acknowledges the previous INT1, and the next
+one is presented when the FIFO drains if that acknowledgement has already
+arrived, which matches libcd's ack-then-DMA order.
+
+`GetlocL`/`GetlocP`/`Getparam`/`GetTN`/`GetTD`/`GetID`/`Test` answer with the
+byte sequences libcd expects in BCD, and the disc interrupt is refreshed on
+register *reads* and after DMA, not only on writes, because the flag can also
+be raised by the data FIFO running dry.
 
 Sector contents were verified against the image directly: sector 166 of
 `Spider-Man (USA).bin` (Mode 2, 2352-byte raw, user data at +24) holds real
 program data, and our reader returns exactly those bytes.
 
-With that, a 40M-instruction run reads real sectors (9-19 per run reached the
-guest through DMA3) and the hard CD timeout is gone. The loader still prints
-`CdRead: retry...` a few times per run and never gets past its own validation,
-so no display command is issued yet.
+With that, runs advance through whole files instead of failing the first
+sector.
 
 ## Why the loader rejected the read
 
@@ -227,63 +226,68 @@ not in the CD controller.
 
 ## The sector check, and why it failed
 
-The message came from one comparison:
+The message came from one comparison in the loader's data-ready callback:
 
 ```
-0x80089A38  jal  0x80087084        ; $a0 = $sp+16, $a1 = 3
+0x80089A38  jal  0x80087084        ; DMA the sector body (512 words)
 0x80089A40  jal  0x80087220        ; position (BCD) -> LBA
-0x80089A44  addiu $a0, $sp, 0x10
-0x80089A50  lw   $v1, 0x800B1C5C   ; expected sector, 16 here
+0x80089A50  lw   $v1, 0x800B1C5C   ; expected sector
 0x80089A58  beq  $v0, $v1, ok      ; else "CdRead: sector error"
 ```
 
-`0x80087220` is a BCD position converter whose delay slot is
-`addiu $v0, $v0, -0x96`, so it returns `disc_sector - 150`: the two-second
-pregap. `0x800B1C5C` is field `+0x20` of the loader state at `0x800B1C3C` and
-holds the expected *user* sector - 16 for disc sector 166, exactly what
-`Setloc(00:02:16)` addresses. The function returned `-150` because its input,
-`$sp+16`, was all zeros.
+`0x80087220` is a BCD position converter that subtracts 150 (the two-second
+pregap), so it turns a header of `00:02:16` into LBA 16. `0x800B1C5C` is field
+`+0x20` of the loader state at `0x800B1C3C` and holds the sector the guest
+expects next.
 
-Three separate defects produced that:
+Two defects made the comparison fail:
 
-1. **Commands answered with one byte.** The drive replies with status, track,
-   index and the position in BCD. Only the status was sent, so libcd's
-   location buffer (`0x800B3B2C`) held zeros.
-2. **DMA3 stores were dropped.** `dma_address()` returns the masked physical
-   address, and `run_dma3_transfer` handed that straight to `write32`, which
-   expects a virtual address. Every transfer went to `0x000B382C` instead of
-   `0x800B382C` and was discarded, so neither the sector buffer nor the
-   position buffer ever received its data.
-3. **Short transfers read the wrong FIFO.** The 3-word (`BCR = 0x00010003`)
-   transfer carries a command's answer into the caller's buffer and the caller
-   converts it as `mm, ss, ff`. Those bytes are the response from offset 3
-   onwards, not sector data.
+1. **The drive did not present the 12-byte sector header.** A read sector
+   starts with the address (minute/second/frame in BCD), the mode byte and,
+   for Mode 2, the 8-byte subheader. libcd DMAs those 12 bytes first
+   (`BCR = 0x00010003`) and validates the position before it collects the
+   payload. Our FIFO began directly with the 2048 user bytes, so the "header"
+   was really ISO9660 PVD text (`\x01CD001...PLAYSTATION`) and the check
+   failed. `CdromDevice::load_sector` now builds header + payload, reads the
+   real header from the image through `PlatformServices::read_disc_header`,
+   and synthesises one from the LBA when a backend has no raw access.
+2. **The short DMA was answered from the result FIFO.**
+   `read_word(position_packet)` returned bytes from the command response,
+   which the guest had already consumed; with the response empty it fell
+   through to sector data. DMA3 on the disc channel always drains the data
+   FIFO, so the special case is gone.
 
-With all three fixed the comparison reads `v0 = 0x10` against `v1 = 0x10` and
-passes; `CdRead: sector error` and the retry loop are gone. `Pause` on a
-reading drive now reports INT3 (data end), which is what the completion path
-waits for.
+Earlier defects in the same path were also fixed: DMA3 stores now use the
+KSEG0 alias (`0x800B382C`, not `0x000B382C`), and the controller reports the
+real interrupt codes (INT3 acknowledge, INT2 complete, INT1 per sector) instead
+of treating INT1 as an acknowledgement.
+
+With that the comparison sees `v0 == v1` for every sector and the loader
+streams whole files: `sfx.vab` is printed, sector 390 (`CD.HED`) is read, and
+runs reach `CD.WAD` at LBA 397. A sector is presented only after the guest
+acknowledges the previous data-ready interrupt, or when the FIFO drains after
+that acknowledgement, so libcd's ack-then-DMA order works either way.
 
 ## The blocker left: handlers that never return
 
 The disc path is no longer the obstacle. With reads accepted the guest reaches
 its own frame loop and waits on vertical blank, and the HLE interrupt model
-cannot satisfy it:
+still struggles:
 
-- `144` of `151` delivered vblank handlers hit the 50k-step budget.
-- The last handler spins in guest wait loops (`0x800880AC`, earlier
-  `0x8008949C`), a few hundred iterations each time it is entered.
-- Raising the budget to 400k only lowers the vblank rate (75 ticks in 30M
-  instructions) and leaves the run inside libetc's dispatcher, because the
-  handler is not waiting on a step count - it is waiting on hardware events
-  that never arrive while we jump straight into the routine.
-- The game's own `VSync: timeout` messages follow from that.
+- Before the sector-header fix, `144` of `151` delivered vblank handlers hit
+  the 50k-step budget. The last handler spun in guest wait loops
+  (`0x800880AC`, earlier `0x8008949C`), a few hundred iterations each time.
+- The handler runs an interrupt routine injected by the host rather than the
+  guest's own exception vector, so nesting and blocking are only approximated.
+- The game's `VSync`/`CD timeout` messages still appear when a wall-clock
+  timer expires between the handler and the code that acknowledges it.
+  The root counters are currently driven by the host clock, so runs are not
+  deterministic; folding them onto an emulated cycle counter is the next
+  correctness step.
 
-Injecting a handler by setting the PC and later restoring the context cannot
-model nesting or a handler that blocks, which is why the budget keeps getting
-hit. The fix is to run the guest's real exception path instead: take vector
-`0x80000080`, set EPC/CAUSE/SR, let a handler return through `RFE`, and deliver
-new interrupts only at safe points.
+The long-term fix is to run the guest's real exception path instead: take
+vector `0x80000080`, set EPC/CAUSE/SR, let a handler return through `RFE`, and
+deliver new interrupts only at safe points.
 
 ## Still open
 

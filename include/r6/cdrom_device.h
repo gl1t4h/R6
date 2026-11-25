@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -21,24 +22,39 @@ public:
     explicit CdromDevice(PlatformServices& services) : services_(services) {}
 
     // Byte access to 0x1F801800..0x1F801803.
+    //
+    // The result (response) FIFO at +1 and the data FIFO at +2 are visible in
+    // every bank; the bank only redirects +3 (interrupt flags in banks 1/3,
+    // interrupt mask in banks 0/2). Sony's CD driver reads the flags with
+    // bank 1 selected and then collects the response without switching back,
+    // so treating +1 as bank-dependent hid every command answer.
     std::uint8_t read(std::uint32_t offset) {
+        std::uint8_t value = 0;
         switch (offset) {
             case 0:
                 ++status_reads_;
                 if (response_index_ < response_.size()) ++response_seen_;
-                return status();
+                value = status();
+                break;
             case 1:
                 ++response_reads_;
-                return index_ == 0 ? pop_response() : 0;
+                value = pop_response();
+                break;
             case 2:
-                // Index 1 is the data FIFO; index 0 takes parameters on write.
-                return index_ == 1 ? pop_data() : 0;
+                value = pop_data();
+                break;
             default:
-                return static_cast<std::uint8_t>(interrupt_);
+                value = (index_ & 1u) != 0
+                            ? static_cast<std::uint8_t>(interrupt_)
+                            : interrupt_mask_;
+                break;
         }
+        note_register(true, offset, value);
+        return value;
     }
 
     void write(std::uint32_t offset, std::uint8_t value) {
+        note_register(false, offset, value);
         switch (offset) {
             case 0:
                 index_ = value & 3u;
@@ -47,12 +63,20 @@ public:
                 if (index_ == 0) execute_command(value);
                 return;
             case 2:
+                if (index_ == 1) {
+                    interrupt_mask_ = value & 0x1Fu;
+                    return;
+                }
                 if (index_ == 0 && parameters_.size() < 8) {
                     parameters_.push_back(value);
                 }
                 return;
             default:
-                acknowledge(static_cast<std::uint32_t>(value));
+                if ((index_ & 1u) != 0) {
+                    acknowledge(static_cast<std::uint32_t>(value));
+                } else {
+                    interrupt_mask_ = value & 0x1Fu;
+                }
                 return;
         }
     }
@@ -63,16 +87,15 @@ public:
     // status, track, index and then the position in BCD; callers hand the
     // buffer straight to a position converter, so the packet starts at the
     // position. A long transfer is sector data.
-    std::uint32_t read_word(bool position_packet = false) {
+    //
+    // Both are read from the data FIFO: DMA3 on the disc channel always drains
+    // that FIFO, never the result FIFO. A sector starts with the 12-byte
+    // header (BCD position, mode, subheader), which Sony's CD library reads
+    // first to verify that the drive delivered the sector it asked for.
+    std::uint32_t read_word() {
         std::uint32_t result = 0;
         for (int shift = 0; shift < 32; shift += 8) {
-            std::uint8_t byte = 0;
-            if (position_packet && response_index_ < response_.size()) {
-                if (response_index_ < 3) response_index_ = 3;
-                byte = response_[response_index_++];
-            } else {
-                byte = pop_data();
-            }
+            const auto byte = pop_data();
             result |= static_cast<std::uint32_t>(byte) << shift;
         }
         return result;
@@ -81,6 +104,9 @@ public:
     // Bounded event log for bring-up: commands, interrupt transitions and
     // sector loads, most recent last.
     const std::vector<std::string>& log() const { return log_; }
+    // Register-level trace (first events only), for checking the driver's
+    // handshake against the modelled controller.
+    const std::vector<std::string>& register_log() const { return reg_log_; }
 
     std::uint32_t status_reads() const { return status_reads_; }
     std::uint32_t response_seen() const { return response_seen_; }
@@ -93,20 +119,19 @@ public:
 
 private:
     static constexpr std::uint8_t kMotorOn = 0x02;
-    static constexpr std::uint32_t kIntAcknowledge = 1;
+    // A command always answers in two steps: INT3 acknowledges it, then the
+    // completion interrupt carries the final status, or INT1 starts the sector
+    // stream. Sony's driver keys its state machine off these exact codes.
+    static constexpr std::uint32_t kIntAcknowledge = 3;
     static constexpr std::uint32_t kIntComplete = 2;
-    // ReadN reports the first sector with INT1 (the same interrupt as the
-    // command acknowledgement), not INT3: libraries treat INT3 as data end.
     static constexpr std::uint32_t kIntDataReady = 1;
-    static constexpr std::uint32_t kIntDataEnd = 3;
+    static constexpr std::uint32_t kIntDataEnd = 4;
 
     std::uint8_t status() const {
         std::uint32_t value = index_ & 3u;
         value |= 0x08u;  // parameter FIFO empty
         value |= 0x10u;  // parameter FIFO not full
         if (response_index_ < response_.size()) value |= 0x20u;
-        // The transfer loops in this title poll this bit without switching to
-        // index 1, so it reports the buffered sector whenever there is one.
         if (data_index_ < data_.size()) value |= 0x40u;
         return static_cast<std::uint8_t>(value);
     }
@@ -117,49 +142,108 @@ private:
     }
 
     std::uint8_t pop_data() {
-        if (reading_ && data_index_ >= data_.size()) {
-            // A read streams: when the guest has taken a sector the next one is
-            // waiting and its data-ready interrupt is raised. The library stops
-            // the transfer itself when it has the sectors it asked for.
-            load_sector();
-            interrupt_ = kIntDataReady;
-            complete_pending_ = 0;
-        }
         if (data_index_ >= data_.size()) return 0;
-        return data_[data_index_++];
+        const auto value = data_[data_index_++];
+        if (reading_ && data_index_ >= data_.size()) {
+            // The driver acknowledges the sector interrupt first and only then
+            // runs the DMA that empties the FIFO, so the next sector can become
+            // ready either before or after the drain. Handle both orders.
+            next_sector_pending_ = true;
+            if (data_acknowledged_) present_sector();
+        }
+        return value;
+    }
+
+    void present_sector() {
+        next_sector_pending_ = false;
+        data_acknowledged_ = false;
+        load_sector();
+        interrupt_ = kIntDataReady;
     }
 
     void load_sector() {
-        data_.assign(2048, 0);
-        data_index_ = 0;
-        const bool loaded =
-            services_.read_disc_sector(sector_, data_.data(), data_.size());
-        note("sector " + std::to_string(sector_) +
-             (loaded ? " loaded" : " FAILED"));
-        if (!loaded) {
-            data_.assign(2048, 0);
+        // The drive presents the 12-byte header in front of the 2048 user
+        // bytes, so the guest's first DMA reads the sector position and the
+        // second reads the payload. Without the header the position check in
+        // Sony's CD library fails and it retries the sector forever.
+        constexpr std::size_t kHeaderBytes = 12;
+        constexpr std::size_t kUserBytes = 2048;
+        // With XA-ADPCM enabled the drive decodes interleaved audio sectors
+        // itself and does not put them in the data FIFO. A cutscene stream is
+        // stored as data sectors with XA audio sectors between them; presenting
+        // the audio bytes as if they were stream data makes the guest reject
+        // the sector and stop reading one block short of the record.
+        for (std::uint32_t attempt = 0; attempt < 64; ++attempt) {
+            data_.assign(kHeaderBytes + kUserBytes, 0);
+            data_index_ = 0;
+            if (!services_.read_disc_header(sector_, data_.data(),
+                                            kHeaderBytes)) {
+                // Synthesise address + mode when the backend has no raw access.
+                const auto msf = sector_ + 150;
+                data_[0] = to_bcd(msf / (60 * 75));
+                data_[1] = to_bcd((msf / 75) % 60);
+                data_[2] = to_bcd(msf % 75);
+                data_[3] = 0x02;  // Mode 2
+            }
+            const bool loaded = services_.read_disc_sector(
+                sector_, data_.data() + kHeaderBytes, kUserBytes);
+            if (!loaded) {
+                std::fill(data_.begin() + kHeaderBytes, data_.end(), std::uint8_t{0});
+            }
+            const auto presented = sector_;
+            ++sectors_read_;
+            if (reading_) ++sector_;
+            // Subheader byte 2 is the submode; bit 2 marks XA-ADPCM audio.
+            if (loaded && xa_enabled_ && (data_[6] & 0x04u) != 0) {
+                note("sector " + std::to_string(presented) + " xa skip");
+                continue;
+            }
+            note("sector " + std::to_string(presented) +
+                 (loaded ? " loaded" : " FAILED"));
+            if (loaded && presented >= 128300 && presented < 128320) {
+                // Bring-up: show the user-data head so a mismatch against the
+                // disc image can be seen without a debugger.
+                std::string head;
+                constexpr char kHex[] = "0123456789abcdef";
+                for (std::size_t index = 0; index < 32; ++index) {
+                    const auto byte = data_[kHeaderBytes + index];
+                    head += kHex[byte >> 4];
+                    head += kHex[byte & 0x0Fu];
+                }
+                note("head " + head);
+            }
+            return;
         }
-        if (reading_) ++sector_;
-        ++sectors_read_;
     }
 
     void acknowledge(std::uint32_t value) {
         note("ack " + std::to_string(value & 0x07u) + " int=" +
              std::to_string(interrupt_));
         if ((value & 0x07u) == 0) return;
-        if (interrupt_ == 0) return;
-        if (interrupt_ == kIntAcknowledge && complete_pending_) {
+        const auto previous = interrupt_;
+        if (previous == 0) return;
+        if (previous == kIntAcknowledge && complete_pending_) {
             interrupt_ = complete_pending_;
             complete_pending_ = 0;
-            return;
+        } else {
+            // Acknowledging clears the interrupt flag only: the response FIFO
+            // keeps its bytes until the guest reads them out. Libraries
+            // acknowledge first and then collect the response, so clearing it
+            // here leaves them with an empty status byte.
+            interrupt_ = 0;
         }
 
-
-        // Acknowledging clears the interrupt flag only: the response FIFO keeps
-        // its bytes until the guest reads them out. Libraries acknowledge first
-        // and then collect the response, so clearing it here leaves them with
-        // an empty status byte.
-        interrupt_ = 0;
+        // The drive only presents the next sector after the guest acknowledges
+        // the previous data-ready interrupt.
+        if (start_read_after_ack_) {
+            start_read_after_ack_ = false;
+            present_sector();
+            return;
+        }
+        if (previous == kIntDataReady && reading_) {
+            data_acknowledged_ = true;
+            if (next_sector_pending_) present_sector();
+        }
     }
 
     void begin_command(std::uint32_t interrupt, std::uint32_t complete) {
@@ -175,9 +259,7 @@ private:
         // the status byte leaves them with position (0,0,0).
         push_response(0x00);  // track
         push_response(0x01);  // index
-        push_response(to_bcd(sector_ / (60 * 75)));
-        push_response(to_bcd((sector_ / 75) % 60));
-        push_response(to_bcd(sector_ % 75));
+        push_msf(sector_);
         push_response(0x00);
         push_response(0x00);
     }
@@ -186,9 +268,40 @@ private:
         response_.push_back(value);
     }
 
+    // The drive reports positions as absolute MSF (00:02:00 is LBA 0) while
+    // sector transfers use the zero-based LBA. Treating a Setloc argument as
+    // an LBA made a seek to the volume descriptor at LBA 16 fetch sector 166
+    // instead, so the guest parsed executable bytes as a filesystem.
+    static std::uint32_t msf_to_lba(std::uint32_t msf) {
+        return msf > 150 ? msf - 150 : 0;
+    }
+
+    void push_msf(std::uint32_t lba) {
+        const auto msf = lba + 150;
+        push_response(to_bcd(msf / (60 * 75)));
+        push_response(to_bcd((msf / 75) % 60));
+        push_response(to_bcd(msf % 75));
+    }
+
     void note(const std::string& text) {
-        if (log_.size() >= 96) log_.erase(log_.begin());
-        log_.push_back(text);
+        ++event_counter_;
+        if (log_.size() >= 4096) log_.erase(log_.begin());
+        log_.push_back(std::to_string(event_counter_) + " " + text);
+    }
+
+    void note_register(bool is_read, std::uint32_t offset,
+                       std::uint8_t value) {
+        constexpr std::size_t kMaxRegisterEvents = 160;
+        if (reg_log_.size() >= kMaxRegisterEvents) return;
+        std::string text = is_read ? "r" : "w";
+        text += std::to_string(offset);
+        text += " idx=" + std::to_string(index_);
+        text += is_read ? " -> " : " <- ";
+        text += hex_byte(value);
+        if (!is_read && offset == 3) {
+            text += " int=" + std::to_string(interrupt_);
+        }
+        reg_log_.push_back(text);
     }
 
     static std::string hex_byte(std::uint8_t value) {
@@ -209,51 +322,93 @@ private:
         for (auto parameter : parameters_) {
             summary += hex_byte(parameter);
         }
-        summary += " sec=" + std::to_string(sector_);
+        summary += " lba=" + std::to_string(sector_);
         note(summary);
 
         switch (command) {
-            case 0x02:  // Setloc(min, sec, frame)
+            case 0x02:  // Setloc(min, sec, frame) -> absolute MSF, not LBA.
                 if (parameters_.size() >= 3) {
-                    sector_ = bcd(parameters_[0]) * 60 * 75 +
-                              bcd(parameters_[1]) * 75 + bcd(parameters_[2]);
+                    sector_ = msf_to_lba(bcd(parameters_[0]) * 60 * 75 +
+                                         bcd(parameters_[1]) * 75 +
+                                         bcd(parameters_[2]));
                 }
-                begin_command(kIntAcknowledge, kIntComplete);
+                begin_command(kIntAcknowledge, 0);
                 break;
             case 0x06:  // ReadN
+            case 0x1B:  // ReadS
                 reading_ = true;
                 data_end_raised_ = false;
-                // The sector is presented together with the data-ready
-                // interrupt, so the FIFO already holds it when the guest starts
-                // its DMA transfer.
-                begin_command(kIntAcknowledge, kIntDataReady);
-                load_sector();
+                // The acknowledgement comes first; the first sector is
+                // presented, with its own INT1, once the guest acknowledges it.
+                data_index_ = 0;
+                data_.clear();
+                start_read_after_ack_ = true;
+                next_sector_pending_ = false;
+                data_acknowledged_ = false;
+                begin_command(kIntAcknowledge, 0);
                 break;
             case 0x09:  // Pause
-            case 0x08: {  // Stop
-                // Stopping a drive that was reading ends the transfer: the
-                // drive answers with INT3 (data end), which is what the read
-                // completion path waits for.
-                const bool was_reading = reading_;
+            case 0x08:  // Stop
                 reading_ = false;
                 data_end_raised_ = false;
-                begin_command(kIntAcknowledge,
-                              was_reading ? kIntDataEnd : kIntComplete);
-                break;
-            }
-            case 0x0E:  // GetlocL: minute, second, frame in BCD, then mode.
+                next_sector_pending_ = false;
+                data_acknowledged_ = false;
                 begin_command(kIntAcknowledge, kIntComplete);
+                break;
+            case 0x01:  // GetStat
+            case 0x0B:  // Mute
+            case 0x0C:  // Demute
+            case 0x0D:  // Setfilter
+            case 0x1C:  // Reset
+                begin_command(kIntAcknowledge, 0);
+                break;
+            case 0x0A:  // Init: acknowledge, then report completion.
+                begin_command(kIntAcknowledge, kIntComplete);
+                break;
+            case 0x07:  // MotorOn
+            case 0x15:  // SeekL
+            case 0x16:  // SeekP
+                begin_command(kIntAcknowledge, kIntComplete);
+                break;
+            case 0x0E:  // Setmode: answer is status twice.
+                if (!parameters_.empty()) {
+                    // Bit 6 enables XA-ADPCM decoding; while it is set the
+                    // drive consumes audio sectors instead of presenting them.
+                    xa_enabled_ = (parameters_[0] & 0x40u) != 0;
+                }
+                begin_command(kIntAcknowledge, 0);
                 response_.clear();
                 response_index_ = 0;
                 push_response(status_);
-                push_response(to_bcd(sector_ / (60 * 75)));
-                push_response(to_bcd((sector_ / 75) % 60));
-                push_response(to_bcd(sector_ % 75));
+                push_response(status_);
+                break;
+            case 0x10:  // GetlocL: position, then mode/file/channel.
+                begin_command(kIntAcknowledge, 0);
+                response_.clear();
+                response_index_ = 0;
+                push_msf(sector_);
                 push_response(0x02);  // Mode 2, form 1.
                 for (int index = 0; index < 4; ++index) push_response(0);
                 break;
+            case 0x11:  // GetlocP: track, index and both positions.
+                begin_command(kIntAcknowledge, 0);
+                response_.clear();
+                response_index_ = 0;
+                push_response(0x01);  // track
+                push_response(0x01);  // index
+                push_msf(sector_);
+                push_msf(sector_);
+                break;
+            case 0x0F:  // Getparam: mode, then file/channel.
+                begin_command(kIntAcknowledge, 0);
+                response_.clear();
+                response_index_ = 0;
+                push_response(status_);
+                push_response(0xA0);  // mode set by Init
+                for (int index = 0; index < 6; ++index) push_response(0);
+                break;
             case 0x19:  // Test: sub-function 0x20 reports the BIOS date
-                begin_command(kIntAcknowledge, kIntComplete);
+                begin_command(kIntAcknowledge, 0);
                 response_.clear();
                 response_index_ = 0;
                 if (!parameters_.empty() && parameters_[0] == 0x20) {
@@ -263,7 +418,7 @@ private:
                     push_response(0xC0);
                 }
                 break;
-            case 0x1A:  // GetID
+            case 0x1A:  // GetID: first status, then the disc signature.
                 begin_command(kIntAcknowledge, kIntComplete);
                 response_.clear();
                 response_index_ = 0;
@@ -274,17 +429,26 @@ private:
                 push_response('C');
                 push_response('E');
                 push_response('A');
+                push_response(0x00);
                 break;
-            case 0x13:  // GetTN
-                begin_command(kIntAcknowledge, kIntComplete);
-                push_response(1);
-                push_response(1);
+            case 0x13:  // GetTN: status, first track, last track.
+                begin_command(kIntAcknowledge, 0);
+                response_.clear();
+                response_index_ = 0;
+                push_response(status_);
+                push_response(0x01);
+                push_response(0x01);
                 break;
-            case 0x14:  // GetTD
-                begin_command(kIntAcknowledge, kIntComplete);
-                push_response(0);
-                push_response(2);
+            case 0x14: {  // GetTD: status, then the track's minute/second.
+                begin_command(kIntAcknowledge, 0);
+                response_.clear();
+                response_index_ = 0;
+                push_response(status_);
+                const auto msf = 150u;  // track 1 starts at 00:02:00
+                push_response(to_bcd(msf / (60 * 75)));
+                push_response(to_bcd((msf / 75) % 60));
                 break;
+            }
             default:  // GetStat and anything else: acknowledge and complete.
                 begin_command(kIntAcknowledge, kIntComplete);
                 break;
@@ -303,7 +467,9 @@ private:
     PlatformServices& services_;
     std::uint32_t index_{0};
     std::uint8_t status_{kMotorOn};
+    std::uint64_t event_counter_{0};
     std::uint32_t interrupt_{0};
+    std::uint8_t interrupt_mask_{0x1F};
     std::uint32_t complete_pending_{0};
     std::vector<std::uint8_t> parameters_;
     std::vector<std::uint8_t> response_;
@@ -317,7 +483,14 @@ private:
     std::uint32_t response_reads_{0};
     bool reading_{false};
     bool data_end_raised_{false};
+    bool start_read_after_ack_{false};
+    bool next_sector_pending_{false};
+    bool data_acknowledged_{false};
+    // SetMode bit 6: the drive decodes XA-ADPCM audio sectors and keeps them
+    // out of the data FIFO.
+    bool xa_enabled_{false};
     std::vector<std::string> log_;
+    std::vector<std::string> reg_log_;
 };
 
 }  // namespace r6

@@ -11,7 +11,7 @@ None.
 - **Platform:** PlayStation 1
 - **Region:** USA
 - **Status:** Interpreter execution runner
-- **Progress:** 96%
+- **Progress:** 97%
 - **Completed:** Local BIN/CUE verification, ISO9660 root discovery, and PS-X
   EXE header identification, plus a delay-slot-aware control-flow walk from
   the entry point and discovered direct calls, plus the first dependency-free
@@ -42,12 +42,21 @@ None.
   writing one leaves it unchanged. That let libetc's dispatcher finish instead
   of retrying on an unacknowledged vblank: an 80M-instruction run delivers
   over 1,200 vblanks with two handler overruns, and the VSync counter advances.
-- **Next step:** The CD streaming callback. The guest still issues only the
-  loader's two reads, then parks in its CD wait (`0x8008D160` and the timer
-  clear loop around `0x80084C04`) instead of submitting a scene. The next
-  concrete check is what `intrData`/CD callback field the async read wrapper is
-  waiting for, and whether the controller reports the full `GetID`/`GetTN`
-  sequence its init path expects. GTE maths and MDEC follow.
+  The disc controller now models the real register banking, interrupt codes
+  (INT3 acknowledge, INT2 complete, INT1 per sector) and streaming handshake,
+  and presents the 12-byte sector header (BCD address, mode, subheader) ahead
+  of the 2048 user bytes. With the position check passing, the guest streams
+  whole files: `sfx.vab` is printed, sector 390 (`CD.HED`) is read, and runs
+  reach `CD.WAD` at LBA 397. A 150M-instruction run reads 172 sectors. The
+  current working tree contains uncommitted groundwork for emulated-cycle root
+  counters/vblank timing, GPUSTAT interlace/field bits, DMA interrupt
+  register/DMA4 completion, and SPU transfer-register stubs; this batch has not
+  yet been validated by a clean build/test pass or an on-disc run.
+- **Next step:** Validate the emulated-cycle timer batch, then rerun Spider-Man
+  to confirm `CdSync`/`CdRead` waits become deterministic. After that,
+  investigate why the loader parks (`0x8008C9C4`/`0x8008CA84`) after a Pause and
+  capture when the first draw-environment and polygon packets appear. GTE maths
+  and MDEC follow.
 - **Playable native build:** No
 - **Distributed game assets:** No
 
@@ -69,9 +78,10 @@ program to launch yet. A playable Spider-Man build still needs:
    0xC0. The native kernel layer covers TTY/exit/events only, so a recompiled
    program still has to start itself the way `_start` expects.
 3. **CD streaming and DMA** — GPU DMA linked lists (DMA2) and CD-ROM sectors
-   work for the loader, but the game's async streaming callback never completes,
-   so `CD.WAD`/`CINEMAS.XA` data is not requested after boot. VBlank/IRQ
-   delivery now runs through the guest's own dispatcher and returns.
+   work, and the loader now streams whole files (`sfx.vab`, `CD.HED`,
+   `CD.WAD`), but a host-clock-driven timer still causes occasional `CdSync`
+   timeouts. VBlank/IRQ delivery runs through the guest's own dispatcher and
+   returns.
 4. **Audio and video output** — SPU/XA playback and a real window presenting the
    display area instead of an in-memory frame.
 5. **Input protocol** — the pad serial protocol, not just a raw key state.
@@ -83,14 +93,13 @@ adding one would not change whether the game runs.
 
 ## Running it today
 
-`spider-man-r6.exe` (built from `src/spiderman_player.cpp`, also
-`build\spider-man-r6.exe`) is a
+`r6-player.exe` (built from `src/player_main.cpp`, also
+`build\r6-player.exe`) is a
 double-clickable windowed player. It finds your own `.cue`/`.bin`, boots the
 disc's executable and runs it at roughly six million instructions a second
-with a live status line. It does not render the game yet: the guest's vblank
-handler and VSync callbacks now run, but the main loop still waits on its CD
-streaming callback and never submits a scene. See `docs/recomp-findings.md` for
-the current blocker.
+with a live status line. It does not render the game yet: the vblank handler
+and VSync callbacks run and the loader streams files, but the main loop has
+not submitted a scene. See `docs/recomp-findings.md` for the current blocker.
 
 The window title shows instruction count, primitives and display state; the
 window body shows those counters plus how many disc sectors have been read.

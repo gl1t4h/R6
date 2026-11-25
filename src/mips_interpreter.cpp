@@ -60,6 +60,30 @@ void MipsInterpreter::note_cdrom_poll(std::uint32_t physical) {
     cdrom_polls_.push_back(cpu_.pc);
 }
 
+void MipsInterpreter::note_watched_write(std::uint32_t address,
+                                         std::uint32_t value, int width) {
+    if (watch_writes_.empty()) return;
+    // Match the whole containing word so a 32-bit store and the 16-bit half
+    // stores that patch the same word are both captured.
+    const auto word = address & 0x1FFFFFFCu;
+    bool watched = false;
+    for (auto entry : watch_writes_) {
+        if ((entry & 0x1FFFFFFCu) == word) {
+            watched = true;
+            break;
+        }
+    }
+    if (!watched) return;
+    // Rolling log: keep the most recent stores, since the value under
+    // investigation is usually written long after startup.
+    if (write_log_.size() >= 4096) write_log_.erase(write_log_.begin());
+    write_log_.push_back("write" + std::to_string(width) + " 0x" +
+                         format_hex(address) + " = 0x" + format_hex(value) +
+                         " pc=0x" + format_hex(cpu_.pc) + " s0=0x" +
+                         format_hex(cpu_.gpr[16]) + " s1=0x" +
+                         format_hex(cpu_.gpr[17]));
+}
+
 std::uint32_t MipsInterpreter::read8(std::uint32_t address) {
     const auto physical = address & 0x1FFFFFFFu;
     if (hardware_.is_cdrom(physical)) {
@@ -92,6 +116,11 @@ std::uint32_t MipsInterpreter::read16(std::uint32_t address) {
                (static_cast<std::uint32_t>(scratchpad_[index + 1]) << 8);
     }
     if (physical >= kHardwareBase && physical < kHardwareEnd) {
+        // The SPU register block is 16 bits wide, so a halfword read must not
+        // be rounded down to a 32-bit register the way I_STAT/DMA are.
+        if (physical >= hardware::kSpuBase && physical < hardware::kSpuEnd) {
+            return read32(physical) & 0xFFFFu;
+        }
         return read32(physical & ~3u) >> ((physical & 2u) * 8u);
     }
     ++unknown_hardware_reads_;
@@ -128,6 +157,7 @@ std::uint32_t MipsInterpreter::read32(std::uint32_t address) {
 }
 
 void MipsInterpreter::write8(std::uint32_t address, std::uint32_t value) {
+    note_watched_write(address, value, 8);
     const auto physical = address & 0x1FFFFFFFu;
     if (hardware_.is_cdrom(physical)) {
         hardware_.write_cdrom(physical, static_cast<std::uint8_t>(value));
@@ -146,6 +176,7 @@ void MipsInterpreter::write8(std::uint32_t address, std::uint32_t value) {
 }
 
 void MipsInterpreter::write16(std::uint32_t address, std::uint32_t value) {
+    note_watched_write(address, value, 16);
     const auto physical = address & 0x1FFFFFFFu;
     if (hardware_.is_cdrom(physical)) {
         hardware_.write_cdrom(physical, static_cast<std::uint8_t>(value));
@@ -167,6 +198,12 @@ void MipsInterpreter::write16(std::uint32_t address, std::uint32_t value) {
     }
     // Hardware registers are 32 bits wide, and guest code stores to them a
     // half at a time (the interrupt dispatcher acknowledges I_STAT that way).
+    if (physical >= hardware::kSpuBase && physical < hardware::kSpuEnd) {
+        // SPU registers really are 16 bits wide; merging into a 32-bit word
+        // would land the write on the neighbouring register.
+        write32(physical, value & 0xFFFFu);
+        return;
+    }
     const auto aligned = physical & ~3u;
     const auto shift = (physical & 3u) * 8u;
     if (aligned == hardware::kInterruptStatus ||
@@ -185,6 +222,7 @@ void MipsInterpreter::write16(std::uint32_t address, std::uint32_t value) {
 }
 
 void MipsInterpreter::write32(std::uint32_t address, std::uint32_t value) {
+    note_watched_write(address, value, 32);
     const auto physical = address & 0x1FFFFFFFu;
     if (trace_log_.size() < 24) {
         if (trace_reg_ != 0 && (physical & 0x1FFFFFFCu) == (trace_reg_ & 0x1FFFFFFCu)) {
@@ -225,7 +263,7 @@ void MipsInterpreter::write32(std::uint32_t address, std::uint32_t value) {
         }
         if (physical >= hardware::kDma3BaseAddress &&
             physical <= hardware::kDma3ChannelControl &&
-            dma3_log_.size() < 40) {
+            dma3_log_.size() < 64) {
             // Channel 3 register traffic, so a response transfer that the model
             // does not execute can be seen instead of guessed at.
             dma3_log_.push_back("dma3 reg 0x" + format_hex(physical) +
@@ -248,6 +286,14 @@ void MipsInterpreter::write32(std::uint32_t address, std::uint32_t value) {
             const auto to_ram = (value & 1u) == 0;
             if (start && to_ram) {
                 run_dma3_transfer();
+            }
+        }
+        if (physical == hardware::kDma4ChannelControl) {
+            const auto start = (value & (1u << 24)) != 0;
+            // Channel 4 feeds the SPU; bit 0 set means main RAM to device.
+            const auto to_device = (value & 1u) != 0;
+            if (start && to_device) {
+                run_dma4_transfer();
             }
         }
         return;
@@ -372,16 +418,19 @@ void MipsInterpreter::enter_entry_int() {
 
 void MipsInterpreter::poll_vblank() {
     constexpr std::uint32_t kVblankBit = 1u;
-    constexpr std::uint32_t kVblankPeriodMicros = 16667u;
+    // The R3000A runs at 33.8688 MHz and a field lasts 1/60 s.
+    constexpr std::uint64_t kVblankPeriodCycles = 564480u;
 
-    const auto now = services_.read_timer(0);
+    ++vblank_polls_;
+    const auto now = hardware_.cycles();
     if (vblank_next_ == 0) {
-        vblank_next_ = now + kVblankPeriodMicros;
+        vblank_next_ = now + kVblankPeriodCycles;
         return;
     }
     if (now < vblank_next_) return;
-    vblank_next_ = now + kVblankPeriodMicros;
+    vblank_next_ = now + kVblankPeriodCycles;
     ++vblank_count_;
+    hardware_.toggle_gpu_field();
     hardware_.raise_interrupt(kVblankBit);
 }
 
@@ -401,18 +450,36 @@ void MipsInterpreter::run_dma3_transfer() {
     // back before storing. Dropping the segment is why every transfer used to
     // land outside RAM and vanish.
     const auto address = 0x80000000u | hardware_.dma_address(3);
-    if (dma3_log_.size() < 40) {
-        dma3_log_.push_back("dma3 run madr=0x" + format_hex(address) +
+    if (dma3_log_.size() < 64) {
+        dma3_log_.push_back("run madr=0x" + format_hex(address) +
                             " bcr=0x" + format_hex(hardware_.dma_counter(3)) +
                             " words=" + std::to_string(words) + " pc=0x" +
                             format_hex(cpu_.pc));
     }
     for (std::uint32_t index = 0; index < words; ++index) {
-        // Short transfers carry a command's answer rather than a sector.
-        write32(address + index * 4,
-                hardware_.cdrom().read_word(words < 64));
+        write32(address + index * 4, hardware_.cdrom().read_word());
     }
     hardware_.refresh_cdrom_interrupt();
+    // A finished CD transfer is a DMA completion too: the guest's DMA handler
+    // dispatches on the channel flag in DICR (0x1F8010F4) and, for channel 3,
+    // calls whatever callback the current subsystem installed in the channel
+    // table at 0x800B4388. libcd reads its own sectors by polling CHCR and
+    // installs no callback, so an interrupt there would only preempt its
+    // handshake; the cinema stream installs one (0x8008DB44) and needs the
+    // completion so it can publish the buffered record. Raise the interrupt
+    // only once a channel-3 handler actually exists.
+    if (read32(0x800B4394u) != 0) {
+        hardware_.complete_dma(3);
+    }
+}
+
+void MipsInterpreter::run_dma4_transfer() {
+    // SPU transfers are manual mode: the counter's low half is the word count
+    // and zero means 0x10000. The sound data itself is not consumed yet, but
+    // the completion flag is: libspu waits for the channel-4 handler to deliver
+    // its EvSpu event before it will finish initialising.
+    ++dma_words_;
+    hardware_.complete_dma(4);
 }
 
 void MipsInterpreter::run_dma2_list() {
@@ -461,12 +528,16 @@ RunResult MipsInterpreter::run(std::uint64_t max_steps) {
         }
         for (auto address : watch_args_) {
             if (address != current_pc) continue;
-            if (watched_args_log_.size() >= 32) break;
+            if (watched_args_log_.size() >= 4096) watched_args_log_.erase(
+                watched_args_log_.begin());
             watched_args_log_.push_back(
                 "args pc=0x" + format_hex(current_pc) + " ra=0x" +
                 format_hex(cpu_.gpr[31]) + " a0=0x" + format_hex(cpu_.gpr[4]) +
                 " a1=0x" + format_hex(cpu_.gpr[5]) + " v0=0x" +
-                format_hex(cpu_.gpr[2]) + " v1=0x" + format_hex(cpu_.gpr[3]));
+                format_hex(cpu_.gpr[2]) + " v1=0x" + format_hex(cpu_.gpr[3]) +
+                " sp=0x" + format_hex(cpu_.gpr[29]) + " ret40=0x" +
+                format_hex(read32(cpu_.gpr[29] + 40)) + " s0=0x" +
+                format_hex(cpu_.gpr[16]) + " s1=0x" + format_hex(cpu_.gpr[17]));
         }
         if (hot_enabled_ && (result.steps & 0x3Fu) == 0) ++hot_[current_pc];
         const bool was_delay_slot = in_delay_slot;
@@ -518,6 +589,14 @@ RunResult MipsInterpreter::run(std::uint64_t max_steps) {
             continue;
         }
 
+        if ((result.steps & 0x3FFu) == 0) {
+            // Poll even in a delay slot: a wait loop whose length divides the
+            // poll interval would otherwise never see the field counter move.
+            // Polling does not touch the PC, so it is safe here.
+            if (vblank_enabled_) poll_vblank();
+            hardware_.pad_tick();
+        }
+
         if (in_interrupt_) {
             ++irq_hot_[current_pc];
             if (++interrupt_steps_ > kInterruptStepBudget) {
@@ -567,11 +646,6 @@ RunResult MipsInterpreter::run(std::uint64_t max_steps) {
                 }
                 continue;
             }
-        } else if (!was_delay_slot && (result.steps & 0x3FFu) == 0) {
-            // A vblank only starts from the main flow: generating one while a
-            // handler runs makes the dispatcher re-enter itself for every poll.
-            if (!in_interrupt_ && vblank_enabled_) poll_vblank();
-            hardware_.pad_tick();
         }
         if (!in_interrupt_ && !was_delay_slot && (result.steps & 0x3FFu) == 0) {
             // Never interrupt a delay slot: the pending branch target lives in
@@ -603,6 +677,7 @@ RunResult MipsInterpreter::run(std::uint64_t max_steps) {
         const auto instruction = read32(current_pc);
         const auto step = execute(instruction, current_pc);
         ++result.steps;
+        hardware_.advance_cycles(1);
 
         if (recent_pcs_.size() >= 16) recent_pcs_.erase(recent_pcs_.begin());
         recent_pcs_.push_back(current_pc);

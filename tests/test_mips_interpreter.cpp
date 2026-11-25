@@ -294,19 +294,21 @@ void cdrom_command_acknowledges_then_completes() {
 
     ram.write32(0x10000, 0x3C081F80u);  // lui t0, 0x1F80
     ram.write32(0x10004, 0x35081800u);  // ori t0, t0, 0x1800 (CD index)
-    ram.write32(0x10008, 0xA1000000u);  // sb zero, 0(t0)
-    ram.write32(0x1000C, 0x24090001u);  // addiu t1, zero, 1 (GetStat)
+    ram.write32(0x10008, 0xA1000000u);  // sb zero, 0(t0) -> bank 0
+    ram.write32(0x1000C, 0x2409000Au);  // addiu t1, zero, 0x0A (Init)
     ram.write32(0x10010, 0xA1090001u);  // sb t1, 1(t0) -> command
-    ram.write32(0x10014, 0x91020003u);  // lbu v0, 3(t0) -> interrupt flags
-    ram.write32(0x10018, 0x24090007u);  // addiu t1, zero, 7 (acknowledge)
-    ram.write32(0x1001C, 0xA1090003u);  // sb t1, 3(t0)
-    ram.write32(0x10020, 0x91030003u);  // lbu v1, 3(t0)
-    ram.write32(0x10024, 0x91040001u);  // lbu a0, 1(t0) -> response byte
+    ram.write32(0x10014, 0x24090001u);  // addiu t1, zero, 1
+    ram.write32(0x10018, 0xA1090000u);  // sb t1, 0(t0) -> bank 1 (flags)
+    ram.write32(0x1001C, 0x91020003u);  // lbu v0, 3(t0) -> interrupt flags
+    ram.write32(0x10020, 0x24090007u);  // addiu t1, zero, 7 (acknowledge)
+    ram.write32(0x10024, 0xA1090003u);  // sb t1, 3(t0)
+    ram.write32(0x10028, 0x91030003u);  // lbu v1, 3(t0)
+    ram.write32(0x1002Cu, 0x91040001u);  // lbu a0, 1(t0) -> response byte
 
-    interpreter.run(11);
-    R6_CHECK(cpu.gpr[2] == 1);  // command acknowledged
+    interpreter.run(12);
+    R6_CHECK(cpu.gpr[2] == 3);  // command acknowledged
     R6_CHECK(cpu.gpr[3] == 2);  // completion reported after the ack
-    R6_CHECK(cpu.gpr[4] == 2);  // GetStat reports the drive status
+    R6_CHECK(cpu.gpr[4] == 2);  // the response starts with the drive status
 }
 
 }  // namespace

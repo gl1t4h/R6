@@ -3,7 +3,7 @@
 //
 // It finds the user's own BIN/CUE, boots the executable the way the retail
 // loader would, and presents the PlayStation display area in a Win32 window.
-// It is a bring-up tool, not a playable build: the game currently stops during
+// It is a bring-up tool, not a playable build: the guest currently stops during
 // its own initialisation, so the window will show an empty display.
 
 #define WIN32_LEAN_AND_MEAN
@@ -133,7 +133,7 @@ std::filesystem::path ask_for_disc() {
     dialog.lpstrFilter = L"PlayStation images (*.cue;*.bin)\0*.cue;*.bin\0All files\0*.*\0";
     dialog.lpstrFile = buffer;
     dialog.nMaxFile = static_cast<DWORD>(std::size(buffer));
-    dialog.lpstrTitle = L"Select your Spider-Man (USA) .cue or .bin";
+    dialog.lpstrTitle = L"Select your PlayStation .cue or .bin";
     dialog.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST;
     if (!GetOpenFileNameW(&dialog)) return {};
     return std::filesystem::path(buffer);
@@ -164,11 +164,18 @@ bool load_image(Player& player, std::string& error) {
         }
     }
     if (exe_name.empty()) {
+        // No usable SYSTEM.CNF: fall back to the first PlayStation executable
+        // on the disc instead of assuming one particular title's serial.
         for (const auto& file : files) {
-            if (r6::boot::upper(file.name).find("SLUS") != std::string::npos) {
-                exe_name = file.name;
-                break;
+            const auto name = r6::boot::upper(file.name);
+            for (const char* prefix : {"SLUS", "SCUS", "SLES", "SCES", "SLPS",
+                                       "SLPM", "SCPS", "SLED", "SCED"}) {
+                if (name.find(prefix) == 0) {
+                    exe_name = file.name;
+                    break;
+                }
             }
+            if (!exe_name.empty()) break;
         }
     }
 
@@ -264,12 +271,12 @@ void present(Player& player, HDC dc) {
     // presenting an unexplained black window.
     char text[512]{};
     std::snprintf(text, sizeof(text),
-                  "Spider-Man R6 development build - no frame yet\n\n"
+                  "R6 development build - no frame yet\n\n"
                   "Instruction: %llu\n"
                   "GPU primitives: %llu\n"
                   "Disc sectors read: %u\n"
                   "Display: %s\n\n"
-                  "The game boots and runs its own initialisation, then waits "
+                  "The guest boots and runs its own initialisation, then waits "
                   "in its frame loop for a disc interrupt this build does not "
                   "deliver yet.\n%s",
                   static_cast<unsigned long long>(player.instructions),
@@ -337,7 +344,7 @@ void step(Player& player) {
 void save_screenshot(Player& player) {
     const auto path = own_directory() / "r6-frame.ppm";
     r6::boot::write_ppm(player.services->gpu().display_frame(), 320, 240, path);
-    MessageBoxW(nullptr, (L"Saved " + path.wstring()).c_str(), L"Spider-Man R6",
+    MessageBoxW(nullptr, (L"Saved " + path.wstring()).c_str(), L"R6 Player",
                 MB_OK | MB_ICONINFORMATION);
 }
 
@@ -444,15 +451,15 @@ int WINAPI WinMain(HINSTANCE instance, HINSTANCE, LPSTR command_line, int) {
     if (image.empty()) {
         MessageBoxW(nullptr,
                     L"No disc image was selected.\n\nRun this again and pick "
-                    L"your Spider-Man (USA) .cue file.",
-                    L"Spider-Man R6", MB_OK | MB_ICONWARNING);
+                    L"your .cue file.",
+                    L"R6 Player", MB_OK | MB_ICONWARNING);
         return 0;
     }
 
     player.image = image;
     std::string error;
     if (!load_image(player, error)) {
-        MessageBoxA(nullptr, error.c_str(), "Spider-Man R6", MB_OK | MB_ICONERROR);
+        MessageBoxA(nullptr, error.c_str(), "R6 Player", MB_OK | MB_ICONERROR);
         return 1;
     }
 
@@ -474,7 +481,7 @@ int WINAPI WinMain(HINSTANCE instance, HINSTANCE, LPSTR command_line, int) {
     AdjustWindowRect(&rect, WS_OVERLAPPEDWINDOW, FALSE);
 
     const std::string start_title =
-        "Spider-Man R6 - " + player.image.filename().string();
+        "R6 Player - " + player.image.filename().string();
     const std::wstring window_title(start_title.begin(), start_title.end());
     const auto window = CreateWindowExW(
         0, kWindowClass, window_title.c_str(), WS_OVERLAPPEDWINDOW, CW_USEDEFAULT,

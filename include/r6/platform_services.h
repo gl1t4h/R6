@@ -25,6 +25,16 @@ public:
         std::uint32_t lba,
         std::uint8_t* destination,
         std::size_t destination_size) = 0;
+    // Raw sector header: minute, second, frame and mode in BCD, followed by
+    // the Mode 2 subheader. The drive presents this ahead of the user data, and
+    // Sony's CD library validates the sector position from it before it copies
+    // the data. Backends without raw access return false and the controller
+    // synthesises a header from the LBA instead.
+    virtual bool read_disc_header(std::uint32_t /*lba*/,
+                                  std::uint8_t* /*destination*/,
+                                  std::size_t /*destination_size*/) {
+        return false;
+    }
     // pc identifies the 0xA0/0xB0/0xC0 trap being serviced. Returns false when
     // the address is not a kernel entry point.
     virtual bool bios_call(std::uint32_t pc, CpuState& cpu, Memory& memory) = 0;

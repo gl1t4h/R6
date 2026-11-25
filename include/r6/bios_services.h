@@ -3,6 +3,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <string>
 #include <utility>
@@ -37,6 +38,17 @@ public:
 
     bool exited() const { return exited_; }
     std::uint32_t exit_code() const { return exit_code_; }
+
+    // The kernel's GPU vectors write the display registers directly. The GPU
+    // object lives in the platform layer, so the host installs a sink instead
+    // of the BIOS owning a second GPU.
+    using GpuWriter = std::function<void(std::uint32_t, std::uint32_t)>;
+    using GpuStatusReader = std::function<std::uint32_t()>;
+    void set_gpu_access(GpuWriter writer, GpuStatusReader reader) {
+        gpu_writer_ = std::move(writer);
+        gpu_status_ = std::move(reader);
+    }
+
     const std::string& tty_output() const { return tty_; }
     std::size_t unhandled_call_count() const { return unhandled_calls_.size(); }
     std::size_t call_count(BiosTable table, std::uint32_t vector) const;
@@ -108,6 +120,9 @@ private:
                                 std::size_t index) const;
     std::string read_string(Memory& memory, std::uint32_t address) const;
 
+    void gpu_write(std::uint32_t register_address, std::uint32_t value);
+    std::uint32_t gpu_status() const;
+
     void record_call(BiosTable table, std::uint32_t vector);
     void record_unhandled(BiosTable table, std::uint32_t vector,
                           const CpuState& cpu);
@@ -117,6 +132,8 @@ private:
     bool return_from_exception_{false};
     // B(5Bh) ChangeClearPAD: the kernel's pad/card auto-acknowledge flag.
     bool clear_pad_{false};
+    GpuWriter gpu_writer_;
+    GpuStatusReader gpu_status_;
     std::vector<EventSlot> events_{16};
     std::vector<std::uint32_t> unhandled_calls_;
     std::vector<std::string> unhandled_log_;

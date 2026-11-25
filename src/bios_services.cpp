@@ -82,6 +82,97 @@ std::uint32_t block_compare(Memory& memory, std::uint32_t left,
     return 0;
 }
 
+// Sony's string routines treat a null pointer as an empty string. The kernel
+// reports which side was null instead of faulting, and a guest that hands over
+// a null filename relies on that.
+std::uint32_t string_compare(Memory& memory, std::uint32_t left,
+                             std::uint32_t right, std::uint32_t maxlen,
+                             bool limited) {
+    if (left == 0 || right == 0) {
+        return left == right ? 0 : (left == 0 ? 0xFFFFFFFFu : 1u);
+    }
+    for (std::uint32_t offset = 0; !limited || offset < maxlen; ++offset) {
+        std::uint8_t first = 0;
+        std::uint8_t second = 0;
+        if (!memory.try_read8(left + offset, first)) return 0;
+        if (!memory.try_read8(right + offset, second)) return 0;
+        if (first != second) {
+            return first < second ? 0xFFFFFFFFu : 1u;
+        }
+        if (first == 0) return 0;
+    }
+    return 0;
+}
+
+// strcpy/strncpy. The bounded form pads with zeroes when the source is
+// shorter, exactly as the kernel does.
+std::uint32_t string_copy(Memory& memory, std::uint32_t destination,
+                          std::uint32_t source, std::uint32_t maxlen,
+                          bool limited) {
+    if (destination == 0 || source == 0) return 0;
+    std::uint32_t offset = 0;
+    bool terminated = false;
+    for (; !limited || offset < maxlen; ++offset) {
+        std::uint8_t value = 0;
+        if (!memory.try_read8(source + offset, value)) break;
+        std::uint8_t probe = 0;
+        if (!memory.try_read8(destination + offset, probe)) break;
+        memory.write8(destination + offset, value);
+        if (value == 0) {
+            terminated = true;
+            ++offset;
+            break;
+        }
+    }
+    if (limited && !terminated) {
+        while (offset < maxlen) {
+            std::uint8_t probe = 0;
+            if (!memory.try_read8(destination + offset, probe)) break;
+            memory.write8(destination + offset, 0);
+            ++offset;
+        }
+    }
+    return destination;
+}
+
+std::uint32_t string_length(Memory& memory, std::uint32_t address) {
+    if (address == 0) return 0;
+    std::uint32_t length = 0;
+    while (length < kMaxStringLength) {
+        std::uint8_t value = 0;
+        if (!memory.try_read8(address + length, value)) break;
+        if (value == 0) break;
+        ++length;
+    }
+    return length;
+}
+
+std::uint32_t string_find(Memory& memory, std::uint32_t address,
+                          std::uint8_t wanted, bool from_end) {
+    if (address == 0) return 0;
+    std::uint32_t length = string_length(memory, address);
+    if (from_end) {
+        for (std::uint32_t offset = length + 1; offset > 0; --offset) {
+            std::uint8_t value = 0;
+            if (!memory.try_read8(address + offset - 1, value)) return 0;
+            if (value == wanted) return address + offset - 1;
+        }
+        return 0;
+    }
+    for (std::uint32_t offset = 0; offset <= length; ++offset) {
+        std::uint8_t value = 0;
+        if (!memory.try_read8(address + offset, value)) return 0;
+        if (value == wanted) return address + offset;
+    }
+    return 0;
+}
+
+// The GPU vectors write the display ports, not memory. Registers are named
+// here rather than pulled from hardware_map.h so the kernel stays independent
+// of the device model.
+constexpr std::uint32_t kGpuDataPort = 0x1F801810u;
+constexpr std::uint32_t kGpuControlPort = 0x1F801814u;
+
 }  // namespace
 
 bool BiosServices::trap_table(std::uint32_t pc, BiosTable& table) {
@@ -134,6 +225,52 @@ std::uint32_t BiosServices::handle_a0(std::uint32_t vector, CpuState& cpu,
             return character >= 'A' && character <= 'Z' ? character + 0x20u
                                                         : character;
         }
+        case 0x15:  // strcat(dst, src)
+            if (cpu.gpr[4] != 0) {
+                const auto end = cpu.gpr[4] + string_length(memory, cpu.gpr[4]);
+                string_copy(memory, end, cpu.gpr[5], 0, false);
+            }
+            return cpu.gpr[4];
+        case 0x16: {  // strncat(dst, src, maxlen)
+            const auto destination = cpu.gpr[4];
+            if (destination == 0 || cpu.gpr[5] == 0) return destination;
+            auto end = destination + string_length(memory, destination);
+            std::uint32_t copied = 0;
+            const auto maxlen = cpu.gpr[6];
+            while (copied < maxlen) {
+                std::uint8_t value = 0;
+                if (!memory.try_read8(cpu.gpr[5] + copied, value)) break;
+                std::uint8_t probe = 0;
+                if (!memory.try_read8(end, probe)) break;
+                memory.write8(end, value);
+                ++end;
+                ++copied;
+                if (value == 0) return destination;
+            }
+            std::uint8_t probe = 0;
+            if (memory.try_read8(end, probe)) memory.write8(end, 0);
+            return destination;
+        }
+        case 0x17:  // strcmp(left, right)
+            return string_compare(memory, cpu.gpr[4], cpu.gpr[5], 0, false);
+        case 0x18:  // strncmp(left, right, maxlen)
+            return string_compare(memory, cpu.gpr[4], cpu.gpr[5], cpu.gpr[6],
+                                  true);
+        case 0x19:  // strcpy(dst, src)
+            return string_copy(memory, cpu.gpr[4], cpu.gpr[5], 0, false);
+        case 0x1A:  // strncpy(dst, src, maxlen)
+            return string_copy(memory, cpu.gpr[4], cpu.gpr[5], cpu.gpr[6],
+                               true);
+        case 0x1B:  // strlen(src)
+            return string_length(memory, cpu.gpr[4]);
+        case 0x1C:  // index(src, char)
+        case 0x1E:  // strchr(src, char)
+            return string_find(memory, cpu.gpr[4],
+                               static_cast<std::uint8_t>(cpu.gpr[5]), false);
+        case 0x1D:  // rindex(src, char)
+        case 0x1F:  // strrchr(src, char)
+            return string_find(memory, cpu.gpr[4],
+                               static_cast<std::uint8_t>(cpu.gpr[5]), true);
         case 0x27:  // bcopy(src, dst, len)
             block_copy(memory, cpu.gpr[4], cpu.gpr[5], cpu.gpr[6]);
             return 0;
@@ -205,6 +342,45 @@ std::uint32_t BiosServices::handle_a0(std::uint32_t vector, CpuState& cpu,
         case 0x3F:  // printf
             return print_format(memory, cpu);
         case 0x44:  // FlushCache: the host has no instruction cache to write
+            return 0;
+        case 0x48:  // SendGP1Command(cmd): control port, no defined return.
+            gpu_write(kGpuControlPort, cpu.gpr[4]);
+            return cpu.gpr[2];
+        case 0x49:  // GPU_cw(cmd): synchronise, then one GP0 command word.
+            gpu_write(kGpuDataPort, cpu.gpr[4]);
+            return 0;
+        case 0x4A: {  // GPU_cwp(src, num): command word plus parameters.
+            const auto count = cpu.gpr[5];
+            std::uint8_t probe = 0;
+            for (std::uint32_t index = 0; index < count; ++index) {
+                const auto address = cpu.gpr[4] + index * 4;
+                if (!memory.try_read8(address, probe)) break;
+                gpu_write(kGpuDataPort, memory.read32(address));
+            }
+            return 0;
+        }
+        case 0x4B: {  // send_gpu_linked_list(src): walk the ordering table.
+            auto address = cpu.gpr[4] & 0x001FFFFCu;
+            for (std::size_t node = 0; node < 4096; ++node) {
+                const auto tag = memory.read32(0x80000000u | address);
+                const auto words = tag >> 24;
+                const auto next = tag & 0x00FFFFFFu;
+                for (std::uint32_t word = 0; word < words; ++word) {
+                    const auto source =
+                        (address + 4 + word * 4) & 0x001FFFFCu;
+                    gpu_write(kGpuDataPort,
+                              memory.read32(0x80000000u | source));
+                }
+                if (next == 0x00FFFFFFu) break;
+                address = next & 0x001FFFFCu;
+            }
+            return 0;
+        }
+        case 0x4C:  // gpu_abort_dma(): host GPU has no queued transfer.
+            return 0;
+        case 0x4D:  // GetGPUStatus()
+            return gpu_status();
+        case 0x4E:  // gpu_sync(): the modelled GPU is never busy.
             return 0;
         case 0x70:  // _bu_init(): memory-card BIOS init, no host side to set up.
             return 0;
@@ -399,8 +575,7 @@ std::uint32_t BiosServices::puts(Memory& memory, std::uint32_t address) {
 
 std::uint32_t BiosServices::read_argument(Memory& memory,
                                           const CpuState& cpu,
-                                          std::size_t index) const {
-    if (index < 3) return cpu.gpr[5 + index];
+                                          std::size_t index) const {    if (index < 3) return cpu.gpr[5 + index];
     const auto stack =
         cpu.gpr[29] + 0x10u + static_cast<std::uint32_t>(index - 3) * 4u;
     std::uint32_t value = 0;
@@ -519,6 +694,15 @@ std::uint32_t BiosServices::print_format(Memory& memory, const CpuState& cpu) {
 
     write_text(text);
     return 1;
+}
+
+void BiosServices::gpu_write(std::uint32_t register_address,
+                             std::uint32_t value) {
+    if (gpu_writer_) gpu_writer_(register_address, value);
+}
+
+std::uint32_t BiosServices::gpu_status() const {
+    return gpu_status_ ? gpu_status_() : 0;
 }
 
 void BiosServices::record_call(BiosTable table, std::uint32_t vector) {

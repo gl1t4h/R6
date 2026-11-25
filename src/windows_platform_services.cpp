@@ -20,7 +20,15 @@ constexpr std::uint64_t kUserDataSize = 2048;
 
 WindowsPlatformServices::WindowsPlatformServices(
     const std::filesystem::path& raw_bin_path)
-    : disc_(raw_bin_path, std::ios::binary) {}
+    : disc_(raw_bin_path, std::ios::binary) {
+    // The kernel's GPU vectors write the same registers the interpreter does,
+    // so route them at the modelled device instead of duplicating it.
+    bios_.set_gpu_access(
+        [this](std::uint32_t register_address, std::uint32_t value) {
+            write_gpu_register(register_address, value);
+        },
+        [this] { return gpu_.status(); });
+}
 
 std::uint16_t WindowsPlatformServices::read_controller(std::size_t port) {
     if (port >= 2) return 0xFFFF;
@@ -107,6 +115,24 @@ bool WindowsPlatformServices::read_disc_sector(
         reinterpret_cast<char*>(destination),
         static_cast<std::streamsize>(kUserDataSize));
     return disc_.gcount() == static_cast<std::streamsize>(kUserDataSize);
+}
+
+bool WindowsPlatformServices::read_disc_header(
+    std::uint32_t raw_sector,
+    std::uint8_t* destination,
+    std::size_t destination_size) {
+    if (!disc_ || destination == nullptr || destination_size < 12) return false;
+    // A raw Mode 2 sector is a 12-byte sync pattern, then the 4-byte address
+    // and mode, then the 8-byte subheader: the drive presents the last 12
+    // bytes to the guest.
+    const auto offset =
+        static_cast<std::uint64_t>(raw_sector) * kRawSectorSize + 12;
+    disc_.clear();
+    disc_.seekg(static_cast<std::streamoff>(offset), std::ios::beg);
+    disc_.read(reinterpret_cast<char*>(destination), 12);
+    const bool complete = disc_.gcount() == 12;
+    disc_.clear();
+    return complete;
 }
 
 bool WindowsPlatformServices::bios_call(std::uint32_t pc,

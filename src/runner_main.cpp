@@ -61,6 +61,8 @@ int main(int argc, char** argv) {
     std::uint32_t search_imm = 0;
     bool search_code = false;
     bool trace_cd = false;
+    bool dump_stream = false;
+    std::vector<std::uint32_t> watch_writes;
     std::string search_text;
 
     for (int index = 1; index < argc; ++index) {
@@ -88,6 +90,11 @@ int main(int argc, char** argv) {
             search_text = argv[++index];
         } else if (argument == "--trace-cd") {
             trace_cd = true;
+        } else if (argument == "--dump-stream") {
+            dump_stream = true;
+        } else if (argument == "--watch-write" && index + 1 < argc) {
+            watch_writes.push_back(static_cast<std::uint32_t>(
+                std::stoul(argv[++index], nullptr, 0)));
         } else if (argument == "--hot") {
             hot_enabled = true;
         } else if (argument == "--watch-args" && index + 1 < argc) {
@@ -197,6 +204,7 @@ int main(int argc, char** argv) {
     r6::MipsInterpreter interpreter(ram, services);
     for (auto address : watched_pcs) interpreter.watch_pc(address);
     for (auto address : watched_args) interpreter.watch_args(address);
+    for (auto address : watch_writes) interpreter.watch_write(address);
     interpreter.set_hot_enabled(hot_enabled);
     if (search_code) {
         for (std::uint32_t address = 0x80010000u; address < 0x80200000u;
@@ -324,6 +332,8 @@ int main(int argc, char** argv) {
         std::cout << "peek 0x" << std::hex << address << " = 0x"
                   << interpreter.peek(address) << std::dec << std::endl;
     }
+    std::cout << "gp=0x" << std::hex << interpreter.cpu().gpr[28] << std::dec
+              << std::endl;
     if (!interpreter.irq_hot().empty()) {
         std::vector<std::pair<std::uint64_t, std::uint32_t>> hot;
         for (const auto& entry : interpreter.irq_hot()) {
@@ -354,8 +364,10 @@ int main(int argc, char** argv) {
         }
         std::cout << std::endl;
     }
-    for (const auto& entry : interpreter.dma3_log()) {
-        std::cout << "dma3 " << entry << std::endl;
+    if (trace_cd) {
+        for (const auto& entry : interpreter.dma3_log()) {
+            std::cout << "dma3 " << entry << std::endl;
+        }
     }
     for (const auto& entry : interpreter.trace_log()) {
         std::cout << entry << std::endl;
@@ -451,9 +463,65 @@ int main(int argc, char** argv) {
         std::cout << " 0x" << std::hex << poll_pc << std::dec;
     }
     std::cout << std::endl;
+    if (dump_stream) {
+        const auto base = ram.read32(0x800C1510u & kRamMask);
+        const auto capacity = ram.read32(0x800C1520u & kRamMask);
+        const auto current = ram.read32(0x800C1514u & kRamMask);
+        const auto ready = ram.read32(0x800C1518u & kRamMask);
+        const auto consume = ram.read32(0x800C151Cu & kRamMask);
+        const auto state = ram.read32(0x800C1508u & kRamMask);
+        const auto used = ram.read32(0x800C1504u & kRamMask);
+        std::cout << "STREAM: base=0x" << std::hex << base << std::dec
+                  << " cap=" << capacity << " cur=" << current
+                  << " ready=" << ready << " consume=" << consume
+                  << " state=" << state << " used=" << used << "\n";
+        std::cout << "STREAM ptrs: dest=0x" << std::hex
+                  << ram.read32(0x800C14E0u & kRamMask) << " mode="
+                  << ram.read32(0x800C14F4u & kRamMask) << " end=0x"
+                  << ram.read32(0x800C14F8u & kRamMask) << " started="
+                  << ram.read32(0x800C14FCu & kRamMask) << " cb=0x"
+                  << ram.read32(0x800CF0D8u & kRamMask) << " dmaCb=0x"
+                  << ram.read32(0x800B4394u & kRamMask) << " irq3=0x"
+                  << ram.read32(0x800B2894u & kRamMask) << std::dec << "\n";
+        for (std::uint32_t index = 0;
+             index < capacity && index < 12; ++index) {
+            const auto address = (base + index * 32u) & kRamMask;
+            const auto word0 = ram.read32(address);
+            const auto word1 = ram.read32((address + 4u) & kRamMask);
+            std::cout << "  rec[" << index << "] state="
+                      << (word0 & 0xFFFFu) << " span="
+                      << ((word1 >> 16) & 0xFFFFu) << " w2="
+                      << ((word0 >> 16) & 0xFFFFu) << " w8=0x"
+                      << std::hex << ram.read32((address + 8u) & kRamMask)
+                      << std::dec << " raw=";
+            for (std::uint32_t word = 0; word < 8; ++word) {
+                std::cout << std::hex
+                          << ram.read32((address + word * 4u) & kRamMask)
+                          << " ";
+            }
+            std::cout << std::dec << "\n";
+        }
+        for (std::uint32_t index = 0; index < 2; ++index) {
+            const auto address = (base + capacity * 32u + index * 2016u) &
+                                 kRamMask;
+            std::cout << "  data[" << index << "]";
+            for (std::uint32_t word = 0; word < 6; ++word) {
+                std::cout << " 0x" << std::hex
+                          << ram.read32((address + word * 4u) & kRamMask)
+                          << std::dec;
+            }
+            std::cout << "\n";
+        }
+    }
+    if (!interpreter.write_log().empty()) {
+        for (const auto& entry : interpreter.write_log()) {
+            std::cout << "ww " << entry << "\n";
+        }
+    }
     std::cout << "VBlank: " << interpreter.vblanks() << " ticks, "
               << interpreter.interrupts() << " interrupts delivered, "
-              << interpreter.interrupt_overruns() << " handler overruns\n";
+              << interpreter.interrupt_overruns() << " handler overruns, " << interpreter.vblank_polls() << " polls, "
+              << interpreter.hardware().cycles() << " cycles, next=" << interpreter.vblank_next() << "\n";
     if (trace_cd) {
         std::cout << "CD events:" << std::endl;
         for (const auto& entry : interpreter.cdrom_log()) {
@@ -461,6 +529,10 @@ int main(int argc, char** argv) {
         }
         std::cout << "IRQ events:" << std::endl;
         for (const auto& entry : interpreter.hardware().interrupt_log()) {
+            std::cout << "  " << entry << std::endl;
+        }
+        std::cout << "CD registers:" << std::endl;
+        for (const auto& entry : interpreter.cdrom_register_log()) {
             std::cout << "  " << entry << std::endl;
         }
     }
@@ -513,6 +585,22 @@ int main(int argc, char** argv) {
         std::cout << " 0x" << std::hex << pc << std::dec;
     }
     std::cout << "\n";
+
+    // Debug: dump allocator bins and suspect heap block
+    {
+        auto dump_words = [&](std::uint32_t base, std::uint32_t count, const char* label) {
+            std::cout << "Dump " << label << " @0x" << std::hex << base << std::dec << "\n";
+            for (std::uint32_t i = 0; i < count; ++i) {
+                std::uint32_t addr = base + i * 4u;
+                std::uint32_t val = ram.read32(addr & kRamMask);
+                std::cout << "  [0x" << std::hex << addr << "] = 0x" << val << std::dec << "\n";
+            }
+        };
+        dump_words(0x800B55A0u, 16u, "bins");
+        dump_words(0x80139AC0u, 16u, "heap@80139AC0");
+        dump_words(0x80065340u, 32u, "code@65340");
+        dump_words(0x80064F80u, 16u, "code@64f80");
+    }
 
     if (!frame_path.empty()) {
         write_ppm(gpu.display_frame(), r6::SoftwareGpu::kDisplayWidth,

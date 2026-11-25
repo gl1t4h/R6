@@ -53,6 +53,8 @@ public:
     std::uint64_t dma_lists() const { return dma_lists_; }
     std::uint64_t dma_words() const { return dma_words_; }
     std::uint64_t vblanks() const { return vblank_count_; }
+    std::uint64_t vblank_polls() const { return vblank_polls_; }
+    std::uint64_t vblank_next() const { return vblank_next_; }
     std::uint64_t interrupts() const { return interrupts_delivered_; }
     std::uint32_t cop0_status() { return cop0_[12]; }
     std::uint32_t peek(std::uint32_t address) { return read32(address); }
@@ -63,6 +65,10 @@ public:
     }
     void set_hot_enabled(bool enabled) { hot_enabled_ = enabled; }
     void set_trace_reg(std::uint32_t address) { trace_reg_ = address; }
+    // Logs every store that lands on one address, with the writing PC, so a
+    // value that appears in guest memory can be traced back to its writer.
+    void watch_write(std::uint32_t address) { watch_writes_.push_back(address); }
+    const std::vector<std::string>& write_log() const { return write_log_; }
     void set_find_value(std::uint32_t value) { find_value_ = value; }
     const std::vector<std::string>& trace_log() const { return trace_log_; }
     const std::vector<std::string>& dma3_log() const { return dma3_log_; }
@@ -140,10 +146,14 @@ private:
     void run_dma2_list();
     // Copies a CD-ROM sector into main RAM for DMA channel 3.
     void run_dma3_transfer();
+    // Copies main RAM into the SPU for DMA channel 4 and signals completion.
+    void run_dma4_transfer();
     // Raises the vertical-blank interrupt.
     void poll_vblank();
     void enter_entry_int();
     void note_cdrom_poll(std::uint32_t physical);
+    void note_watched_write(std::uint32_t address, std::uint32_t value,
+                            int width);
     // Enters the queued guest interrupt routine when a pending interrupt is
     // unmasked, which stands in for the retail kernel's dispatcher.
     void deliver_interrupt();
@@ -187,10 +197,13 @@ private:
     bool hot_enabled_{false};
     std::uint32_t trace_reg_{0};
     std::uint32_t find_value_{0};
+    std::vector<std::uint32_t> watch_writes_;
+    std::vector<std::string> write_log_;
     std::vector<std::string> trace_log_;
     std::vector<std::string> dma3_log_;
     std::vector<std::uint32_t> watch_args_;
     std::vector<std::string> watched_args_log_;
+    bool bad_heap_logged_ = false;
     std::vector<std::uint32_t> cdrom_polls_;
     std::vector<std::string> interrupt_log_;
 
@@ -205,7 +218,8 @@ private:
     std::uint64_t interrupts_delivered_{0};
     bool interrupts_enabled_{true};
     std::uint64_t interrupt_overruns_{0};
-    std::uint32_t vblank_next_{0};
+    std::uint64_t vblank_next_{0};
+    std::uint64_t vblank_polls_{0};
     bool vblank_enabled_{false};
     bool in_interrupt_{false};
     std::uint64_t interrupt_steps_{0};
@@ -234,6 +248,9 @@ public:
     }
 
     const std::vector<std::string>& cdrom_log() { return hardware_.cdrom().log(); }
+    const std::vector<std::string>& cdrom_register_log() {
+        return hardware_.cdrom().register_log();
+    }
 
     HardwareMap& hardware() { return hardware_; }
 

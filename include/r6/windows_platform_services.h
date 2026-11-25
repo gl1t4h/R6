@@ -28,6 +28,10 @@ public:
         std::uint32_t raw_sector,
         std::uint8_t* destination,
         std::size_t destination_size) override;
+    bool read_disc_header(
+        std::uint32_t raw_sector,
+        std::uint8_t* destination,
+        std::size_t destination_size) override;
     bool bios_call(std::uint32_t pc, CpuState& cpu, Memory& memory) override;
     std::uint32_t interrupt_entry(std::uint32_t priority) override;
     std::uint32_t entry_int() override;
