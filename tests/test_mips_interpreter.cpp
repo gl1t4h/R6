@@ -335,6 +335,9 @@ void cdrom_command_acknowledges_then_completes() {
     Memory ram(2u * 1024u * 1024u);
     TestServices services;
     MipsInterpreter interpreter(ram, services);
+    // This check is about the acknowledgement/completion handshake, not
+    // about how long the drive takes to accept the command.
+    interpreter.hardware().cdrom().set_command_delay(0);
     auto& cpu = interpreter.cpu();
     cpu.pc = 0x80010000u;
 
@@ -365,6 +368,7 @@ void cdrom_interrupt_line_honours_the_enable_mask() {
     TestServices services;
     MipsInterpreter interpreter(ram, services);
     auto& hardware = interpreter.hardware();
+    hardware.cdrom().set_command_delay(0);
 
     hardware.write_cdrom(0x1F801800u, 0);     // bank 0
     hardware.write_cdrom(0x1F801801u, 0x01);  // GetStat: INT3 pending
@@ -385,6 +389,27 @@ void cdrom_interrupt_line_honours_the_enable_mask() {
     hardware.write_cdrom(0x1F801800u, 1);     // bank 1: acknowledge INT3
     hardware.write_cdrom(0x1F801803u, 0x07);
     R6_CHECK((hardware.interrupt_status() & 0x04u) == 0);
+}
+
+// A command's acknowledgement arrives a little after the store. Raising it
+// immediately would let the interrupt handler run before the driver reaches
+// its wait loop; the driver then clears the state byte the handler set and
+// waits forever.
+void cdrom_command_answer_is_delayed() {
+    Memory ram(2u * 1024u * 1024u);
+    TestServices services;
+    MipsInterpreter interpreter(ram, services);
+    auto& hardware = interpreter.hardware();
+
+    hardware.write_cdrom(0x1F801800u, 0);     // bank 0
+    hardware.write_cdrom(0x1F801801u, 0x01);  // GetStat
+    R6_CHECK((hardware.interrupt_status() & 0x04u) == 0);
+
+    hardware.advance_cycles(r6::CdromDevice::kCommandDelayCycles - 1);
+    R6_CHECK((hardware.interrupt_status() & 0x04u) == 0);
+
+    hardware.advance_cycles(1);
+    R6_CHECK((hardware.interrupt_status() & 0x04u) != 0);
 }
 
 // GPUSTAT bit 31 is the drawing field: zero through vertical blank and the
@@ -594,6 +619,7 @@ void run_mips_interpreter_tests() {
     dma2_linked_list_reaches_the_gpu();
     cdrom_command_acknowledges_then_completes();
     cdrom_interrupt_line_honours_the_enable_mask();
+    cdrom_command_answer_is_delayed();
     interrupt_takes_the_exception_vector();
     interrupt_handler_returns_through_rfe();
     interrupt_without_a_vector_stays_pending();

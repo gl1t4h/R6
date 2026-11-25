@@ -14,12 +14,43 @@ namespace r6 {
 //
 // The disc image reader in PlatformServices already returns 2048-byte user
 // sectors; this models the part a game talks to before it can ask for them.
-// Commands complete immediately: the acknowledgement interrupt is reported
-// first, and the completion interrupt follows once the guest acknowledges it,
-// which is the order library "sync" helpers wait for.
+// A command is held for a short time before it answers, as on hardware; then
+// the acknowledgement interrupt is reported first, and the completion
+// interrupt follows once the guest acknowledges it, which is the order
+// library "sync" helpers wait for.
 class CdromDevice {
 public:
+    // A real drive takes a short but non-zero time to accept a command and
+    // raise its first interrupt. Answering on the store lets the interrupt
+    // handler run before the driver reaches its wait loop, which then clears
+    // the state byte the handler had just set; the command is lost and the
+    // driver waits forever. Holding it briefly lets the guest get there.
+    static constexpr std::uint64_t kCommandDelayCycles = 8000;
+
     explicit CdromDevice(PlatformServices& services) : services_(services) {}
+
+    // Tests that check the register handshake can pin the old immediate
+    // behaviour; the default is the hardware-like delay.
+    void set_command_delay(std::uint64_t cycles) {
+        command_delay_cycles_ = cycles;
+    }
+
+    // Advances the command-acceptance timer. Returns true when a command was
+    // executed, so the caller can refresh the interrupt line.
+    bool advance_cycles(std::uint64_t count) {
+        if (!command_pending_) return false;
+        if (count < pending_delay_) {
+            pending_delay_ -= count;
+            return false;
+        }
+        const auto command = pending_command_;
+        command_pending_ = false;
+        pending_delay_ = 0;
+        parameters_ = pending_parameters_;
+        pending_parameters_.clear();
+        execute_command(command);
+        return true;
+    }
 
     // Byte access to 0x1F801800..0x1F801803.
     //
@@ -60,7 +91,7 @@ public:
                 index_ = value & 3u;
                 return;
             case 1:
-                if (index_ == 0) execute_command(value);
+                if (index_ == 0) queue_command(value);
                 return;
             case 2:
                 // Banks 1 and 3 redirect +2 to the interrupt enable register.
@@ -325,6 +356,18 @@ private:
         return text;
     }
 
+    void queue_command(std::uint8_t command) {
+        if (command_delay_cycles_ == 0) {
+            execute_command(command);
+            return;
+        }
+        pending_command_ = command;
+        pending_parameters_ = parameters_;
+        parameters_.clear();
+        pending_delay_ = command_delay_cycles_;
+        command_pending_ = true;
+    }
+
     void execute_command(std::uint8_t command) {
         data_index_ = 0;
         data_.clear();
@@ -486,6 +529,11 @@ private:
     std::uint8_t request_register_{0};
     std::uint32_t complete_pending_{0};
     std::vector<std::uint8_t> parameters_;
+    std::uint64_t command_delay_cycles_{kCommandDelayCycles};
+    std::uint64_t pending_delay_{0};
+    std::uint8_t pending_command_{0};
+    std::vector<std::uint8_t> pending_parameters_;
+    bool command_pending_{false};
     std::vector<std::uint8_t> response_;
     std::size_t response_index_{0};
     std::vector<std::uint8_t> data_;

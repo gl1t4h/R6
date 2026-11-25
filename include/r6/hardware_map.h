@@ -282,6 +282,10 @@ public:
         } else {
             gpu_vblank_cycles_ = 0;
         }
+        // A deferred CD command raises its acknowledgement here rather than
+        // on the store, so the interrupt line has to be refreshed when it
+        // fires, not only on a register access.
+        if (cdrom_.advance_cycles(count)) refresh_cdrom_interrupt();
     }
 
     // A field starts with vertical blank, where GPUSTAT ODE reads zero, then
