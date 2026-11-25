@@ -71,6 +71,30 @@ None.
 - **Playable native build:** No
 - **Distributed game assets:** No
 
+### Silent Hill (USA)
+
+- **Platform:** PlayStation 1
+- **Region:** USA
+- **Status:** Interpreter execution runner (early boot)
+- **Progress:** 10%
+- **Completed:** Opens the retail CHD version 5 image directly (`cdlz`
+  hunks, Huffman-compressed map, 32,765 hunks, 262,116 sectors) after the map
+  reader
+  was fixed to parse it correctly and to reject incoherent maps. The ISO9660
+  volume is discovered and the PS-X EXE identified (`SLUS_007.07`, 79,872
+  bytes at LBA 24, entry `0x80012f7c`). A 40M-instruction run executes early
+  init and the guest TTY prints `CD_init:addr=80022998`. That run delivered
+  70 vblanks but no interrupts, because the guest installs no handler at
+  `0x80000080`; the interpreter now falls back to the guest's `HookEntryInt`
+  buffer, and the on-disc run with that change has not been reconfirmed yet.
+  No guest CD sectors have been read and no GPU primitives submitted.
+- **Next step:** Rerun on disc with `--vblank` to confirm the `HookEntryInt`
+  fallback raises `interrupts delivered`, then follow CD init to its first
+  sector reads and capture when the first draw-environment and polygon
+  packets appear.
+- **Playable native build:** No
+- **Distributed game assets:** No
+
 Progress percentages are intentionally conservative and will only change when
 there is a reproducible milestone.
 
