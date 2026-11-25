@@ -1016,7 +1016,22 @@ bool ChdImage::load_compressed_map(std::string& error) {
             case kTypeCodec0 + 3:
                 length = bits.read(length_bits);
                 bits.read(16);  // CRC-16 of the uncompressed hunk
-                if (length == 0 || offset > map_offset_ ||
+                // chdman stores a hunk uncompressed when compression does
+                // not shrink it, so a codec block is never bigger than the
+                // hunk it represents.
+                if (length == 0) {
+                    error = "hunk " + std::to_string(index) +
+                            " has a zero-length compression block";
+                    return false;
+                }
+                if (length > hunk_bytes_) {
+                    error = "hunk " + std::to_string(index) + " stores " +
+                            std::to_string(length) +
+                            " compressed bytes for a " +
+                            std::to_string(hunk_bytes_) + "-byte hunk";
+                    return false;
+                }
+                if (offset > map_offset_ ||
                     length > map_offset_ - offset) {
                     error = "hunk " + std::to_string(index) +
                             " does not fit in the hunk data area";

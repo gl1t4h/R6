@@ -301,6 +301,12 @@ void corrupt_maps_are_rejected() {
     write_be(bytes, static_cast<std::size_t>(map_offset), payload - 8, 4);
     reject(bytes, "bits but its payload holds");
 
+    bytes = read_file(fixture("synthetic-many-hunks.chd"));
+    map_offset = read_be(bytes, 40, 8);
+    // Widening the length field makes the first hunk claim 41301 bytes.
+    bytes[static_cast<std::size_t>(map_offset) + 12] = 16;
+    reject(bytes, "compressed bytes for a");
+
     bytes = read_file(fixture("synthetic-none.chd"));
     map_offset = read_be(bytes, 40, 8);
     const auto hunk = read_be(bytes, 56, 4);
