@@ -162,13 +162,14 @@ private:
     static constexpr std::uint8_t kMotorOn = 0x02;
     // A command always answers in two steps: INT3 acknowledges it, then the
     // completion interrupt carries the final status, or INT1 starts the sector
-    // stream. The flag register is a bit per interrupt, so INT3 is 0x04, not
-    // the literal 3; returning the code made a guest see INT1+INT2 and
-    // dispatch the wrong callback.
-    static constexpr std::uint32_t kIntAcknowledge = 0x04;  // INT3
+    // stream. Bits 0-2 of the flag register hold the interrupt type itself
+    // (INT1=1 through INT5=5), not one flag per bit, so INT3 reads as 3.
+    // Silent Hill's handler indexes a table with (flags & 7) - 1; returning
+    // 0x04 made it see INT4 (DataEnd) and take the wrong completion path.
+    static constexpr std::uint32_t kIntAcknowledge = 0x03;  // INT3
     static constexpr std::uint32_t kIntComplete = 0x02;     // INT2
     static constexpr std::uint32_t kIntDataReady = 0x01;    // INT1
-    static constexpr std::uint32_t kIntDataEnd = 0x08;      // INT4
+    static constexpr std::uint32_t kIntDataEnd = 0x04;      // INT4
 
     std::uint8_t status() const {
         std::uint32_t value = index_ & 3u;
@@ -271,8 +272,10 @@ private:
         // first and then collect the response, so clearing it here would
         // leave them with an empty status byte.
         interrupt_ &= ~acked;
-        if ((previous & kIntAcknowledge) != 0 &&
-            (acked & kIntAcknowledge) != 0 && complete_pending_ != 0) {
+        // The response bits are one interrupt type, so the queued completion
+        // becomes visible only once the acknowledge fully clears them.
+        if ((previous & 0x07u) == kIntAcknowledge && interrupt_ == 0 &&
+            complete_pending_ != 0) {
             interrupt_ = complete_pending_;
             complete_pending_ = 0;
         }

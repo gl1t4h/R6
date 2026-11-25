@@ -355,7 +355,7 @@ void cdrom_command_acknowledges_then_completes() {
     ram.write32(0x1002Cu, 0x91040001u);  // lbu a0, 1(t0) -> response byte
 
     interpreter.run(12);
-    R6_CHECK(cpu.gpr[2] == 0x04);  // INT3 flag bit, not the literal 3
+    R6_CHECK(cpu.gpr[2] == 0x03);  // INT3 is the type value 3, not a bit
     R6_CHECK(cpu.gpr[3] == 0x02);  // completion reported after the ack
     R6_CHECK(cpu.gpr[4] == 2);     // response starts with the drive status
 }
@@ -379,7 +379,7 @@ void cdrom_interrupt_line_honours_the_enable_mask() {
     R6_CHECK((hardware.interrupt_status() & 0x04u) == 0);
 
     hardware.write_cdrom(0x1F801800u, 3);     // bank 3 mirrors +2
-    hardware.write_cdrom(0x1F801802u, 0x04);  // enable INT3 only
+    hardware.write_cdrom(0x1F801802u, 0x07);  // enable the response type
     R6_CHECK((hardware.interrupt_status() & 0x04u) != 0);
 
     hardware.write_cdrom(0x1F801800u, 0);     // bank 0 +3: request register
