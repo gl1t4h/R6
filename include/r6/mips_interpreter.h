@@ -192,6 +192,12 @@ private:
     void deliver_interrupt();
     // Pops the SR status stack, the way RFE does.
     void return_from_exception();
+    // Saves the register file at exception entry and restores it when the
+    // handler returns through B(17h), as the kernel's exception frame does.
+    // Without it the guest resumes with the handler's stack and callee-saved
+    // registers, and the next function return jumps through a stale RA.
+    void save_interrupt_context();
+    void restore_interrupt_context();
     static std::string format_hex(std::uint32_t value);
 
     std::uint32_t read8(std::uint32_t address);
@@ -261,6 +267,10 @@ private:
     // SR before the exception push, kept so an abandoned handler can be unwound
     // without leaving interrupts disabled.
     std::uint32_t interrupt_saved_sr_{0};
+    std::array<std::uint32_t, 32> interrupt_gpr_{};
+    std::uint32_t interrupt_lo_{0};
+    std::uint32_t interrupt_hi_{0};
+    bool interrupt_context_valid_{false};
     std::uint64_t missing_vectors_{0};
     std::vector<VectorWrite> vector_writes_;
 

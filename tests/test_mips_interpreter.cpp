@@ -441,24 +441,36 @@ void interrupt_falls_back_to_entry_int() {
     // HookEntryInt jmp_buf: RA, SP, FP, S0-S7 and GP as A(13h) saves them.
     ram.write32(0x20000, 0x80002000u);  // resume at the dispatcher
     ram.write32(0x20004, 0x80030000u);  // SP
-    for (std::uint32_t index = 0; index < 9; ++index) {
+    for (std::uint32_t index = 0; index < 10; ++index) {
         ram.write32(0x20008 + index * 4, 0x80000000u + index);
     }
 
-    ram.write32(0x2000, 0x240A0055u);   // addiu t2, zero, 0x55
-    ram.write32(0x2004, 0x24090017u);   // addiu t1, zero, 0x17
-    ram.write32(0x2008, jal(0xB0));     // ReturnFromException
-    ram.write32(0x200C, 0x00000000u);   // delay slot
+    ram.write32(0x2000, 0x24100BADu);   // addiu s0, zero, 0xBAD
+    ram.write32(0x2004, 0x240A0055u);   // addiu t2, zero, 0x55
+    ram.write32(0x2008, 0x3C088002u);   // lui t0, 0x8002
+    ram.write32(0x200C, 0xAD0A0040u);   // sw t2, 0x40(t0)
+    ram.write32(0x2010, 0x24090017u);   // addiu t1, zero, 0x17
+    ram.write32(0x2014, jal(0xB0));     // ReturnFromException
+    ram.write32(0x2018, 0x00000000u);   // delay slot
 
     ram.write32(0x10000, 0x24080001u);  // addiu t0, zero, 1
     ram.write32(0x10004, 0x0000000Du);  // break
+    cpu.gpr[16] = 0x1234u;              // interrupted callee-saved value
+    cpu.gpr[29] = 0x801FF000u;          // interrupted stack pointer
+    cpu.gpr[31] = 0x80010040u;          // interrupted return address
     raise_pending_interrupt(interpreter);
 
-    const auto result = interpreter.run(8);
+    const auto result = interpreter.run(12);
     R6_CHECK(interpreter.interrupts() == 1);
     R6_CHECK(interpreter.missing_vectors() == 0);
-    R6_CHECK(cpu.gpr[10] == 0x55u);  // the dispatcher ran
-    R6_CHECK(cpu.gpr[8] == 1u);      // then the interrupted stream resumed
+    R6_CHECK(ram.read32(0x20040) == 0x55u);  // the dispatcher ran
+    // B(17h) restores the interrupted register file, so the handler's stack
+    // and callee-saved clobbers do not leak into the guest.
+    R6_CHECK(cpu.gpr[16] == 0x1234u);
+    R6_CHECK(cpu.gpr[29] == 0x801FF000u);
+    R6_CHECK(cpu.gpr[31] == 0x80010040u);
+    R6_CHECK(cpu.gpr[10] == 0u);
+    R6_CHECK(cpu.gpr[8] == 1u);  // then the interrupted stream resumed
     R6_CHECK(result.reason == StopReason::guest_break);
 }
 

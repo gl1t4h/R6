@@ -365,6 +365,7 @@ void MipsInterpreter::deliver_interrupt() {
     cop0_[14] = cpu_.pc;
     cop0_[13] = (cop0_[13] & ~0x0000FF7Cu) | 0x00000400u;
     cop0_[12] = (status & ~0x3Fu) | ((status & 0x0Fu) << 2);
+    save_interrupt_context();
     if (vector != 0) {
         cpu_.pc = kExceptionVector;
     } else {
@@ -404,6 +405,25 @@ void MipsInterpreter::deliver_interrupt() {
 void MipsInterpreter::return_from_exception() {
     const auto status = cop0_[12];
     cop0_[12] = (status & ~0x3Fu) | ((status >> 2) & 0xFu);
+}
+
+void MipsInterpreter::save_interrupt_context() {
+    for (std::size_t index = 0; index < 32; ++index) {
+        interrupt_gpr_[index] = cpu_.gpr[index];
+    }
+    interrupt_lo_ = cpu_.lo;
+    interrupt_hi_ = cpu_.hi;
+    interrupt_context_valid_ = true;
+}
+
+void MipsInterpreter::restore_interrupt_context() {
+    if (!interrupt_context_valid_) return;
+    for (std::size_t index = 0; index < 32; ++index) {
+        cpu_.gpr[index] = interrupt_gpr_[index];
+    }
+    cpu_.lo = interrupt_lo_;
+    cpu_.hi = interrupt_hi_;
+    interrupt_context_valid_ = false;
 }
 
 void MipsInterpreter::poll_vblank() {
@@ -581,6 +601,7 @@ RunResult MipsInterpreter::run(std::uint64_t max_steps) {
                 // interrupted stream is not left with interrupts disabled.
                 cpu_.pc = cop0_[14];
                 cop0_[12] = interrupt_saved_sr_;
+                restore_interrupt_context();
                 in_interrupt_ = false;
                 if (++interrupt_overruns_ >= kMaxInterruptOverruns) {
                     interrupts_enabled_ = false;
@@ -612,6 +633,7 @@ RunResult MipsInterpreter::run(std::uint64_t max_steps) {
                 // the instruction EPC kept.
                 return_from_exception();
                 cpu_.pc = cop0_[14];
+                restore_interrupt_context();
                 in_interrupt_ = false;
             } else {
                 cpu_.pc = cpu_.gpr[31];
