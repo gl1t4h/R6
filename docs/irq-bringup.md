@@ -109,3 +109,42 @@ The project targets any PlayStation title, so the title-specific front end was
 renamed from `R6.exe` to `spider-man-r6.exe` (`src/spiderman_player.cpp`, CMake
 target `spider-man-r6`). Generic tooling keeps the `r6-` prefix: `r6-run`,
 `r6-tests`, `r6-diagnostic` and the `r6::` headers.
+
+## Where the chain actually breaks (latest)
+
+Interrupt plumbing is now correct in the parts that can be verified:
+
+- the queued `SysEnqIntRP` **chain** is walked (each node is `{next, routine}`);
+- every routine in the chain runs with the interrupted context saved/restored;
+- `I_STAT` is acknowledged when the chain finishes;
+- the guest's `memset`/`memcpy`/`bzero` kernel vectors are real, so its
+  structures are initialised;
+- a pad/SIO0 model answers `JOY_STAT`/`JOY_DATA` and raises the controller
+  interrupt (I_STAT bit 7) after a modelled shift-out delay.
+
+Result per 40,000,000 instructions with `--vblank`: ~520 deliveries, **0**
+handler overruns. The guest's handler chain (`0x80087660`, the pad/vblank
+dispatcher) runs every tick and returns.
+
+Two independent blockers remain, both measured:
+
+1. The guest spends its time in the pad transfer wait at `0x80088040`. That
+   loop exits only when `I_STAT` bit 7 is set *at the check*, or when
+   `TIMER2` mode has bit 9 (`0x200`) set and its elapsed count exceeds the
+   baseline. `TIMER2` mode reads back as 0 there, so the timeout branch can
+   never fire, and the driver re-acknowledges the pad bit faster than the
+   modelled byte arrives.
+2. The vblank callback registered through libetc (`0x8008C2E8`, the function
+   that increments `*(0x800B397C)` and walks the eight `VSyncCallback`
+   slots) is **never entered** - a watch shows 0 hits. It is reached only
+   through libetc's own exception entry, and `A(13h) HookEntryInt` takes a
+   *save buffer*, not a routine: pointing the interpreter at that buffer
+   derails immediately (`0x800B28BC` is data). Emulating libetc's entry, or
+   registering `0x8008C2E8` as the vblank callback ourselves, is the next
+   step. Until `*(0x800B397C)` moves, `VSync()` times out, the frame loop
+   never advances and the display stays off.
+
+Diagnostics added for that work: `--watch-pc ADDR` (execution count at an
+address), `--peek ADDR` (word at the end of the run), `--hot` (sampled
+whole-run PC histogram), plus the interrupt-entry log, per-handler PC trace and
+handler histogram already present.

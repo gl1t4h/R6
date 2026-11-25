@@ -136,6 +136,10 @@ public:
         }
         if (address == kPadData) {
             pad_data_ = value & 0xFFFFu;
+            // A byte takes time to shift out on real hardware, so raise the
+            // controller interrupt a little later: raising it immediately lets
+            // the driver acknowledge it before its own wait loop starts.
+            pad_irq_delay_ = 4;
             return;
         }
         if (address == kPadMode) {
@@ -169,6 +173,13 @@ public:
 
     void raise_interrupt(std::uint32_t bit) { interrupt_status_ |= bit; }
     // The kernel acknowledges a serviced interrupt by clearing its I_STAT bit.
+    // Called from the interpreter's periodic poll: delivers the pad transfer
+    // interrupt once the modelled shift-out delay has elapsed.
+    void pad_tick() {
+        if (pad_irq_delay_ == 0) return;
+        if (--pad_irq_delay_ == 0) interrupt_status_ |= kInterruptPad;
+    }
+
     void acknowledge_interrupts(std::uint32_t bits) {
         interrupt_status_ &= ~bits;
     }
@@ -187,6 +198,7 @@ public:
 
     static constexpr std::uint32_t kInterruptVblank = 1u << 0;
     static constexpr std::uint32_t kInterruptCdrom = 1u << 2;
+    static constexpr std::uint32_t kInterruptPad = 1u << 7;
 
     std::uint32_t interrupt_status() const { return interrupt_status_; }
     std::uint32_t interrupt_mask() const { return interrupt_mask_; }
@@ -226,6 +238,7 @@ private:
     std::array<std::uint32_t, 7> dma_counter_{};
     std::array<std::uint32_t, 7> dma_control_{};
     std::uint32_t pad_data_{0x41};
+    std::uint32_t pad_irq_delay_{0};
     std::uint32_t pad_mode_{0};
     std::uint32_t pad_control_{0};
     std::uint32_t pad_baud_{0};

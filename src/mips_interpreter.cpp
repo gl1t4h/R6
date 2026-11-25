@@ -231,12 +231,24 @@ void MipsInterpreter::deliver_interrupt() {
     const auto pending = hardware_.interrupt_status() & hardware_.interrupt_mask();
     if (pending == 0) return;
 
+    interrupt_routines_.clear();
+    // A(13h) HookEntryInt hands the kernel a *buffer* to save the exception
+    // entry into, not a routine, so the SysEnqIntRP chain below remains the
+    // dispatch path.
     for (std::uint32_t priority = 0; priority < 3; ++priority) {
-        const auto entry = services_.interrupt_entry(priority);
-        if (entry == 0) continue;
-        // SysEnqIntRP entry: { next entry, void (*routine)() }.
-        const auto routine = read32(entry + 4);
-        if (routine < 0x80000000u || routine >= 0x80200000u) return;
+        // SysEnqIntRP keeps a linked list per priority: each node is
+        // { next, void (*routine)() }, and every node is serviced.
+        auto entry = services_.interrupt_entry(priority);
+        for (std::size_t depth = 0; entry != 0 && depth < 16; ++depth) {
+            const auto routine = read32(entry + 4);
+            if (routine >= 0x80000000u && routine < 0x80200000u) {
+                interrupt_routines_.push_back(routine);
+            }
+            entry = read32(entry);
+        }
+    }
+    if (interrupt_routines_.empty()) return;
+    {
         interrupt_return_pc_ = cpu_.pc;
         interrupt_saved_ra_ = cpu_.gpr[31];
         for (std::size_t index = 0; index < 32; ++index) {
@@ -247,17 +259,18 @@ void MipsInterpreter::deliver_interrupt() {
         interrupt_saved_cause_ = cop0_[13];
         interrupt_pending_bits_ = pending;
         if (interrupt_log_.size() < 6) {
-            char line[176]{};
-            std::snprintf(
-                line, sizeof(line),
-                "entry=0x%08X next=0x%08X routine=0x%08X sp=0x%08X gp=0x%08X "
-                "b12c8=0x%08X interrupted=0x%08X",
-                entry, read32(entry), routine, cpu_.gpr[29], cpu_.gpr[28],
-                read32(0x800B12C8u), cpu_.pc);
+            std::string line = "routines=";
+            for (auto address : interrupt_routines_) {
+                line += "0x" + format_hex(address) + " ";
+            }
+            line += "sp=0x" + format_hex(cpu_.gpr[29]);
+            line += " gp=0x" + format_hex(cpu_.gpr[28]);
+            line += " interrupted=0x" + format_hex(cpu_.pc);
             interrupt_log_.push_back(line);
         }
         interrupt_steps_ = 0;
         irq_pcs_.clear();
+        irq_hot_.clear();
         if (irq_traces_.size() < 4) {
             irq_traces_.emplace_back();
             irq_traces_.back().reserve(32);
@@ -268,7 +281,10 @@ void MipsInterpreter::deliver_interrupt() {
         cop0_[13] |= 0x00000400u;  // CAUSE.IP2
         for (std::size_t reg = 4; reg < 8; ++reg) cpu_.gpr[reg] = 0;
         cpu_.gpr[31] = kInterruptReturnAddress;
-        cpu_.pc = routine;
+        // An exception entry returns through $k0 as often as through $ra.
+        cpu_.gpr[26] = kInterruptReturnAddress;
+        interrupt_routine_index_ = 0;
+        cpu_.pc = interrupt_routines_[0];
         in_interrupt_ = true;
         ++interrupts_delivered_;
         return;
@@ -330,6 +346,12 @@ void MipsInterpreter::run_dma2_list() {
     }
 }
 
+std::string MipsInterpreter::format_hex(std::uint32_t value) {
+    char buffer[16]{};
+    std::snprintf(buffer, sizeof(buffer), "%08X", value);
+    return buffer;
+}
+
 RunResult MipsInterpreter::run(std::uint64_t max_steps) {
     RunResult result;
     bool in_delay_slot = false;
@@ -337,13 +359,35 @@ RunResult MipsInterpreter::run(std::uint64_t max_steps) {
 
     while (result.steps < max_steps) {
         const auto current_pc = cpu_.pc;
+        for (auto& entry : watched_) {
+            if (entry.first == current_pc) ++entry.second;
+        }
+        if (hot_enabled_ && (result.steps & 0x3Fu) == 0) ++hot_[current_pc];
         const bool was_delay_slot = in_delay_slot;
         const auto target = delay_target;
         in_delay_slot = false;
 
+        if (current_pc == kInterruptReturnAddress &&
+            interrupt_routine_index_ + 1 < interrupt_routines_.size()) {
+            // More queued routines belong to this interrupt: enter the next one
+            // from the interrupted context, as the kernel's dispatcher does.
+            ++interrupt_routine_index_;
+            for (std::size_t index = 0; index < 32; ++index) {
+                cpu_.gpr[index] = interrupt_saved_gpr_[index];
+            }
+            cpu_.hi = interrupt_saved_hi_;
+            cpu_.lo = interrupt_saved_lo_;
+            cpu_.gpr[31] = kInterruptReturnAddress;
+            cpu_.pc = interrupt_routines_[interrupt_routine_index_];
+            interrupt_steps_ = 0;
+            irq_pcs_.clear();
+            irq_hot_.clear();
+            continue;
+        }
+
         if (current_pc == kInterruptReturnAddress) {
-            // The queued interrupt routine returned; resume the interrupted
-            // instruction stream exactly where it left off, with its registers.
+            // Every queued routine returned; resume the interrupted instruction
+            // stream exactly where it left off, with its registers.
             cpu_.pc = interrupt_return_pc_;
             for (std::size_t index = 0; index < 32; ++index) {
                 cpu_.gpr[index] = interrupt_saved_gpr_[index];
@@ -357,6 +401,7 @@ RunResult MipsInterpreter::run(std::uint64_t max_steps) {
         }
 
         if (in_interrupt_) {
+            ++irq_hot_[current_pc];
             if (++interrupt_steps_ > kInterruptStepBudget) {
                 // The routine left its own context, so drop the call and resume
                 // the interrupted stream. After a few of these, stop delivering
@@ -380,6 +425,7 @@ RunResult MipsInterpreter::run(std::uint64_t max_steps) {
             // the run loop, not in guest state, so resuming mid-pair would
             // lose it.
             if (vblank_enabled_) poll_vblank();
+            hardware_.pad_tick();
             deliver_interrupt();
             // The handler jump replaced cpu_.pc, so current_pc is stale: restart
             // the iteration and execute the handler instead of the instruction

@@ -165,6 +165,12 @@ std::uint32_t BiosServices::handle_a0(std::uint32_t vector, CpuState& cpu,
             }
             return 0;
         }
+        case 0x13:  // HookEntryInt(entry): guest exception entry point.
+            hooked_entry_ = cpu.gpr[4];
+            return 0;
+        case 0x14:  // UnHookEntryInt()
+            hooked_entry_ = 0;
+            return 0;
         case 0x39:  // InitHeap: the native runtime owns the heap.
             return 0;
         case 0x3A:  // _exit

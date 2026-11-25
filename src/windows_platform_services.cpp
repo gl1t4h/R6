@@ -123,6 +123,10 @@ std::uint32_t WindowsPlatformServices::interrupt_entry(std::uint32_t priority) {
     return bios_.interrupt_entry(priority);
 }
 
+std::uint32_t WindowsPlatformServices::hooked_entry() {
+    return bios_.hooked_entry();
+}
+
 void WindowsPlatformServices::set_controller_state(
     std::size_t port,
     std::uint16_t active_low_state) {

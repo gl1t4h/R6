@@ -55,12 +55,21 @@ public:
     std::uint64_t interrupts() const { return interrupts_delivered_; }
     std::uint32_t cop0_status() { return cop0_[12]; }
     std::uint32_t peek(std::uint32_t address) { return read32(address); }
+    void watch_pc(std::uint32_t address) { watched_.emplace_back(address, 0); }
+    void set_hot_enabled(bool enabled) { hot_enabled_ = enabled; }
+    const std::map<std::uint32_t, std::uint64_t>& hot() const { return hot_; }
+    const std::vector<std::pair<std::uint32_t, std::uint64_t>>& watched() const {
+        return watched_;
+    }
     const std::vector<std::uint32_t>& irq_pcs() const { return irq_pcs_; }
     const std::vector<std::string>& interrupt_log() const {
         return interrupt_log_;
     }
     const std::vector<std::vector<std::uint32_t>>& irq_traces() const {
         return irq_traces_;
+    }
+    const std::map<std::uint32_t, std::uint64_t>& irq_hot() const {
+        return irq_hot_;
     }
     const std::vector<std::pair<std::uint32_t, std::uint32_t>>& sr_writes()
         const {
@@ -112,6 +121,7 @@ private:
     // Enters the queued guest interrupt routine when a pending interrupt is
     // unmasked, which stands in for the retail kernel's dispatcher.
     void deliver_interrupt();
+    static std::string format_hex(std::uint32_t value);
 
     std::uint32_t read8(std::uint32_t address);
     std::uint32_t read16(std::uint32_t address);
@@ -134,6 +144,12 @@ private:
     // First PCs executed inside the last delivered interrupt routine.
     std::vector<std::uint32_t> irq_pcs_;
     std::vector<std::vector<std::uint32_t>> irq_traces_;
+    // PCs executed inside the last handler, with how often, so a stall can
+    // be attributed to a single loop instead of guessed at.
+    std::map<std::uint32_t, std::uint64_t> irq_hot_;
+    std::vector<std::pair<std::uint32_t, std::uint64_t>> watched_;
+    std::map<std::uint32_t, std::uint64_t> hot_;
+    bool hot_enabled_{false};
     std::vector<std::string> interrupt_log_;
 
     std::vector<std::uint32_t> recent_pcs_;
@@ -162,6 +178,10 @@ private:
     // Pending I_STAT bits taken when the handler was entered; acknowledged
     // when it returns, the way the kernel does.
     std::uint32_t interrupt_pending_bits_{0};
+    // Every queued SysEnqIntRP routine is entered for one interrupt, the way
+    // the kernel walks the priority list.
+    std::vector<std::uint32_t> interrupt_routines_;
+    std::size_t interrupt_routine_index_{0};
     std::uint64_t unknown_hardware_reads_{0};
     std::uint64_t unknown_hardware_writes_{0};
     std::map<std::uint32_t, std::uint64_t> hardware_reads_;

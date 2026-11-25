@@ -48,6 +48,10 @@ public:
     }
     std::uint32_t unhandled_vector(std::size_t index) const;
 
+    // A(13h) HookEntryInt installs the guest's own exception entry, which is
+    // where libraries such as libetc dispatch their interrupt callbacks.
+    std::uint32_t hooked_entry() const { return hooked_entry_; }
+
     // SysEnqIntRP/SysDeqIntRP bookkeeping. The interpreter calls the queued
     // routine when a hardware interrupt has to be delivered.
     std::uint32_t interrupt_entry(std::uint32_t priority) const {
@@ -102,6 +106,7 @@ private:
                           const CpuState& cpu);
 
     std::array<std::uint32_t, 3> interrupt_entries_{};
+    std::uint32_t hooked_entry_{0};
     // B(5Bh) ChangeClearPAD: the kernel's pad/card auto-acknowledge flag.
     bool clear_pad_{false};
     std::vector<EventSlot> events_{16};

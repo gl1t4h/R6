@@ -48,6 +48,8 @@ int main(int argc, char** argv) {
     bool deliver_vblank = false;
     std::vector<std::pair<std::uint32_t, std::uint32_t>> pokes;
     std::vector<std::uint32_t> peeks;
+    std::vector<std::uint32_t> watched_pcs;
+    bool hot_enabled = false;
 
     for (int index = 1; index < argc; ++index) {
         const std::string argument = argv[index];
@@ -60,6 +62,11 @@ int main(int argc, char** argv) {
                 std::stoul(argv[++index], nullptr, 0));
         } else if (argument == "--vblank") {
             deliver_vblank = true;
+        } else if (argument == "--hot") {
+            hot_enabled = true;
+        } else if (argument == "--watch-pc" && index + 1 < argc) {
+            watched_pcs.push_back(static_cast<std::uint32_t>(
+                std::stoul(argv[++index], nullptr, 0)));
         } else if (argument == "--peek" && index + 1 < argc) {
             peeks.push_back(static_cast<std::uint32_t>(
                 std::stoul(argv[++index], nullptr, 0)));
@@ -152,6 +159,8 @@ int main(int argc, char** argv) {
     }
 
     r6::MipsInterpreter interpreter(ram, services);
+    for (auto address : watched_pcs) interpreter.watch_pc(address);
+    interpreter.set_hot_enabled(hot_enabled);
     auto& cpu = interpreter.cpu();
     cpu.pc = entry_override != 0 ? entry_override : image.entry;
     cpu.gpr[28] = image.gp;
@@ -215,6 +224,36 @@ int main(int argc, char** argv) {
     for (auto address : peeks) {
         std::cout << "peek 0x" << std::hex << address << " = 0x"
                   << interpreter.peek(address) << std::dec << std::endl;
+    }
+    if (!interpreter.irq_hot().empty()) {
+        std::vector<std::pair<std::uint64_t, std::uint32_t>> hot;
+        for (const auto& entry : interpreter.irq_hot()) {
+            hot.emplace_back(entry.second, entry.first);
+        }
+        std::sort(hot.rbegin(), hot.rend());
+        std::cout << "IRQ hot PCs:";
+        for (std::size_t i = 0; i < hot.size() && i < 6; ++i) {
+            std::cout << " 0x" << std::hex << hot[i].second
+                      << std::dec << "=" << hot[i].first;
+        }
+        std::cout << std::endl;
+    }
+    for (const auto& entry : interpreter.watched()) {
+        std::cout << "watch 0x" << std::hex << entry.first
+                  << " = " << std::dec << entry.second << std::endl;
+    }
+    if (!interpreter.hot().empty()) {
+        std::vector<std::pair<std::uint64_t, std::uint32_t>> hits;
+        for (const auto& entry : interpreter.hot()) {
+            hits.emplace_back(entry.second, entry.first);
+        }
+        std::sort(hits.rbegin(), hits.rend());
+        std::cout << "hot PCs:";
+        for (std::size_t i = 0; i < hits.size() && i < 8; ++i) {
+            std::cout << " 0x" << std::hex << hits[i].second
+                      << std::dec << "=" << hits[i].first;
+        }
+        std::cout << std::endl;
     }
     std::cout << "IRQ: SR=0x" << std::hex << interpreter.cop0_status()
               << " I_STAT=0x" << interpreter.irq_status() << " I_MASK=0x"
