@@ -52,6 +52,8 @@ public:
         write16(address + 2, static_cast<std::uint16_t>(value >> 16));
     }
 
+    std::size_t size() const noexcept { return bytes_.size(); }
+
     // Raw copy support for the differential harness: checkpoints compare all
     // of RAM without routing through the hardware map.
     std::vector<std::uint8_t> snapshot() const { return bytes_; }

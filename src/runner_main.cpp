@@ -21,6 +21,7 @@
 #include "r6/boot_image.h"
 #include "r6/chd_image.h"
 #include "r6/mips_interpreter.h"
+#include "r6/ram_snapshot.h"
 #include "r6/software_gpu.h"
 #include "r6/windows_platform_services.h"
 
@@ -101,6 +102,10 @@ int main(int argc, char** argv) {
     // Addresses holding a code pointer, dumped after the run: ADDR:COUNT.
     std::vector<std::pair<std::uint32_t, std::uint32_t>> dump_pointers;
     bool chd_info = false;
+    bool list_files = false;
+    std::string extract_file_spec;
+    std::filesystem::path dump_ram_path;
+    std::filesystem::path dump_snapshot_path;
     std::vector<std::uint32_t> watch_writes;
     std::string search_text;
 
@@ -161,6 +166,14 @@ int main(int argc, char** argv) {
             dump_stream = true;
         } else if (argument == "--chd-info") {
             chd_info = true;
+        } else if (argument == "--list-files") {
+            list_files = true;
+        } else if (argument == "--extract-file" && index + 1 < argc) {
+            extract_file_spec = argv[++index];
+        } else if (argument == "--dump-ram" && index + 1 < argc) {
+            dump_ram_path = argv[++index];
+        } else if (argument == "--dump-snapshot" && index + 1 < argc) {
+            dump_snapshot_path = argv[++index];
         } else if (argument == "--watch-write" && index + 1 < argc) {
             watch_writes.push_back(static_cast<std::uint32_t>(
                 std::stoul(argv[++index], nullptr, 0)));
@@ -195,6 +208,8 @@ int main(int argc, char** argv) {
         std::cerr << "usage: r6-run <game.cue|game.bin|game.chd> [--steps N]"
                      " [--entry 0xADDR] [--extract-exe path] [--poke 0xADDR=0xVALUE] [--vblank]"
                      " [--dump-frame frame.ppm] [--dump-range 0xADDR:COUNT]"
+                     " [--list-files] [--extract-file NAME=PATH]"
+                     " [--dump-ram file] [--dump-snapshot file]"
                      " [--chd-info]\n"
                   << "Runs your own local copy. No game data is copied or"
                      " uploaded.\n";
@@ -234,6 +249,47 @@ int main(int argc, char** argv) {
             std::cerr << "r6-run: " << services.disc_error() << "\n";
         }
         return 1;
+    }
+
+    if (list_files) {
+        std::cout << "Files in " << bin_path.filename().string() << ":\n";
+        for (const auto& file : files) {
+            std::cout << "  " << file.name << "  LBA " << file.lba << "  "
+                      << file.size << " bytes\n";
+        }
+        return 0;
+    }
+
+    if (!extract_file_spec.empty()) {
+        const auto split = extract_file_spec.find('=');
+        if (split == std::string::npos) {
+            std::cerr << "r6-run: --extract-file expects NAME=PATH\n";
+            return 2;
+        }
+        const auto name = extract_file_spec.substr(0, split);
+        const std::filesystem::path output(extract_file_spec.substr(split + 1));
+        const DiscFile* selected = nullptr;
+        for (const auto& file : files) {
+            if (upper(file.name) == upper(name)) {
+                selected = &file;
+                break;
+            }
+        }
+        if (selected == nullptr) {
+            std::cerr << "r6-run: " << name << " is not present in the image\n";
+            return 1;
+        }
+        const auto contents = read_file(services, *selected);
+        std::ofstream out(output, std::ios::binary);
+        if (!out) {
+            std::cerr << "r6-run: could not write " << output << "\n";
+            return 1;
+        }
+        out.write(reinterpret_cast<const char*>(contents.data()),
+                  static_cast<std::streamsize>(contents.size()));
+        std::cout << "Wrote " << output << " (" << contents.size()
+                  << " bytes)\n";
+        return 0;
     }
 
     std::string exe_name;
@@ -387,6 +443,28 @@ int main(int argc, char** argv) {
               << "Running " << steps << " instructions...\n";
 
     const auto result = interpreter.run(steps);
+
+    if (!dump_ram_path.empty()) {
+        const auto bytes = ram.snapshot();
+        std::ofstream out(dump_ram_path, std::ios::binary);
+        if (!out) {
+            std::cerr << "r6-run: could not write " << dump_ram_path << "\n";
+            return 1;
+        }
+        out.write(reinterpret_cast<const char*>(bytes.data()),
+                  static_cast<std::streamsize>(bytes.size()));
+        std::cout << "Wrote RAM " << dump_ram_path << " (" << bytes.size()
+                  << " bytes)\n";
+    }
+    if (!dump_snapshot_path.empty()) {
+        if (!r6::write_snapshot(dump_snapshot_path, interpreter.cpu(), ram)) {
+            std::cerr << "r6-run: could not write " << dump_snapshot_path
+                      << "\n";
+            return 1;
+        }
+        std::cout << "Wrote snapshot " << dump_snapshot_path << " (PC 0x"
+                  << std::hex << interpreter.cpu().pc << std::dec << ")\n";
+    }
 
     {
         std::cout << "\nBIOS calls: " << services.bios().total_calls();

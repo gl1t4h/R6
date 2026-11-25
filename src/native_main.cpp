@@ -20,12 +20,14 @@
 #include <string>
 #include <vector>
 
+#include "r6/bios_services.h"
 #include "r6/boot_image.h"
 #include "r6/function_dispatch.h"
 #include "r6/memory.h"
 #include "r6/mips_interpreter.h"
 #include "r6/native_runtime.h"
 #include "r6/platform_services.h"
+#include "r6/ram_snapshot.h"
 #include "r6/windows_platform_services.h"
 
 #ifdef R6_HAS_GENERATED_TRANSLATION
@@ -36,6 +38,34 @@ std::size_t block_count();
 #endif
 
 namespace {
+
+// The differential harness gives each block a fresh platform instance so the
+// native bus and the interpreter start from the same hardware and kernel
+// state. A real run can keep one alive across blocks later.
+class NativePlatformServices final : public r6::PlatformServices {
+public:
+    std::uint16_t read_controller(std::size_t) override { return 0; }
+    void submit_audio_samples(const std::int16_t*, std::size_t) override {}
+    void present_frame(const std::uint32_t*, std::size_t) override {}
+    std::uint32_t read_timer(std::size_t) override { return 0; }
+    void write_gpu_register(std::uint32_t, std::uint32_t) override {}
+    std::uint32_t read_gpu_status() override { return 0; }
+    std::uint32_t read_gpu_data() override { return 0; }
+    bool read_disc_sector(std::uint32_t, std::uint8_t*,
+                          std::size_t) override {
+        return false;
+    }
+    bool bios_call(std::uint32_t pc, r6::CpuState& cpu,
+                   r6::Memory& memory) override {
+        r6::BiosTable table{};
+        if (!r6::BiosServices::trap_table(pc, table)) return false;
+        bios_.dispatch(table, cpu, memory);
+        return true;
+    }
+
+private:
+    r6::BiosServices bios_;
+};
 
 constexpr std::uint32_t kRamSize = 2u * 1024u * 1024u;
 constexpr std::uint32_t kRamMask = kRamSize - 1u;
@@ -207,6 +237,7 @@ void report_stop(const r6::CpuState& cpu) {
 
 int run_native(
     const std::filesystem::path& input,
+    const std::filesystem::path& snapshot_path,
     std::uint32_t entry_override,
     std::uint64_t max_blocks,
     std::uint64_t oracle_steps,
@@ -214,24 +245,42 @@ int run_native(
     bool verbose) {
 #ifdef R6_HAS_GENERATED_TRANSLATION
     Boot boot;
+    const bool snapshot_mode = !snapshot_path.empty();
     std::string error;
-    if (!load_boot(input, boot, error)) {
+    if (snapshot_mode) {
+        if (!r6::read_snapshot(snapshot_path, boot.initial, boot.ram)) {
+            std::cerr << "r6-native: could not read snapshot " << snapshot_path
+                      << "\n";
+            return 1;
+        }
+        boot.exe_name = snapshot_path.filename().string();
+        boot.image.entry = boot.initial.pc;
+        boot.image.gp = boot.initial.gpr[28];
+    } else if (!load_boot(input, boot, error)) {
         std::cerr << "r6-native: " << error << "\n";
         return 1;
     }
 
+    // The interpreter resets COP0 with SR=0x401 at construction. Snapshots
+    // do not carry COP0 yet, so the native checkpoint starts from that same
+    // reset value and the oracle is given it before every block.
+    boot.initial.cop0[12] = 0x00000401u;
+
     r6::FunctionDispatcher dispatcher;
     r6_generated::register_functions(dispatcher);
-    r6::NullPlatformServices services;
 
     const auto start_pc =
         entry_override != 0 ? entry_override : boot.initial.pc;
-    std::cout << "R6 native translation runner\n"
-              << "Disc: " << boot.bin.filename().string() << "\n"
-              << "EXE:  " << boot.exe_name << " (" << boot.image.size
-              << " bytes)\n"
-              << "Entry " << hex32(start_pc) << ", GP "
-              << hex32(boot.image.gp) << ", SP "
+    std::cout << "R6 native translation runner\n";
+    if (snapshot_mode) {
+        std::cout << "Snapshot: " << snapshot_path.string() << "\n";
+    } else {
+        std::cout << "Disc: " << boot.bin.filename().string() << "\n"
+                  << "EXE:  " << boot.exe_name << " (" << boot.image.size
+                  << " bytes)\n";
+    }
+    std::cout << "Entry " << hex32(start_pc) << ", GP "
+              << hex32(boot.initial.gpr[28]) << ", SP "
               << hex32(boot.initial.gpr[29]) << "\n"
               << "Translated blocks: " << r6_generated::block_count() << "\n";
     if (!dispatcher.contains(start_pc)) {
@@ -250,7 +299,8 @@ int run_native(
     bool reached_stop = false;
 
     for (std::uint64_t block = 0; block < max_blocks; ++block) {
-        if (!dispatcher.contains(native.pc)) {
+        const bool bios = is_bios_entry(native.pc);
+        if (!bios && !dispatcher.contains(native.pc)) {
             report_stop(native);
             reached_stop = true;
             break;
@@ -258,8 +308,19 @@ int run_native(
 
         const auto before_cpu = native;
         const auto before_ram = native_ram.snapshot();
+        NativePlatformServices native_services;
         try {
-            native.pc = dispatcher.step(native, native_ram, services);
+            if (bios) {
+                if (!native_services.bios_call(native.pc, native, native_ram)) {
+                    report_stop(native);
+                    reached_stop = true;
+                    break;
+                }
+                native.pc = native.gpr[31];
+            } else {
+                native.pc =
+                    dispatcher.step(native, native_ram, native_services);
+            }
         } catch (const std::exception& exception) {
             std::cout << "Native fault at " << hex32(native.pc) << ": "
                       << exception.what() << "\n";
@@ -272,9 +333,11 @@ int run_native(
 
         if (compare) {
             oracle_ram.restore(before_ram);
-            r6::MipsInterpreter reference(oracle_ram, services);
+            NativePlatformServices oracle_services;
+            r6::MipsInterpreter reference(oracle_ram, oracle_services);
             auto& oracle = reference.cpu();
             oracle = before_cpu;
+            reference.set_cop0(before_cpu.cop0);
 
             bool reached = false;
             for (std::uint64_t step = 0; step < oracle_steps; ++step) {
@@ -306,6 +369,21 @@ int run_native(
                 failed = true;
                 break;
             }
+            bool cop0_mismatch = false;
+            for (std::size_t index = 0; index < 32; ++index) {
+                if (native.cop0[index] == reference.cop0(index)) continue;
+                std::cout << "  COP0 r" << index << ": native "
+                          << hex32(native.cop0[index]) << ", oracle "
+                          << hex32(reference.cop0(index)) << "\n";
+                cop0_mismatch = true;
+                break;
+            }
+            if (cop0_mismatch) {
+                std::cout << "COP0 mismatch after block " << block
+                          << " (native PC " << hex32(native.pc) << ")\n";
+                failed = true;
+                break;
+            }
             if (native_ram.snapshot() != oracle_ram.snapshot()) {
                 print_ram_difference(native_ram.snapshot(), oracle_ram.snapshot());
                 std::cout << "RAM mismatch after block " << block << " (native PC "
@@ -329,11 +407,12 @@ int run_native(
     if (compare) {
         std::cout << "Differential check: " << matched << " block(s) matched"
                   << (failed ? " before the first mismatch" : "")
-                  << " (registers, HI/LO, 2 MiB RAM)\n";
+                  << " (registers, HI/LO, COP0, 2 MiB RAM)\n";
     }
     return failed ? 1 : 0;
 #else
     (void)input;
+    (void)snapshot_path;
     (void)entry_override;
     (void)max_blocks;
     (void)oracle_steps;
@@ -350,6 +429,7 @@ int run_native(
 
 int main(int argc, char** argv) {
     std::filesystem::path input;
+    std::filesystem::path snapshot_path;
     std::uint32_t entry_override = 0;
     std::uint64_t blocks = 2048;
     std::uint64_t oracle_steps = 100000;
@@ -361,6 +441,8 @@ int main(int argc, char** argv) {
         if (argument == "--entry" && index + 1 < argc) {
             entry_override = static_cast<std::uint32_t>(
                 std::stoul(argv[++index], nullptr, 0));
+        } else if (argument == "--snapshot" && index + 1 < argc) {
+            snapshot_path = argv[++index];
         } else if (argument == "--blocks" && index + 1 < argc) {
             blocks = std::stoull(argv[++index]);
         } else if (argument == "--oracle-steps" && index + 1 < argc) {
@@ -374,14 +456,16 @@ int main(int argc, char** argv) {
         }
     }
 
-    if (input.empty()) {
+    if (input.empty() && snapshot_path.empty()) {
         std::cerr
             << "usage: r6-native <game.cue|game.bin|game.chd> [--entry 0xADDR]"
                " [--blocks N] [--oracle-steps N] [--no-compare] [--verbose]\n"
+               "       r6-native --snapshot RAM.snap [--entry 0xADDR]"
+               " [--blocks N]\n"
             << "Runs the locally generated native translation and compares it"
                " against the interpreter after every block.\n";
         return 2;
     }
-    return run_native(input, entry_override, blocks, oracle_steps, compare,
-                      verbose);
+    return run_native(input, snapshot_path, entry_override, blocks,
+                      oracle_steps, compare, verbose);
 }

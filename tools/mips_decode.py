@@ -114,6 +114,22 @@ def decode_word(instruction: int, pc: int) -> dict:
         0x04: "beq", 0x05: "bne", 0x06: "blez", 0x07: "bgtz",
         0x14: "beql", 0x15: "bnel", 0x16: "blezl", 0x17: "bgtzl",
     }
+    if opcode == 0x01:
+        regimm = {
+            0x00: "bltz", 0x01: "bgez", 0x02: "bltzl", 0x03: "bgezl",
+            0x10: "bltzal", 0x11: "bgezal", 0x12: "bltzall",
+            0x13: "bgezall",
+        }
+        if rt in regimm:
+            target = pc + 4 + (simm << 2)
+            return result(
+                "branch",
+                f"{regimm[rt]} {reg(rs)}, 0x{target:08X}",
+                target=target,
+                control=True,
+                delay_slot=True,
+            )
+
     if opcode in branches:
         target = pc + 4 + (simm << 2)
         if opcode in (0x06, 0x07, 0x16, 0x17):

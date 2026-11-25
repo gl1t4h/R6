@@ -1,11 +1,13 @@
 #include "test_support.h"
 
 #include <cstdint>
+#include <filesystem>
 #include <stdexcept>
 #include <string>
 
 #include "r6/function_dispatch.h"
 #include "r6/native_runtime.h"
+#include "r6/ram_snapshot.h"
 
 namespace {
 
@@ -84,10 +86,39 @@ void run_memory_snapshot_test() {
     R6_CHECK(memory.read32(0x100u) == 0x12345678u);
 }
 
+void run_ram_snapshot_round_trip() {
+    Memory memory(4096, true);
+    memory.write32(0x100u, 0x12345678u);
+    CpuState cpu{};
+    cpu.gpr[1] = 5u;
+    cpu.gpr[29] = 0x80000800u;
+    cpu.hi = 7u;
+    cpu.lo = 9u;
+    cpu.pc = 0x80000100u;
+
+    const auto path = std::filesystem::temp_directory_path() /
+                      "r6_ram_snapshot_test.bin";
+    R6_CHECK(r6::write_snapshot(path, cpu, memory));
+
+    Memory restored(4096, true);
+    CpuState restored_cpu{};
+    R6_CHECK(r6::read_snapshot(path, restored_cpu, restored));
+    R6_CHECK(restored_cpu.gpr[1] == 5u);
+    R6_CHECK(restored_cpu.gpr[29] == 0x80000800u);
+    R6_CHECK(restored_cpu.hi == 7u);
+    R6_CHECK(restored_cpu.lo == 9u);
+    R6_CHECK(restored_cpu.pc == 0x80000100u);
+    R6_CHECK(restored.read32(0x100u) == 0x12345678u);
+
+    std::error_code error;
+    std::filesystem::remove(path, error);
+}
+
 }  // namespace
 
 void run_native_runtime_tests() {
     run_dispatcher_test();
     run_unsupported_test();
     run_memory_snapshot_test();
+    run_ram_snapshot_round_trip();
 }

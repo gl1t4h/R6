@@ -555,3 +555,65 @@ Limits of the current native path: it uses `NullPlatformServices` (no BIOS,
 input, GPU or disc), and `Memory` has no MMIO bus, so a translated hardware
 register access stops with a clear fault. Those seams are the next native
 service work, not something the interpreter should mask.
+
+## 2026-11-25 — Loaded-image snapshot and resident startup
+
+The 130M-instruction `--vblank` run produced a local `R6S1` snapshot
+(2,097,304 bytes: GPRs, HI/LO/PC and 2 MiB RAM). Decoding the loaded code
+gave the actual transition:
+
+- The loader at `0x80010A88` calls `0x800314EC` with `a0=0x80022C74`, then
+  calls `0x80032EE0`. That is the resident main entry, not the bootstrap
+  startup.
+- `0x80032EE0` saves its registers, calls the runtime helper at `0x80094DBC`,
+  then calls `0x8002E630`. `0x8002E630` clears the eight 0x1C-byte records at
+  `0x800B5508` and the 0x300-byte table at `0x800B2780`, then initializes each
+  record through `0x8002E730`/`0x8002E6E4`.
+- The function table at `0x80024B6C` points at resident functions starting at
+  `0x8002EC8C`. The table at `0x8002AB60` contains `0x80087448`, the function
+  the earlier notes called the constructor runner; it is reached through a
+  pointer, not a direct `jal`.
+- The 32 BIOS trampolines in the resident image are the `addiu $t2,0xB0;
+  jr $t2; addiu $t1,imm` pattern around `0x80091AFC`–`0x800A23DC`. They are
+  indirect targets, so the generator needs each as `--extra-entry`.
+
+### Native runtime additions
+
+- `NativeBus` gives generated blocks the interpreter's memory semantics:
+  RAM, the 1 KiB scratchpad, CD registers and `HardwareMap` (timers, I_STAT,
+  DMA, GPU, SPU, pad). Each block creates a fresh bus, matching the fresh
+  per-block oracle.
+- `CpuState` now carries COP0; `mfc0`/`mtc0` are translated, and the oracle's
+  COP0 file is initialized from the checkpoint. The snapshot does not carry
+  COP0 yet, so the native checkpoint starts with the interpreter's reset SR
+  value `0x00000401`.
+- COP2 uses the existing `Gte`: `mfc2`/`cfc2`/`mtc2`/`ctc2`, `lwc2`/`swc2`
+  and GTE commands are translated. `syscall` is a PC advance, matching the
+  interpreter. REGIMM (`bgez` and friends) is decoded, including the link bit.
+- BIOS entries `0xA0`/`0xB0`/`0xC0` are serviced natively by `BiosServices`
+  instead of stopping the slice. Each block gets a fresh native and oracle
+  platform service, so BIOS flags start equal on both sides.
+- Generated blocks advance `HardwareMap` by one cycle after every
+  instruction. Without that, a timer-stabilization loop at `0x80013130`
+  exited natively while the interpreter kept looping; with the ticks both
+  sides see the same timer values.
+
+### Verification
+
+The generator was run with `--snapshot`, `--entry 0x80032EE0`,
+`--max-functions 512`, the 32 BIOS trampolines as extra entries, and the
+resident C-library entry `0x8001228C`. It emitted 3,316 blocks. `r6-native`
+with `--blocks 50000` reported:
+
+| Item | Result |
+| --- | --- |
+| Blocks executed and matched | 50,000 |
+| Mismatches | none (GPRs, HI/LO, COP0, 2 MiB RAM) |
+| Stop | block budget at `0x80012A44` |
+
+This verifies the resident startup and the functions reached during the first
+50,000 blocks; it does not claim that the full constructor list or the frame
+loop has run. Hardware, BIOS and COP0 state is reset at each block boundary,
+so a continuous native run still needs persistent device state. The snapshot
+also omits COP0 and hardware registers; only RAM and the integer CPU state are
+captured.

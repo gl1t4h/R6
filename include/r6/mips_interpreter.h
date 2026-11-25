@@ -136,6 +136,13 @@ public:
     std::uint32_t cop0(std::size_t index) const {
         return index < cop0_.size() ? cop0_[index] : 0;
     }
+    // The differential harness starts each oracle block from the native
+    // checkpoint's COP0 file.
+    void set_cop0(const std::uint32_t* values) {
+        for (std::size_t index = 0; index < cop0_.size(); ++index) {
+            cop0_[index] = values[index];
+        }
+    }
     // Delivering vertical-blank interrupts is opt-in: the guest handler needs
     // devices that are still stubs, so it can park inside the handler.
     void set_vblank_enabled(bool enabled) { vblank_enabled_ = enabled; }

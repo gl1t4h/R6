@@ -96,12 +96,16 @@ None.
   block at a time: `r6-native` executed 1,975 generated blocks, matching the
   interpreter's registers, HI/LO and all 2 MiB of RAM after every block, and
   stopped at the `InitHeap` BIOS entry `A(0x39)`.
-- **Next step:** The 79,872-byte `SLUS_007.07` is a bootstrap loader; the main
-  program arrives from the disc into RAM. Capture the loaded image (a RAM dump
-  or a transition snapshot) and translate that, rather than chasing the
-  interpreter's post-load idle. MDEC only becomes relevant if the captured
-  native path reaches the movie. Use a 150M+ instruction budget for the
-  oracle.
+- **Loaded image:** A 130M-instruction `--vblank` run with `--dump-snapshot`
+  captured the resident image. The loader's call to `0x80032EE0` is the real
+  entry; it calls the resource startup at `0x8002E630`, then the resident
+  runtime. Translating from `0x80032EE0` emitted 3,316 blocks and matched
+  50,000 executed blocks on GPRs, HI/LO, COP0 and all 2 MiB of RAM. The run
+  reached the block budget at `0x80012A44` with no mismatches.
+- **Next step:** Continue beyond the 50k block budget and persist hardware,
+  BIOS and COP0 state across blocks; the current differential resets those at
+  each checkpoint. Add the remaining device seams before chasing the movie
+  path. MDEC only becomes relevant if the captured native path reaches it.
 - **Playable native build:** No
 - **Distributed game assets:** No
 

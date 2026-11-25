@@ -28,7 +28,6 @@ CONTROL_KINDS = {
     "return",
     "indirect_call",
     "jump_register",
-    "trap",
 }
 
 
@@ -68,6 +67,12 @@ def translate(instruction: int, address: int, decoded: dict) -> list[str]:
 
     if instruction == 0:
         return ["    cpu.pc += 4;  // nop"]
+
+    if opcode == 0 and funct == 0x0C:
+        # The interpreter treats syscall as a no-op; keep the same behaviour.
+        return ["    cpu.pc += 4;  // syscall"]
+    if opcode == 0 and funct == 0x0D:
+        return unsupported(address, instruction)
 
     if opcode == 0:
         if funct in (0x20, 0x21):
@@ -240,14 +245,68 @@ def translate(instruction: int, address: int, decoded: dict) -> list[str]:
             f"    {cpp_reg(rt)} = 0x{imm:04X}u << 16;",
             "    cpu.pc += 4;",
         ]
+    if opcode == 0x10:
+        if rs == 0:
+            return [
+                f"    {cpp_reg(rt)} = cpu.cop0[{rd}];",
+                "    cpu.pc += 4;",
+            ]
+        if rs == 4:
+            return [
+                f"    cpu.cop0[{rd}] = {cpp_reg(rt)};",
+                "    cpu.pc += 4;",
+            ]
+        return unsupported(address, instruction)
+    if opcode == 0x12:
+        if rs == 0:
+            return [
+                f"    {cpp_reg(rt)} = bus.gte_read_data({rd});",
+                "    cpu.pc += 4;",
+            ]
+        if rs == 2:
+            return [
+                f"    {cpp_reg(rt)} = bus.gte_read_control({rd});",
+                "    cpu.pc += 4;",
+            ]
+        if rs == 4:
+            return [
+                f"    bus.gte_write_data({rd}, {cpp_reg(rt)});",
+                "    cpu.pc += 4;",
+            ]
+        if rs == 6:
+            return [
+                f"    bus.gte_write_control({rd}, {cpp_reg(rt)});",
+                "    cpu.pc += 4;",
+            ]
+        if rs >= 0x10:
+            return [
+                f"    bus.gte_execute(0x{instruction:08X}u);",
+                "    cpu.pc += 4;",
+            ]
+        return unsupported(address, instruction)
+    if opcode in (0x32, 0x3A):
+        address_name = f"address_{address:08X}"
+        if opcode == 0x32:
+            return [
+                f"    const std::uint32_t {address_name} ="
+                f" {cpp_reg(rs)} + {simm};",
+                f"    bus.gte_write_data({rt}, bus.read32({address_name}));",
+                "    cpu.pc += 4;",
+            ]
+        return [
+            f"    const std::uint32_t {address_name} ="
+            f" {cpp_reg(rs)} + {simm};",
+            f"    bus.write32({address_name}, bus.gte_read_data({rt}));",
+            "    cpu.pc += 4;",
+        ]
     if opcode in (0x20, 0x21, 0x23, 0x24, 0x25):
         address_name = f"address_{address:08X}"
         operation = {
-            0x20: f"static_cast<std::int32_t>(static_cast<std::int8_t>(memory.read8({address_name})))",
-            0x21: f"static_cast<std::int32_t>(static_cast<std::int16_t>(memory.read16({address_name})))",
-            0x23: f"memory.read32({address_name})",
-            0x24: f"memory.read8({address_name})",
-            0x25: f"memory.read16({address_name})",
+            0x20: f"static_cast<std::int32_t>(static_cast<std::int8_t>(bus.read8({address_name})))",
+            0x21: f"static_cast<std::int32_t>(static_cast<std::int16_t>(bus.read16({address_name})))",
+            0x23: f"bus.read32({address_name})",
+            0x24: f"bus.read8({address_name})",
+            0x25: f"bus.read16({address_name})",
         }[opcode]
         return [
             f"    const std::uint32_t {address_name} = {cpp_reg(rs)} + {simm};",
@@ -257,9 +316,9 @@ def translate(instruction: int, address: int, decoded: dict) -> list[str]:
     if opcode in (0x28, 0x29, 0x2B):
         address_name = f"address_{address:08X}"
         operation = {
-            0x28: f"memory.write8({address_name}, static_cast<std::uint8_t>({cpp_reg(rt)}));",
-            0x29: f"memory.write16({address_name}, static_cast<std::uint16_t>({cpp_reg(rt)}));",
-            0x2B: f"memory.write32({address_name}, {cpp_reg(rt)});",
+            0x28: f"bus.write8({address_name}, static_cast<std::uint8_t>({cpp_reg(rt)}));",
+            0x29: f"bus.write16({address_name}, static_cast<std::uint16_t>({cpp_reg(rt)}));",
+            0x2B: f"bus.write32({address_name}, {cpp_reg(rt)});",
         }[opcode]
         return [
             f"    const std::uint32_t {address_name} = {cpp_reg(rs)} + {simm};",
@@ -279,7 +338,9 @@ def translate_delay_slot(payload: bytes, load_address: int, address: int) -> lis
     if decoded["kind"] in CONTROL_KINDS:
         return [f"    r6::unsupported_instruction(cpu, 0x{address:08X}u,"
                 f" 0x{instruction:08X}u);"]
-    return translate(instruction, address, decoded)
+    lines = translate(instruction, address, decoded)
+    lines.append("    bus.advance_cycles(1);")
+    return lines
 
 
 def translate_control(
@@ -298,28 +359,37 @@ def translate_control(
     if kind == "call":
         return [
             f"    cpu.gpr[31] = 0x{address + 8:08X}u;",
+            "    bus.advance_cycles(1);",
             *delay,
             f"    cpu.pc = 0x{decoded['target']:08X}u;",
             "    return cpu.pc;",
         ]
     if kind == "jump":
         return [
+            "    bus.advance_cycles(1);",
             *delay,
             f"    cpu.pc = 0x{decoded['target']:08X}u;",
             "    return cpu.pc;",
         ]
     if kind == "return":
-        return [*delay, f"    cpu.pc = cpu.gpr[{rs}];", "    return cpu.pc;"]
+        return [
+            "    bus.advance_cycles(1);",
+            *delay,
+            f"    cpu.pc = cpu.gpr[{rs}];",
+            "    return cpu.pc;",
+        ]
     if kind == "indirect_call":
         rd = (instruction >> 11) & 0x1F
         return [
             f"    cpu.gpr[{rd}] = 0x{address + 8:08X}u;",
+            "    bus.advance_cycles(1);",
             *delay,
             f"    cpu.pc = cpu.gpr[{rs}];",
             "    return cpu.pc;",
         ]
     if kind == "jump_register":
         return [
+            "    bus.advance_cycles(1);",
             *delay,
             f"    cpu.pc = cpu.gpr[{rs}];",
             "    return cpu.pc;",
@@ -340,8 +410,15 @@ def translate_control(
             condition = f"static_cast<std::int32_t>(cpu.gpr[{rs}]) <= 0"
         else:
             condition = f"static_cast<std::int32_t>(cpu.gpr[{rs}]) > 0"
+        link = (
+            [f"    cpu.gpr[31] = 0x{address + 8:08X}u;"]
+            if opcode == 0x01 and (rt & 0x10) != 0
+            else []
+        )
         return [
+            *link,
             f"    const bool taken_0x{address:08X} = {condition};",
+            "    bus.advance_cycles(1);",
             *delay,
             f"    cpu.pc = taken_0x{address:08X} ? 0x{target:08X}u :"
             f" 0x{address + 8:08X}u;",
@@ -361,7 +438,8 @@ def emit_block(
     lines = [
         f"std::uint32_t block_{entry:08X}(r6::CpuState& cpu, r6::Memory& memory,",
         "                            r6::PlatformServices& services) {",
-        "    (void)memory;",
+        "    r6::NativeBus bus(memory, services);",
+        "    (void)bus;",
         "    (void)services;",
         f"    // Block at 0x{entry:08X}",
     ]
@@ -382,6 +460,7 @@ def emit_block(
             return lines, pc, True
         translated = translate(instruction, pc, decoded)
         lines.extend(translated)
+        lines.append("    bus.advance_cycles(1);")
         count += 1
         if any("unsupported_instruction" in line for line in translated):
             lines.extend(["}", ""])
@@ -407,9 +486,27 @@ def collect_leaders(
         max_functions=max_functions,
         max_instructions_per_function=max_instructions,
     )
+    known = set(functions)
     for entry in extra_entries:
-        if entry not in functions and in_image(entry, load_address, len(payload)):
+        if entry not in known and in_image(entry, load_address, len(payload)):
             functions.append(entry)
+            known.add(entry)
+        if entry not in known:
+            continue
+        # An extra entry is usually an indirect target, so the entry's own
+        # direct calls were not part of the initial reachability walk. Merge
+        # them here; otherwise the block at the callee is never emitted.
+        discovered = discover_reachable_functions(
+            payload,
+            load_address,
+            entry,
+            max_functions=max(64, max_functions),
+            max_instructions_per_function=max_instructions,
+        )
+        for function in discovered:
+            if function not in known:
+                functions.append(function)
+                known.add(function)
 
     leaders: set[int] = set()
     delay_slots: set[int] = set()
@@ -453,8 +550,31 @@ def collect_leaders(
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("exe_path", type=Path, help="local PS-X EXE analysis copy")
-    parser.add_argument("output_path", type=Path, help="local output path outside the repo")
+    parser.add_argument(
+        "exe_path", nargs="?", type=Path, help="local PS-X EXE analysis copy"
+    )
+    parser.add_argument(
+        "output_path", nargs="?", type=Path, help="local output path outside the repo"
+    )
+    parser.add_argument(
+        "--snapshot", type=Path, help="R6S1 CPU+RAM snapshot to translate"
+    )
+    parser.add_argument(
+        "--ram-image", type=Path, help="raw RAM image to translate"
+    )
+    parser.add_argument(
+        "--load-address",
+        type=lambda value: int(value, 0),
+        default=0x80000000,
+        help="base address of a raw RAM image (default 0x80000000)",
+    )
+    parser.add_argument(
+        "--entry",
+        type=lambda value: int(value, 0),
+        default=0,
+        help="entry PC for a snapshot or RAM image (overrides the EXE header)",
+    )
+    parser.add_argument("--output", type=Path, help="output C++ path")
     parser.add_argument("--max-instructions", type=int, default=20000)
     parser.add_argument("--max-functions", type=int, default=64)
     parser.add_argument("--max-block-instructions", type=int, default=256)
@@ -468,17 +588,48 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    exe = args.exe_path.resolve()
-    output = args.output_path.resolve()
+    output = args.output or args.output_path
+    if output is None:
+        parser.error("an output path is required")
+    output = output.resolve()
     ensure_outside_repo(output)
 
-    data = exe.read_bytes()
-    if data[:8] != b"PS-X EXE":
-        parser.error("input does not have a PS-X EXE header")
-    load_address = word(data, 0x18)
-    payload_size = word(data, 0x1C)
-    initial_pc = word(data, 0x10)
-    payload = data[0x800 : 0x800 + payload_size]
+    if args.snapshot is not None:
+        data = args.snapshot.resolve().read_bytes()
+        if len(data) < 152 or data[:4] != b"R6S1":
+            parser.error("input is not an R6S1 snapshot")
+        version = struct.unpack_from("<I", data, 4)[0]
+        if version != 1:
+            parser.error("unsupported snapshot version")
+        ram_size = struct.unpack_from("<I", data, 148)[0]
+        payload = data[152 : 152 + ram_size]
+        if len(payload) != ram_size:
+            parser.error("snapshot RAM is truncated")
+        load_address = 0x80000000
+        initial_pc = args.entry or struct.unpack_from("<I", data, 144)[0]
+    elif args.ram_image is not None:
+        payload = args.ram_image.resolve().read_bytes()
+        load_address = args.load_address
+        initial_pc = args.entry
+        if initial_pc == 0:
+            parser.error("--entry is required for a raw RAM image")
+    else:
+        if args.exe_path is None:
+            parser.error("an EXE, --snapshot or --ram-image input is required")
+        data = args.exe_path.resolve().read_bytes()
+        if data[:8] != b"PS-X EXE":
+            parser.error("input does not have a PS-X EXE header")
+        load_address = word(data, 0x18)
+        payload_size = word(data, 0x1C)
+        payload = data[0x800 : 0x800 + payload_size]
+        initial_pc = args.entry or word(data, 0x10)
+
+    if initial_pc == 0:
+        parser.error("the input has no entry point")
+    print(
+        f"Image: 0x{load_address:08X}..0x{load_address + len(payload):08X}, "
+        f"entry 0x{initial_pc:08X}"
+    )
 
     functions, leaders = collect_leaders(
         payload,
