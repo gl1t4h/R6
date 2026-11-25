@@ -779,6 +779,14 @@ void SoftwareGpu::submit_gp1(std::uint32_t word) {
     }
 }
 
+std::uint32_t SoftwareGpu::filled_vram_pixels() const {
+    std::uint32_t filled = 0;
+    for (const auto pixel : vram_) {
+        if (pixel != 0) ++filled;
+    }
+    return filled;
+}
+
 std::vector<std::uint32_t> SoftwareGpu::display_frame() const {
     std::vector<std::uint32_t> frame(
         static_cast<std::size_t>(kDisplayWidth) * kDisplayHeight, 0xFF000000u);

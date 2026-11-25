@@ -257,8 +257,34 @@ void dma2_linked_list_reaches_the_gpu() {
     R6_CHECK(interpreter.dma_lists() == 1);
     R6_CHECK(interpreter.dma_words() == 2);
     R6_CHECK(services.gp0.size() == 2);
-    R6_CHECK(services.gp0[0] == 0xAAAAAAAAu);
-    R6_CHECK(services.gp0[1] == 0xBBBBBBBBu);
+    if (services.gp0.size() == 2) {
+        R6_CHECK(services.gp0[0] == 0xAAAAAAAAu);
+        R6_CHECK(services.gp0[1] == 0xBBBBBBBBu);
+    }
+}
+
+void cdrom_command_acknowledges_then_completes() {
+    Memory ram(2u * 1024u * 1024u);
+    TestServices services;
+    MipsInterpreter interpreter(ram, services);
+    auto& cpu = interpreter.cpu();
+    cpu.pc = 0x80010000u;
+
+    ram.write32(0x10000, 0x3C081F80u);  // lui t0, 0x1F80
+    ram.write32(0x10004, 0x35081800u);  // ori t0, t0, 0x1800 (CD index)
+    ram.write32(0x10008, 0xA1000000u);  // sb zero, 0(t0)
+    ram.write32(0x1000C, 0x24090001u);  // addiu t1, zero, 1 (GetStat)
+    ram.write32(0x10010, 0xA1090001u);  // sb t1, 1(t0) -> command
+    ram.write32(0x10014, 0x91020003u);  // lbu v0, 3(t0) -> interrupt flags
+    ram.write32(0x10018, 0x24090007u);  // addiu t1, zero, 7 (acknowledge)
+    ram.write32(0x1001C, 0xA1090003u);  // sb t1, 3(t0)
+    ram.write32(0x10020, 0x91030003u);  // lbu v1, 3(t0)
+    ram.write32(0x10024, 0x91040001u);  // lbu a0, 1(t0) -> response byte
+
+    interpreter.run(11);
+    R6_CHECK(cpu.gpr[2] == 1);  // command acknowledged
+    R6_CHECK(cpu.gpr[3] == 2);  // completion reported after the ack
+    R6_CHECK(cpu.gpr[4] == 2);  // GetStat reports the drive status
 }
 
 }  // namespace
@@ -275,4 +301,5 @@ void run_mips_interpreter_tests() {
     dma_start_reads_back_idle();
     timer_mode_reads_back();
     dma2_linked_list_reaches_the_gpu();
+    cdrom_command_acknowledges_then_completes();
 }

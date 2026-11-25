@@ -44,6 +44,7 @@ MipsInterpreter::MipsInterpreter(Memory& ram, PlatformServices& services)
 
 std::uint32_t MipsInterpreter::read8(std::uint32_t address) {
     const auto physical = address & 0x1FFFFFFFu;
+    if (hardware_.is_cdrom(physical)) return hardware_.read_cdrom(physical);
     if (physical <= kRamMask) return ram_.read8(physical & kRamMask);
     if (physical >= kScratchpadBase && physical <= kScratchpadBase + kScratchpadMask) {
         return scratchpad_[physical & kScratchpadMask];
@@ -57,6 +58,11 @@ std::uint32_t MipsInterpreter::read8(std::uint32_t address) {
 
 std::uint32_t MipsInterpreter::read16(std::uint32_t address) {
     const auto physical = address & 0x1FFFFFFFu;
+    if (hardware_.is_cdrom(physical)) {
+        return hardware_.read_cdrom(physical) |
+               (static_cast<std::uint32_t>(hardware_.read_cdrom(physical + 1))
+                << 8);
+    }
     if (physical <= kRamMask) return ram_.read16(physical & kRamMask);
     if (physical >= kScratchpadBase && physical <= kScratchpadBase + kScratchpadMask) {
         const auto index = physical & kScratchpadMask & ~1u;
@@ -72,6 +78,17 @@ std::uint32_t MipsInterpreter::read16(std::uint32_t address) {
 
 std::uint32_t MipsInterpreter::read32(std::uint32_t address) {
     const auto physical = address & 0x1FFFFFFFu;
+    if (hardware_.is_cdrom(physical)) {
+        std::uint32_t result = 0;
+        for (std::uint32_t index = 0; index < 4; ++index) {
+            if (hardware_.is_cdrom(physical + index)) {
+                result |= static_cast<std::uint32_t>(
+                              hardware_.read_cdrom(physical + index))
+                          << (index * 8);
+            }
+        }
+        return result;
+    }
     if (physical <= kRamMask) return ram_.read32(physical & kRamMask);
     if (physical >= kScratchpadBase && physical <= kScratchpadBase + kScratchpadMask) {
         const auto index = physical & kScratchpadMask & ~3u;
@@ -90,6 +107,10 @@ std::uint32_t MipsInterpreter::read32(std::uint32_t address) {
 
 void MipsInterpreter::write8(std::uint32_t address, std::uint32_t value) {
     const auto physical = address & 0x1FFFFFFFu;
+    if (hardware_.is_cdrom(physical)) {
+        hardware_.write_cdrom(physical, static_cast<std::uint8_t>(value));
+        return;
+    }
     if (physical <= kRamMask) {
         ram_.write8(physical & kRamMask, static_cast<std::uint8_t>(value));
         return;
@@ -104,6 +125,14 @@ void MipsInterpreter::write8(std::uint32_t address, std::uint32_t value) {
 
 void MipsInterpreter::write16(std::uint32_t address, std::uint32_t value) {
     const auto physical = address & 0x1FFFFFFFu;
+    if (hardware_.is_cdrom(physical)) {
+        hardware_.write_cdrom(physical, static_cast<std::uint8_t>(value));
+        if (hardware_.is_cdrom(physical + 1)) {
+            hardware_.write_cdrom(physical + 1,
+                                  static_cast<std::uint8_t>(value >> 8));
+        }
+        return;
+    }
     if (physical <= kRamMask) {
         ram_.write16(physical & kRamMask, static_cast<std::uint16_t>(value));
         return;
@@ -119,6 +148,15 @@ void MipsInterpreter::write16(std::uint32_t address, std::uint32_t value) {
 
 void MipsInterpreter::write32(std::uint32_t address, std::uint32_t value) {
     const auto physical = address & 0x1FFFFFFFu;
+    if (hardware_.is_cdrom(physical)) {
+        for (std::uint32_t index = 0; index < 4; ++index) {
+            if (hardware_.is_cdrom(physical + index)) {
+                hardware_.write_cdrom(physical + index,
+                                      static_cast<std::uint8_t>(value >> (index * 8)));
+            }
+        }
+        return;
+    }
     if (physical <= kRamMask) {
         ram_.write32(physical & kRamMask, value);
         return;
@@ -140,9 +178,18 @@ void MipsInterpreter::write32(std::uint32_t address, std::uint32_t value) {
         if (physical == hardware::kDma2ChannelControl) {
             const auto start = (value & (1u << 24)) != 0;
             const auto sync_mode = (value >> 9) & 3u;
-            const auto from_ram = (value & 1u) == 0;
+            // Channel control bit 0 is set when the transfer reads main RAM.
+            const auto from_ram = (value & 1u) != 0;
             if (start && sync_mode == 2 && from_ram) {
                 run_dma2_list();
+            }
+        }
+        if (physical == hardware::kDma3ChannelControl) {
+            const auto start = (value & (1u << 24)) != 0;
+            // Channel 3 reads the disc, so it moves data to main RAM.
+            const auto to_ram = (value & 1u) == 0;
+            if (start && to_ram) {
+                run_dma3_transfer();
             }
         }
         return;
@@ -183,6 +230,18 @@ void MipsInterpreter::poll_vblank() {
         cpu_.pc = routine;
         in_interrupt_ = true;
         return;
+    }
+}
+
+void MipsInterpreter::run_dma3_transfer() {
+    constexpr std::uint32_t kDefaultWords = 512;
+    constexpr std::uint32_t kMaxWords = 1024;
+
+    auto words = hardware_.dma_counter(3) & 0xFFFFu;
+    if (words == 0 || words > kMaxWords) words = kDefaultWords;
+    const auto address = hardware_.dma_address(3);
+    for (std::uint32_t index = 0; index < words; ++index) {
+        write32(address + index * 4, hardware_.cdrom().read_word());
     }
 }
 
@@ -243,7 +302,11 @@ RunResult MipsInterpreter::run(std::uint64_t max_steps) {
                 result.pc = cpu_.pc;
                 return result;
             }
-        } else if (vblank_enabled_ && (result.steps & 0x3FFu) == 0) {
+        } else if (vblank_enabled_ && !was_delay_slot &&
+                   (result.steps & 0x3FFu) == 0) {
+            // Never interrupt a delay slot: the pending branch target lives in
+            // the run loop, not in guest state, so resuming mid-pair would
+            // lose it.
             poll_vblank();
         }
 

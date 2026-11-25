@@ -412,7 +412,10 @@ int main(int argc, char** argv) {
     const auto& gpu = services.gpu();
     std::cout << "GPU: " << gpu.rendered_primitives()
               << " primitives, " << gpu.unsupported_commands()
-              << " unsupported commands\n"
+              << " unsupported commands, " << gpu.filled_vram_pixels()
+              << " filled VRAM pixels, display "
+              << (gpu.display_enabled() ? "on" : "off") << " at "
+              << gpu.display_area_x() << "," << gpu.display_area_y() << "\n"
               << "GTE: " << interpreter.gte_commands()
               << " commands (not computed yet)\n"
               << "DMA: " << interpreter.dma_writes() << " register writes, "

@@ -359,8 +359,36 @@ What the traces say about the missing renderer:
 - 19 kernel vectors are still unhandled, including the sound, card and
   `A(0x72)` entries.
 
-The next subsystem is the CD-ROM controller, not the rasteriser: the disc read
-path only copies user sectors on demand, so a guest that waits for a command
-interrupt or a DMA3 sector transfer never advances. GTE maths and MDEC are
-the milestones after that, because the first thing this title wants to show is
-its intro.
+That diagnosis was right. The string at `0x800965FC` is `CD timeout: `, and
+the loop was the game's own disc-timeout reporter printing
+`%s:(%s) Sync=%s, Ready=%s`.
+
+## 2026-11-24 — CD-ROM controller
+
+`r6::CdromDevice` now models the byte-wide register block at
+`0x1F801800`-`0x1F801803`: index selection, parameter FIFO, response FIFO, data
+FIFO, the interrupt flag and its acknowledge, plus `GetStat`, `Setloc`,
+`ReadN`, `Pause`/`Stop`, `GetlocL`, `Test`, `GetID`, `GetTN` and `GetTD`.
+Commands acknowledge first (`INT1`) and report completion (`INT2`, or
+`INT3` for a read) once the guest acknowledges, which is the order library
+"sync" helpers wait for. DMA channel 3 copies sectors from the data FIFO into
+main RAM.
+
+The interpreter routes those four addresses as bytes before its 32-bit
+hardware path, because the register behind each one depends on the index.
+
+Effect on the run: the `CD timeout` path is no longer taken, and the guest now
+submits GPU work. With a corrected stack and the disc controller in place,
+40,000,000 instructions produce 49 kernel calls, three DMA2 linked lists, 71
+packet words and two rasterised primitives. Before the controller existed the
+same run produced zero GPU traffic.
+
+What is still missing for a visible frame:
+
+- VRAM holds no non-zero pixel and the display is still off, so the packets
+  are initialisation packets rather than a scene.
+- The frame loop depends on the vertical-blank callback. `--vblank` reaches the
+game's dispatcher (`0x80087660`) but that dispatcher never returns under the
+current direct-call model, so the run parks inside it after about a million
+instructions.
+- GTE maths is still not computed, so any 3D geometry would arrive degenerate.

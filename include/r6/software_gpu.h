@@ -45,6 +45,9 @@ public:
 
     // 32-bit XRGB view of the selected display area, for host presentation.
     std::vector<std::uint32_t> display_frame() const;
+    // Count of non-zero VRAM pixels, to tell "nothing drawn" apart from
+    // "drawn outside the display area" during bring-up.
+    std::uint32_t filled_vram_pixels() const;
 
     std::uint32_t rendered_primitives() const { return rendered_primitives_; }
     std::uint32_t unsupported_commands() const { return unsupported_commands_; }

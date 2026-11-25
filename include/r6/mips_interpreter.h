@@ -81,6 +81,8 @@ private:
     bool service_bios_call();
     // Walks a DMA2 linked list and feeds its packets to the GPU.
     void run_dma2_list();
+    // Copies a CD-ROM sector into main RAM for DMA channel 3.
+    void run_dma3_transfer();
     // Raises the vertical-blank interrupt and enters the queued guest handler.
     void poll_vblank();
 

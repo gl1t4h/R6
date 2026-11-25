@@ -3,6 +3,7 @@
 #include <array>
 #include <cstdint>
 
+#include "r6/cdrom_device.h"
 #include "r6/platform_services.h"
 
 namespace r6 {
@@ -19,6 +20,10 @@ constexpr std::uint32_t kDma0BaseAddress = 0x1F801080;
 constexpr std::uint32_t kDma0ChannelControl = 0x1F801088;
 constexpr std::uint32_t kDma2BaseAddress = 0x1F8010A0;
 constexpr std::uint32_t kDma2ChannelControl = 0x1F8010A8;
+constexpr std::uint32_t kDma3BaseAddress = 0x1F8010B0;
+constexpr std::uint32_t kDma3ChannelControl = 0x1F8010B8;
+constexpr std::uint32_t kCdromBase = 0x1F801800;
+constexpr std::uint32_t kCdromEnd = 0x1F801803;
 constexpr std::uint32_t kDmaChannelStride = 0x10;
 }  // namespace hardware
 
@@ -32,7 +37,22 @@ constexpr std::uint32_t kDmaChannelStride = 0x10;
 // channel control register after starting one.
 class HardwareMap {
 public:
-    explicit HardwareMap(PlatformServices& services) : services_(services) {}
+    explicit HardwareMap(PlatformServices& services)
+        : services_(services), cdrom_(services) {}
+
+    // CD-ROM registers are byte-wide, so the interpreter routes them before
+    // its 32-bit hardware path.
+    bool is_cdrom(std::uint32_t physical) const {
+        return physical >= hardware::kCdromBase &&
+               physical <= hardware::kCdromEnd;
+    }
+    std::uint8_t read_cdrom(std::uint32_t physical) {
+        return cdrom_.read(physical - hardware::kCdromBase);
+    }
+    void write_cdrom(std::uint32_t physical, std::uint8_t value) {
+        cdrom_.write(physical - hardware::kCdromBase, value);
+    }
+    CdromDevice& cdrom() { return cdrom_; }
 
     std::uint32_t read32(std::uint32_t address) const {
         if (address == hardware::kTimer0) return timer_value(0);
@@ -153,6 +173,7 @@ private:
     }
 
     PlatformServices& services_;
+    CdromDevice cdrom_;
     std::array<Timer, 3> timers_{};
     std::array<std::uint32_t, 7> dma_address_{};
     std::array<std::uint32_t, 7> dma_counter_{};

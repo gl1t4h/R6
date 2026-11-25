@@ -37,11 +37,13 @@ None.
   bring-up. The hardware map models the three root counters, DMA channel
   control with instant completion, and `I_STAT`/`I_MASK`, which took a run of
   the USA executable from one kernel call to 49.
-- **Next step:** The CD-ROM controller. DMA2 linked lists and interrupt
-  registration are in place, and `--vblank` reaches the game's own dispatcher,
-  but the guest never writes a single GP0 packet: after `CD_init` it waits on
-  the disc. Command responses, the interrupt flag and DMA3 sector transfers
-  are what unblock the first frame. GTE maths and MDEC come after that.
+- **Next step:** The vertical-blank path. A CD-ROM controller (registers,
+  commands, interrupt flag, DMA3 sector transfers) removed the `CD timeout`
+  loop and the guest now submits DMA2 lists, but its interrupt dispatcher never
+  returns under the current direct-call model, so the frame loop never runs and
+  VRAM stays empty with the display off. Making the kernel's interrupt entry
+  and `rfe` return path work is what turns those packets into a frame; GTE
+  maths and MDEC follow.
 - **Playable native build:** No
 - **Distributed game assets:** No
 
