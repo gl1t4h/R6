@@ -49,6 +49,7 @@ int main(int argc, char** argv) {
     std::vector<std::pair<std::uint32_t, std::uint32_t>> pokes;
     std::vector<std::uint32_t> peeks;
     std::vector<std::uint32_t> watched_pcs;
+    std::vector<std::uint32_t> watched_args;
     bool hot_enabled = false;
     std::uint32_t trace_reg = 0;
     std::uint32_t find_value = 0;
@@ -84,6 +85,9 @@ int main(int argc, char** argv) {
             trace_cd = true;
         } else if (argument == "--hot") {
             hot_enabled = true;
+        } else if (argument == "--watch-args" && index + 1 < argc) {
+            watched_args.push_back(static_cast<std::uint32_t>(
+                std::stoul(argv[++index], nullptr, 0)));
         } else if (argument == "--watch-pc" && index + 1 < argc) {
             watched_pcs.push_back(static_cast<std::uint32_t>(
                 std::stoul(argv[++index], nullptr, 0)));
@@ -180,6 +184,7 @@ int main(int argc, char** argv) {
 
     r6::MipsInterpreter interpreter(ram, services);
     for (auto address : watched_pcs) interpreter.watch_pc(address);
+    for (auto address : watched_args) interpreter.watch_args(address);
     interpreter.set_hot_enabled(hot_enabled);
     if (search_code) {
         for (std::uint32_t address = 0x80010000u; address < 0x80200000u;
@@ -405,6 +410,9 @@ int main(int argc, char** argv) {
               << " with response=" << interpreter.hardware().cdrom().response_seen()
               << " response reads=" << interpreter.hardware().cdrom().response_reads()
               << std::endl;
+    for (const auto& entry : interpreter.watched_args()) {
+        std::cout << entry << std::endl;
+    }
     std::cout << "CD poll pcs:";
     for (auto poll_pc : interpreter.cdrom_polls()) {
         std::cout << " 0x" << std::hex << poll_pc << std::dec;

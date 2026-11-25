@@ -425,6 +425,15 @@ RunResult MipsInterpreter::run(std::uint64_t max_steps) {
         for (auto& entry : watched_) {
             if (entry.first == current_pc) ++entry.second;
         }
+        for (auto address : watch_args_) {
+            if (address != current_pc) continue;
+            if (watched_args_log_.size() >= 32) break;
+            watched_args_log_.push_back(
+                "args pc=0x" + format_hex(current_pc) + " ra=0x" +
+                format_hex(cpu_.gpr[31]) + " a0=0x" + format_hex(cpu_.gpr[4]) +
+                " a1=0x" + format_hex(cpu_.gpr[5]) + " v0=0x" +
+                format_hex(cpu_.gpr[2]) + " v1=0x" + format_hex(cpu_.gpr[3]));
+        }
         if (hot_enabled_ && (result.steps & 0x3Fu) == 0) ++hot_[current_pc];
         const bool was_delay_slot = in_delay_slot;
         const auto target = delay_target;

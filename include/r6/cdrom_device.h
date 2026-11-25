@@ -127,6 +127,7 @@ private:
         if (!loaded) {
             data_.assign(2048, 0);
         }
+        if (reading_) ++sector_;
         ++sectors_read_;
     }
 
@@ -156,6 +157,17 @@ private:
         interrupt_ = interrupt;
         complete_pending_ = complete;
         push_response(status_);
+        // The drive answers every command with eight bytes: status, track,
+        // index and the position in BCD. Libraries copy all eight into their
+        // own location buffer and convert it with CdPosToInt, so stopping after
+        // the status byte leaves them with position (0,0,0).
+        push_response(0x00);  // track
+        push_response(0x01);  // index
+        push_response(to_bcd(sector_ / (60 * 75)));
+        push_response(to_bcd((sector_ / 75) % 60));
+        push_response(to_bcd(sector_ % 75));
+        push_response(0x00);
+        push_response(0x00);
     }
 
     void push_response(std::uint8_t value) {
@@ -213,6 +225,9 @@ private:
                 break;
             case 0x0E:  // GetlocL: minute, second, frame in BCD, then mode.
                 begin_command(kIntAcknowledge, kIntComplete);
+                response_.clear();
+                response_index_ = 0;
+                push_response(status_);
                 push_response(to_bcd(sector_ / (60 * 75)));
                 push_response(to_bcd((sector_ / 75) % 60));
                 push_response(to_bcd(sector_ % 75));
@@ -221,6 +236,8 @@ private:
                 break;
             case 0x19:  // Test: sub-function 0x20 reports the BIOS date
                 begin_command(kIntAcknowledge, kIntComplete);
+                response_.clear();
+                response_index_ = 0;
                 if (!parameters_.empty() && parameters_[0] == 0x20) {
                     push_response(0x94);
                     push_response(0x09);
@@ -230,6 +247,8 @@ private:
                 break;
             case 0x1A:  // GetID
                 begin_command(kIntAcknowledge, kIntComplete);
+                response_.clear();
+                response_index_ = 0;
                 push_response(0x00);
                 push_response(0x20);
                 push_response(0x00);

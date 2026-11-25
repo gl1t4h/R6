@@ -199,12 +199,37 @@ transferred, the loader now reports `CdRead: sector error`, then re-runs
 rejection is on sector content/position validation in the game's own wrapper,
 not in the CD controller.
 
+## The sector check itself
+
+The message comes from one comparison at `0x80089A58`:
+
+```
+0x80089A40  jal 0x80087220        ; convert a CdlPos to an LBA (BCD decode)
+0x80089A50  lw  v1, 0x800B1C5C    ; recorded value
+0x80089A58  beq v0, v1, ok
+0x80089A60  print "CdRead: sector error"
+0x80089A6C  status = -1
+```
+
+Two fixes were needed to get the numbers close:
+
+- **Commands must answer with eight bytes.** The drive replies with status,
+  track, index and the position in BCD. We sent only the status byte, so
+  libcd's location buffer (`0x800B3B2C`) held zeros and any position it
+  converted was meaningless. It now gets the full eight bytes and reads
+  `00 02 16` for sector 166, which is correct.
+- **The position advances as sectors are read**, which is what the caller
+  expects to verify.
+
+Measured at the comparison after both fixes: `v0 = 0xFFFFFF6A` (-150) versus
+`v1 = 0x00000010` (16). So one side of the check still produces an error code
+rather than a position, which is the single remaining item in the CD path.
+
 ## Still open
 
-- `CdRead: sector error` after a successful transfer, followed by `CD_init`
-  again: the game's loader rejects the sector it received. Its wrapper (around
-  `0x80089CE4`) checks `CdStatus()` bits and re-issues `Setloc`/`ReadN` per
-  attempt; the exact validation it fails is not yet identified.
+- That `-150` versus `16` comparison. Either the helper at `0x80087220` is not
+  the pure BCD converter it looks like on this path, or the recorded value at
+  `0x800B1C5C` is not an LBA (16 looks like a sector count).
 - Handlers still overrun their 50k-step budget on nearly every interrupt.
 - No display programming at all: `2 primitives (1 fills)`, draw area
   `0,0 to 0,0`, display off, `0` rasterised pixels, and a `--shot` PPM of

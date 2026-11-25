@@ -56,6 +56,10 @@ public:
     std::uint32_t cop0_status() { return cop0_[12]; }
     std::uint32_t peek(std::uint32_t address) { return read32(address); }
     void watch_pc(std::uint32_t address) { watched_.emplace_back(address, 0); }
+    void watch_args(std::uint32_t address) { watch_args_.push_back(address); }
+    const std::vector<std::string>& watched_args() const {
+        return watched_args_log_;
+    }
     void set_hot_enabled(bool enabled) { hot_enabled_ = enabled; }
     void set_trace_reg(std::uint32_t address) { trace_reg_ = address; }
     void set_find_value(std::uint32_t value) { find_value_ = value; }
@@ -158,6 +162,8 @@ private:
     std::uint32_t trace_reg_{0};
     std::uint32_t find_value_{0};
     std::vector<std::string> trace_log_;
+    std::vector<std::uint32_t> watch_args_;
+    std::vector<std::string> watched_args_log_;
     std::vector<std::uint32_t> cdrom_polls_;
     std::vector<std::string> interrupt_log_;
 
