@@ -11,6 +11,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <string>
 #include <utility>
@@ -128,6 +129,12 @@ int main(int argc, char** argv) {
                      " [--dump-frame frame.ppm]\n"
                   << "Runs your own local copy. No game data is copied or"
                      " uploaded.\n";
+        return 2;
+    }
+
+    if (r6::boot::is_chd_image(input)) {
+        std::cerr << "r6-run: " << input << "\n" << r6::boot::chd_hint()
+                  << "\n";
         return 2;
     }
 
@@ -267,7 +274,20 @@ int main(int argc, char** argv) {
               << "Entry 0x" << std::hex << cpu.pc << std::dec
               << (entry_override != 0 ? " (overridden)" : "")
               << ", GP 0x" << std::hex << image.gp << std::dec
-              << ", SP 0x" << std::hex << cpu.gpr[29] << std::dec << "\n"
+              << ", SP 0x" << std::hex << cpu.gpr[29] << std::dec << "\n";
+    // Whether the title brings its own exception handler with it, or installs
+    // one during the run, is the first question the vector path raises.
+    const auto vector = r6::MipsInterpreter::kExceptionVector & kRamMask;
+    std::cout << "Vector 0x" << std::hex
+              << r6::MipsInterpreter::kExceptionVector << std::dec << ":";
+    for (std::uint32_t word = 0; word < 8; ++word) {
+        std::cout << " " << std::hex << std::setw(8) << std::setfill('0')
+                  << ram.read32(vector + word * 4);
+    }
+    std::cout << std::setfill(' ') << std::dec
+              << (ram.read32(vector) == 0 ? "  (empty)"
+                                          : "  (handler present)")
+              << "\n"
               << "Running " << steps << " instructions...\n";
 
     const auto result = interpreter.run(steps);
@@ -443,8 +463,9 @@ int main(int argc, char** argv) {
               << ", draw area " << gpu.draw_area_left() << ","
               << gpu.draw_area_top() << " to " << gpu.draw_area_right() << ","
               << gpu.draw_area_bottom() << "\n"
-              << "GTE: " << interpreter.gte_commands()
-              << " commands (not computed yet)\n"
+              << "GTE: " << interpreter.gte_commands() << " commands, "
+              << interpreter.gte_unsupported_commands() << " unsupported"
+              << interpreter.gte().unsupported_summary() << "\n"
               << "DMA: " << interpreter.dma_writes() << " register writes, "
               << interpreter.dma_lists() << " linked lists, "
               << interpreter.dma_words() << " words sent to the GPU\n"
@@ -520,8 +541,11 @@ int main(int argc, char** argv) {
     }
     std::cout << "VBlank: " << interpreter.vblanks() << " ticks, "
               << interpreter.interrupts() << " interrupts delivered, "
-              << interpreter.interrupt_overruns() << " handler overruns, " << interpreter.vblank_polls() << " polls, "
-              << interpreter.hardware().cycles() << " cycles, next=" << interpreter.vblank_next() << "\n";
+              << interpreter.interrupt_overruns() << " handler overruns, "
+              << interpreter.missing_vectors() << " pending vectors, "
+              << interpreter.vblank_polls() << " polls, "
+              << interpreter.hardware().cycles() << " cycles, next="
+              << interpreter.vblank_next() << "\n";
     if (trace_cd) {
         std::cout << "CD events:" << std::endl;
         for (const auto& entry : interpreter.cdrom_log()) {
@@ -536,10 +560,20 @@ int main(int argc, char** argv) {
             std::cout << "  " << entry << std::endl;
         }
     }
+    if (!interpreter.vector_writes().empty()) {
+        std::cout << "Vector writes:\n";
+        for (const auto& write : interpreter.vector_writes()) {
+            std::cout << "  0x" << std::hex << write.address << " <= 0x"
+                      << write.value << " (" << std::dec << write.width
+                      << "-bit) pc=0x" << std::hex << write.pc << std::dec
+                      << "\n";
+        }
+    } else {
+        std::cout << "Vector writes: none (the guest never wrote the vector)\n";
+    }
     if (const auto entry_int = services.entry_int(); entry_int != 0) {
         std::cout << "EntryInt: 0x" << std::hex << entry_int << " pc=0x"
                   << ram.read32(entry_int & kRamMask)
-                  << " hooks=" << std::dec << interpreter.hooks()
                   << std::endl;
     }
 

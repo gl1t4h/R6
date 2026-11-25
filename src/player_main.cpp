@@ -140,6 +140,11 @@ std::filesystem::path ask_for_disc() {
 }
 
 bool load_image(Player& player, std::string& error) {
+    if (r6::boot::is_chd_image(player.image)) {
+        error = r6::boot::chd_hint();
+        return false;
+    }
+
     player.bin = r6::boot::resolve_bin(player.image);
     std::error_code code;
     if (!std::filesystem::exists(player.bin, code)) {

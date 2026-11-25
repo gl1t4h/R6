@@ -19,7 +19,6 @@ constexpr std::uint32_t kDmaBase = 0x1F801080u;
 constexpr std::uint32_t kDmaEnd = 0x1F801100u;
 // Sentinel return address used to call a guest interrupt routine from the run
 // loop and notice when it returns.
-constexpr std::uint32_t kInterruptReturnAddress = 0x0000FFFCu;
 constexpr std::uint64_t kInterruptStepBudget = 50000u;
 constexpr std::uint64_t kMaxInterruptOverruns = 1000;
 
@@ -43,8 +42,7 @@ MipsInterpreter::MipsInterpreter(Memory& ram, PlatformServices& services)
       services_(services),
       hardware_(services),
       scratchpad_(0x400, 0),
-      cop0_(32, 0),
-      gte_data_(32, 0) {
+      cop0_(32, 0) {
     // The retail kernel hands an application a status register with the global
     // interrupt enable and the hardware (IP2) mask already set; guest code
     // read-modify-writes SR to enable COP2 and relies on those bits surviving.
@@ -82,6 +80,18 @@ void MipsInterpreter::note_watched_write(std::uint32_t address,
                          " pc=0x" + format_hex(cpu_.pc) + " s0=0x" +
                          format_hex(cpu_.gpr[16]) + " s1=0x" +
                          format_hex(cpu_.gpr[17]));
+}
+
+void MipsInterpreter::note_vector_write(std::uint32_t address,
+                                        std::uint32_t value, int width) {
+    // The vector and the words a short handler stub occupies. These writes are
+    // rare, so the first sixteen are kept with the PC that made each one.
+    const auto physical = address & 0x1FFFFFFFu;
+    const auto base = kExceptionVector & 0x1FFFFFFFu;
+    if (physical < base || physical >= base + 0x20u) return;
+    if (vector_writes_.size() >= 16) return;
+    vector_writes_.push_back(
+        VectorWrite{0x80000000u | physical, value, cpu_.pc, width});
 }
 
 std::uint32_t MipsInterpreter::read8(std::uint32_t address) {
@@ -158,6 +168,7 @@ std::uint32_t MipsInterpreter::read32(std::uint32_t address) {
 
 void MipsInterpreter::write8(std::uint32_t address, std::uint32_t value) {
     note_watched_write(address, value, 8);
+    note_vector_write(address, value, 8);
     const auto physical = address & 0x1FFFFFFFu;
     if (hardware_.is_cdrom(physical)) {
         hardware_.write_cdrom(physical, static_cast<std::uint8_t>(value));
@@ -177,6 +188,7 @@ void MipsInterpreter::write8(std::uint32_t address, std::uint32_t value) {
 
 void MipsInterpreter::write16(std::uint32_t address, std::uint32_t value) {
     note_watched_write(address, value, 16);
+    note_vector_write(address, value, 16);
     const auto physical = address & 0x1FFFFFFFu;
     if (hardware_.is_cdrom(physical)) {
         hardware_.write_cdrom(physical, static_cast<std::uint8_t>(value));
@@ -223,6 +235,7 @@ void MipsInterpreter::write16(std::uint32_t address, std::uint32_t value) {
 
 void MipsInterpreter::write32(std::uint32_t address, std::uint32_t value) {
     note_watched_write(address, value, 32);
+    note_vector_write(address, value, 32);
     const auto physical = address & 0x1FFFFFFFu;
     if (trace_log_.size() < 24) {
         if (trace_reg_ != 0 && (physical & 0x1FFFFFFCu) == (trace_reg_ & 0x1FFFFFFCu)) {
@@ -324,96 +337,49 @@ void MipsInterpreter::deliver_interrupt() {
     const auto pending = hardware_.interrupt_status() & hardware_.interrupt_mask();
     if (pending == 0) return;
 
-    interrupt_routines_.clear();
-    // The priority chains are the handlers; B(19h) HookEntryInt adds an entry
-    // point the kernel runs once those chains have finished.
-    for (std::uint32_t priority = 0; priority < 3; ++priority) {
-        // SysEnqIntRP keeps a linked list per priority: each node is
-        // { next, void (*routine)() }, and every node is serviced.
-        auto entry = services_.interrupt_entry(priority);
-        for (std::size_t depth = 0; entry != 0 && depth < 16; ++depth) {
-            const auto routine = read32(entry + 4);
-            if (routine >= 0x80000000u && routine < 0x80200000u) {
-                interrupt_routines_.push_back(routine);
-            }
-            entry = read32(entry);
-        }
-    }
-    const auto has_entry_int = services_.entry_int() != 0;
-    if (interrupt_routines_.empty() && !has_entry_int) return;
-    {
-        interrupt_return_pc_ = cpu_.pc;
-        interrupt_saved_ra_ = cpu_.gpr[31];
-        for (std::size_t index = 0; index < 32; ++index) {
-            interrupt_saved_gpr_[index] = cpu_.gpr[index];
-        }
-        interrupt_saved_hi_ = cpu_.hi;
-        interrupt_saved_lo_ = cpu_.lo;
-        interrupt_saved_cause_ = cop0_[13];
-        interrupt_pending_bits_ = pending;
+    // No handler where the vector points: executing zeroed RAM would slide
+    // through memory, so leave the interrupt pending and report it.
+    if (read32(kExceptionVector) == 0) {
+        ++missing_vectors_;
         if (interrupt_log_.size() < 6) {
-            std::string line = "routines=";
-            for (auto address : interrupt_routines_) {
-                line += "0x" + format_hex(address) + " ";
-            }
-            line += "sp=0x" + format_hex(cpu_.gpr[29]);
-            line += " gp=0x" + format_hex(cpu_.gpr[28]);
-            line += " interrupted=0x" + format_hex(cpu_.pc);
-            interrupt_log_.push_back(line);
+            interrupt_log_.push_back(
+                "no handler at 0x" + format_hex(kExceptionVector) +
+                " bits=0x" + format_hex(pending) + " pc=0x" +
+                format_hex(cpu_.pc));
         }
-        interrupt_steps_ = 0;
-        irq_pcs_.clear();
-        irq_hot_.clear();
-        irq_tail_size_ = 0;
-        irq_tail_next_ = 0;
-        if (irq_traces_.size() < 4) {
-            irq_traces_.emplace_back();
-            irq_traces_.back().reserve(32);
-        }
-        // The retail kernel enters the dispatcher with the hardware interrupt
-        // pending bit set in CAUSE and defined argument registers. Leaving the
-        // interrupted values in $a0-$a3 makes handlers act on stale pointers.
-        cop0_[13] |= 0x00000400u;  // CAUSE.IP2
-        for (std::size_t reg = 4; reg < 8; ++reg) cpu_.gpr[reg] = 0;
-        cpu_.gpr[31] = kInterruptReturnAddress;
-        // An exception entry returns through $k0 as often as through $ra.
-        cpu_.gpr[26] = kInterruptReturnAddress;
-        interrupt_routine_index_ = 0;
-        interrupt_hook_done_ = !has_entry_int;
-        in_interrupt_ = true;
-        ++interrupts_delivered_;
-        interrupt_steps_ = 0;
-        irq_pcs_.clear();
-        irq_hot_.clear();
-        irq_tail_size_ = 0;
-        irq_tail_next_ = 0;
-        if (has_entry_int) {
-            // libetc's dispatcher runs before the priority chains: the guest's
-            // own handlers acknowledge I_STAT eagerly, and the dispatcher can
-            // only route an interrupt whose bit is still pending.
-            enter_entry_int();
-            return;
-        }
-        cpu_.pc = interrupt_routines_[0];
-        interrupt_routine_index_ = 1;
         return;
     }
+
+    interrupt_saved_sr_ = status;
+    // Hardware exception entry, ExcCode 0 (interrupt). EPC keeps the PC of the
+    // instruction that did not run, CAUSE shows the summary line the kernel
+    // reads, and SR pushes IEc/KUc into IEp/KUp and clears IEc. That last part
+    // is what keeps a handler from being re-entered before its RFE.
+    cop0_[14] = cpu_.pc;
+    cop0_[13] = (cop0_[13] & ~0x0000FF7Cu) | 0x00000400u;
+    cop0_[12] = (status & ~0x3Fu) | ((status & 0x0Fu) << 2);
+    cpu_.pc = kExceptionVector;
+    in_interrupt_ = true;
+    interrupt_steps_ = 0;
+    irq_pcs_.clear();
+    irq_hot_.clear();
+    irq_tail_size_ = 0;
+    irq_tail_next_ = 0;
+    if (irq_traces_.size() < 4) {
+        irq_traces_.emplace_back();
+        irq_traces_.back().reserve(32);
+    }
+    if (interrupt_log_.size() < 6) {
+        interrupt_log_.push_back("vector bits=0x" + format_hex(pending) +
+                                 " interrupted=0x" +
+                                 format_hex(cop0_[14]));
+    }
+    ++interrupts_delivered_;
 }
 
-void MipsInterpreter::enter_entry_int() {
-    // B(19h) HookEntryInt structure (setjmp layout): the kernel calls the
-    // saved pc with $v0 = 1 and $a0 pointing at the structure.
-    const auto entry_int = services_.entry_int();
-    cpu_.pc = read32(entry_int);
-    cpu_.gpr[2] = 1;
-    cpu_.gpr[4] = entry_int;
-    cpu_.gpr[29] = read32(entry_int + 4);
-    cpu_.gpr[30] = read32(entry_int + 8);
-    for (std::uint32_t index = 0; index < 8; ++index) {
-        cpu_.gpr[16 + index] = read32(entry_int + 12 + index * 4);
-    }
-    cpu_.gpr[28] = read32(entry_int + 0x2C);
-    cpu_.gpr[31] = kInterruptReturnAddress;
+void MipsInterpreter::return_from_exception() {
+    const auto status = cop0_[12];
+    cop0_[12] = (status & ~0x3Fu) | ((status >> 2) & 0xFu);
 }
 
 void MipsInterpreter::poll_vblank() {
@@ -544,51 +510,6 @@ RunResult MipsInterpreter::run(std::uint64_t max_steps) {
         const auto target = delay_target;
         in_delay_slot = false;
 
-        if (current_pc == kInterruptReturnAddress) {
-            if (!interrupt_hook_done_ && services_.entry_int() != 0) {
-                interrupt_hook_done_ = true;
-                ++interrupt_hooks_;
-                enter_entry_int();
-                interrupt_steps_ = 0;
-                irq_pcs_.clear();
-                irq_hot_.clear();
-                irq_tail_size_ = 0;
-                irq_tail_next_ = 0;
-                continue;
-            }
-            if (interrupt_routine_index_ < interrupt_routines_.size()) {
-                // More queued routines belong to this interrupt: enter the next
-                // one from the interrupted context, as the kernel does.
-                const auto routine =
-                    interrupt_routines_[interrupt_routine_index_++];
-                for (std::size_t index = 0; index < 32; ++index) {
-                    cpu_.gpr[index] = interrupt_saved_gpr_[index];
-                }
-                cpu_.hi = interrupt_saved_hi_;
-                cpu_.lo = interrupt_saved_lo_;
-                cpu_.gpr[31] = kInterruptReturnAddress;
-                cpu_.pc = routine;
-                interrupt_steps_ = 0;
-                irq_pcs_.clear();
-                irq_hot_.clear();
-                irq_tail_size_ = 0;
-                irq_tail_next_ = 0;
-                continue;
-            }
-            // Every handler returned; resume the interrupted instruction
-            // stream exactly where it left off, with its registers.
-            cpu_.pc = interrupt_return_pc_;
-            for (std::size_t index = 0; index < 32; ++index) {
-                cpu_.gpr[index] = interrupt_saved_gpr_[index];
-            }
-            cpu_.hi = interrupt_saved_hi_;
-            cpu_.lo = interrupt_saved_lo_;
-            cop0_[13] = interrupt_saved_cause_;
-            hardware_.acknowledge_interrupts(interrupt_pending_bits_);
-            in_interrupt_ = false;
-            continue;
-        }
-
         if ((result.steps & 0x3FFu) == 0) {
             // Poll even in a delay slot: a wait loop whose length divides the
             // poll interval would otherwise never see the field counter move.
@@ -623,23 +544,19 @@ RunResult MipsInterpreter::run(std::uint64_t max_steps) {
                     if (hot.size() > 24) hot.resize(24);
                     irq_overrun_hot_.push_back(std::move(hot));
                     irq_overrun_log_.push_back(
-                        "overrun interrupted=0x" + format_hex(interrupt_return_pc_) +
-                        " interrupted_sp=0x" +
-                        format_hex(interrupt_saved_gpr_[29]) + " handler_sp=0x" +
+                        "overrun interrupted=0x" + format_hex(cop0_[14]) +
+                        " handler_sp=0x" +
                         format_hex(cpu_.gpr[29]) + " steps=" +
                         std::to_string(interrupt_steps_));
                     for (auto site : recent_calls_) {
                         irq_overrun_log_.push_back("  call 0x" + format_hex(site));
                     }
                 }
-                cpu_.pc = interrupt_return_pc_;
-                for (std::size_t index = 0; index < 32; ++index) {
-                    cpu_.gpr[index] = interrupt_saved_gpr_[index];
-                }
-                cpu_.hi = interrupt_saved_hi_;
-                cpu_.lo = interrupt_saved_lo_;
-                cop0_[13] = interrupt_saved_cause_;
-                hardware_.acknowledge_interrupts(interrupt_pending_bits_);
+                // Unwind the exception instead of keeping a saved register
+                // file: back to EPC with the SR that was pushed, so the
+                // interrupted stream is not left with interrupts disabled.
+                cpu_.pc = cop0_[14];
+                cop0_[12] = interrupt_saved_sr_;
                 in_interrupt_ = false;
                 if (++interrupt_overruns_ >= kMaxInterruptOverruns) {
                     interrupts_enabled_ = false;
@@ -666,9 +583,15 @@ RunResult MipsInterpreter::run(std::uint64_t max_steps) {
 
         if (service_bios_call()) {
             ++result.steps;
-            cpu_.pc = services_.take_return_from_exception() && in_interrupt_
-                          ? kInterruptReturnAddress
-                          : cpu_.gpr[31];
+            if (services_.take_return_from_exception() && in_interrupt_) {
+                // B(17h) ends the exception the way RFE does, then returns to
+                // the instruction EPC kept.
+                return_from_exception();
+                cpu_.pc = cop0_[14];
+                in_interrupt_ = false;
+            } else {
+                cpu_.pc = cpu_.gpr[31];
+            }
             if (recent_pcs_.size() >= 16) recent_pcs_.erase(recent_pcs_.begin());
             recent_pcs_.push_back(current_pc);
             continue;
@@ -678,6 +601,11 @@ RunResult MipsInterpreter::run(std::uint64_t max_steps) {
         const auto step = execute(instruction, current_pc);
         ++result.steps;
         hardware_.advance_cycles(1);
+        if (step.returned_from_exception && in_interrupt_) {
+            // RFE re-enabled interrupts, so the handler is finished even though
+            // the guest has not reached its `jr $k0` yet.
+            in_interrupt_ = false;
+        }
 
         if (recent_pcs_.size() >= 16) recent_pcs_.erase(recent_pcs_.begin());
         recent_pcs_.push_back(current_pc);
@@ -968,25 +896,35 @@ MipsInterpreter::StepResult MipsInterpreter::execute(
                 }
                 cop0_[rd] = gpr[rt];
             } else if ((instruction & 0x3Fu) == 0x10) {  // rfe
-                const auto status = cop0_[12];
-                cop0_[12] = (status & ~0x3Fu) | ((status >> 2) & 0xFu);
+                return_from_exception();
+                result.returned_from_exception = true;
             } else {
                 result.unsupported = true;
             }
             break;
         case 0x12: {  // COP2 / GTE
-            if (rs == 0x00) {
-                gpr[rt] = gte_data_[rd];
-            } else if (rs == 0x02) {
-                gpr[rt] = gte_data_[rd];
-            } else if (rs == 0x04) {
-                gte_data_[rd] = gpr[rt];
-            } else if (rs == 0x06) {
-                gte_data_[rd] = gpr[rt];
-            } else {
-                // Geometry maths is not implemented yet; the command is
-                // accepted so execution continues.
+            if (rs == 0x00) {  // mfc2
+                gpr[rt] = gte_.read_data(rd);
+            } else if (rs == 0x02) {  // cfc2
+                gpr[rt] = gte_.read_control(rd);
+            } else if (rs == 0x04) {  // mtc2
+                gte_.write_data(rd, gpr[rt]);
+            } else if (rs == 0x06) {  // ctc2
+                gte_.write_control(rd, gpr[rt]);
+            } else if (rs == 0x08) {
+                // BC2F/BC2T test the GTE condition flag, which is always false
+                // on hardware: BC2F never branches and BC2T always does.
+                result.branch = true;
+                result.target =
+                    rt == 0
+                        ? pc + 8
+                        : pc + 4 +
+                              (sign_extend16(immediate(instruction)) << 2);
+            } else if (rs >= 0x10) {  // GTE command
                 ++gte_commands_;
+                gte_.execute(instruction);
+            } else {
+                result.unsupported = true;
             }
             break;
         }
@@ -1097,10 +1035,12 @@ MipsInterpreter::StepResult MipsInterpreter::execute(
             break;
         }
         case 0x32:  // lwc2
-            gte_data_[rt] = read32(gpr[rs] + sign_extend16(immediate(instruction)));
+            gte_.write_data(
+                rt, read32(gpr[rs] + sign_extend16(immediate(instruction))));
             break;
         case 0x3A:  // swc2
-            write32(gpr[rs] + sign_extend16(immediate(instruction)), gte_data_[rt]);
+            write32(gpr[rs] + sign_extend16(immediate(instruction)),
+                    gte_.read_data(rt));
             break;
         default:
             result.unsupported = true;

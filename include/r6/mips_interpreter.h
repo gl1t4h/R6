@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "r6/cpu_state.h"
+#include "r6/gte.h"
 #include "r6/hardware_map.h"
 #include "r6/memory.h"
 #include "r6/platform_services.h"
@@ -41,6 +42,10 @@ struct RunResult {
 // cycle accuracy, the CD-ROM controller beyond sector reads, or the SPU.
 class MipsInterpreter {
 public:
+    // General exception vector. Real hardware selects 0xA0000080 when SR.BEV is
+    // clear, which is BIOS code this project does not carry.
+    static constexpr std::uint32_t kExceptionVector = 0x80000080u;
+
     MipsInterpreter(Memory& ram, PlatformServices& services);
 
     CpuState& cpu() { return cpu_; }
@@ -49,6 +54,11 @@ public:
     RunResult run(std::uint64_t max_steps);
 
     std::uint64_t gte_commands() const { return gte_commands_; }
+    std::uint64_t gte_unsupported_commands() const {
+        return gte_.unsupported();
+    }
+    Gte& gte() { return gte_; }
+    const Gte& gte() const { return gte_; }
     std::uint64_t dma_writes() const { return dma_writes_; }
     std::uint64_t dma_lists() const { return dma_lists_; }
     std::uint64_t dma_words() const { return dma_words_; }
@@ -69,6 +79,17 @@ public:
     // value that appears in guest memory can be traced back to its writer.
     void watch_write(std::uint32_t address) { watch_writes_.push_back(address); }
     const std::vector<std::string>& write_log() const { return write_log_; }
+    // Stores into the first words of the exception vector, with the writing
+    // PC, so a run shows whether the title installs a handler there.
+    struct VectorWrite {
+        std::uint32_t address{0};
+        std::uint32_t value{0};
+        std::uint32_t pc{0};
+        int width{32};
+    };
+    const std::vector<VectorWrite>& vector_writes() const {
+        return vector_writes_;
+    }
     void set_find_value(std::uint32_t value) { find_value_ = value; }
     const std::vector<std::string>& trace_log() const { return trace_log_; }
     const std::vector<std::string>& dma3_log() const { return dma3_log_; }
@@ -109,6 +130,12 @@ public:
     std::uint32_t irq_mask() { return hardware_.interrupt_mask(); }
     std::uint32_t cd_sectors_read() { return hardware_.cdrom().sectors_read(); }
     std::uint64_t interrupt_overruns() const { return interrupt_overruns_; }
+    // Interrupts left pending because nothing was installed at the vector.
+    std::uint64_t missing_vectors() const { return missing_vectors_; }
+    // COP0 register file, for diagnostics and tests (EPC is r14, Cause r13).
+    std::uint32_t cop0(std::size_t index) const {
+        return index < cop0_.size() ? cop0_[index] : 0;
+    }
     // Delivering vertical-blank interrupts is opt-in: the guest handler needs
     // devices that are still stubs, so it can park inside the handler.
     void set_vblank_enabled(bool enabled) { vblank_enabled_ = enabled; }
@@ -137,6 +164,8 @@ private:
         std::uint32_t target{0};
         bool unsupported{false};
         bool halted{false};
+        // Set by RFE: the exception handler has finished its critical section.
+        bool returned_from_exception{false};
     };
 
     StepResult execute(std::uint32_t instruction, std::uint32_t pc);
@@ -150,13 +179,19 @@ private:
     void run_dma4_transfer();
     // Raises the vertical-blank interrupt.
     void poll_vblank();
-    void enter_entry_int();
     void note_cdrom_poll(std::uint32_t physical);
     void note_watched_write(std::uint32_t address, std::uint32_t value,
                             int width);
-    // Enters the queued guest interrupt routine when a pending interrupt is
-    // unmasked, which stands in for the retail kernel's dispatcher.
+    // Records a store into the exception vector with the PC that made it.
+    void note_vector_write(std::uint32_t address, std::uint32_t value,
+                           int width);
+    // Takes the general exception at 0x80000080 when an unmasked interrupt is
+    // pending: EPC keeps the interrupted PC, CAUSE gets ExcCode 0 and IP2, and
+    // SR pushes its mode bits with IEc cleared. The guest handler returns with
+    // RFE and `jr $k0`, as on hardware.
     void deliver_interrupt();
+    // Pops the SR status stack, the way RFE does.
+    void return_from_exception();
     static std::string format_hex(std::uint32_t value);
 
     std::uint32_t read8(std::uint32_t address);
@@ -172,7 +207,7 @@ private:
     CpuState cpu_{};
     std::vector<std::uint8_t> scratchpad_;
     std::vector<std::uint32_t> cop0_;
-    std::vector<std::uint32_t> gte_data_;
+    Gte gte_;
     // Every guest write to COP0 SR, as (pc, value), so interrupt-enable
     // transitions during bring-up are visible.
     std::vector<std::pair<std::uint32_t, std::uint32_t>> sr_writes_;
@@ -223,26 +258,13 @@ private:
     bool vblank_enabled_{false};
     bool in_interrupt_{false};
     std::uint64_t interrupt_steps_{0};
-    std::uint32_t interrupt_return_pc_{0};
-    std::uint32_t interrupt_saved_ra_{0};
-    // The kernel saves the interrupted context before entering a handler, so
-    // entering one here must not leave the handler's registers behind.
-    std::array<std::uint32_t, 32> interrupt_saved_gpr_{};
-    std::uint32_t interrupt_saved_hi_{0};
-    std::uint32_t interrupt_saved_lo_{0};
-    std::uint32_t interrupt_saved_cause_{0};
-    // Pending I_STAT bits taken when the handler was entered; acknowledged
-    // when it returns, the way the kernel does.
-    std::uint32_t interrupt_pending_bits_{0};
-    // Every queued SysEnqIntRP routine is entered for one interrupt, the way
-    // the kernel walks the priority list.
-    std::vector<std::uint32_t> interrupt_routines_;
-    std::size_t interrupt_routine_index_{0};
-    bool interrupt_hook_done_{false};
-    std::uint64_t interrupt_hooks_{0};
+    // SR before the exception push, kept so an abandoned handler can be unwound
+    // without leaving interrupts disabled.
+    std::uint32_t interrupt_saved_sr_{0};
+    std::uint64_t missing_vectors_{0};
+    std::vector<VectorWrite> vector_writes_;
 
 public:
-    std::uint64_t hooks() const { return interrupt_hooks_; }
     const std::vector<std::uint32_t>& cdrom_polls() const {
         return cdrom_polls_;
     }

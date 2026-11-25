@@ -129,11 +129,11 @@ had already overwritten.
 Interrupt delivery stays opt-in (`--vblank`): enabling it currently costs guest
 progress (0 GPU primitives versus 2 without it), so it is not on by default.
 
-## Renaming
+## Naming
 
-The project targets any PlayStation title, so the title-specific front end was
-renamed from `R6.exe` to `spider-man-r6.exe` (`src/spiderman_player.cpp`, CMake
-target `spider-man-r6`). Generic tooling keeps the `r6-` prefix: `r6-run`,
+The project targets any PlayStation title, so no artifact carries a game name.
+The windowed front end is `r6-player.exe` (`src/player_main.cpp`, CMake target
+`r6-player`). The rest of the tooling uses the same prefix: `r6-run`,
 `r6-tests`, `r6-diagnostic` and the `r6::` headers.
 
 ## What made the vblank callback run
@@ -277,17 +277,57 @@ still struggles:
 - Before the sector-header fix, `144` of `151` delivered vblank handlers hit
   the 50k-step budget. The last handler spun in guest wait loops
   (`0x800880AC`, earlier `0x8008949C`), a few hundred iterations each time.
-- The handler runs an interrupt routine injected by the host rather than the
-  guest's own exception vector, so nesting and blocking are only approximated.
+- The handler used to run an interrupt routine injected by the host rather
+  than the guest's own exception vector, so nesting and blocking were only
+  approximated. That is gone; see "Real exception entry" below.
 - The game's `VSync`/`CD timeout` messages still appear when a wall-clock
   timer expires between the handler and the code that acknowledges it.
   The root counters are currently driven by the host clock, so runs are not
   deterministic; folding them onto an emulated cycle counter is the next
   correctness step.
 
-The long-term fix is to run the guest's real exception path instead: take
-vector `0x80000080`, set EPC/CAUSE/SR, let a handler return through `RFE`, and
-deliver new interrupts only at safe points.
+## Real exception entry
+
+The host-call dispatcher is gone. An interrupt no longer invokes the queued
+`SysEnqIntRP` routines or the `HookEntryInt` target from C++;
+`deliver_interrupt` performs the R3000A exception entry itself:
+
+- `EPC` (r14) keeps the PC of the instruction that did not run, `CAUSE` (r13)
+  gets `ExcCode = 0` (interrupt) with `IP2` set, and `SR` pushes `IEc`/`KUc`
+  into `IEp`/`KUp` and clears `IEc`. The cleared `IEc` is what stops a handler
+  being re-entered before its `RFE`, which is also why the existing `SR.IE`
+  check needs no extra guard.
+- the PC goes to `0x80000080`. The guest handler ends with `RFE` (restoring the
+  status stack) and `jr $k0` with `$k0 = EPC`; `RFE` also marks the end of the
+  handler for the diagnostics.
+- `I_STAT` is acknowledged by the guest's own handler. The host no longer
+  clears the pending bits on the way out, so a handler that forgets to
+  acknowledge is visible instead of hidden.
+
+One deviation is deliberate: real hardware selects `0xA0000080` when `BEV` is
+clear, which is BIOS code this project does not carry, so the vector is always
+`0x80000080`. If the word there is zero, the interrupt is left pending and
+counted in `missing_vectors()`, which `r6-run` prints as `pending vectors` in
+its VBlank line, and one log line records the pending bits, rather than sliding
+through zeroed RAM.
+
+The chains are no longer walked on the guest's behalf either. If a title never
+installs a handler at the vector, nothing runs and the count says so; if it
+does, its handler runs in guest context, and the `SysEnqIntRP`/`HookEntryInt`
+callbacks are reached only through whatever that handler does. That is the
+point of the change, but it makes the next run's `pending vectors` count and
+handler trace the things to read.
+
+`r6-run` prints the eight words at `0x80000080` before it starts, marking them
+`(empty)` when the first is zero, and lists every guest store into that window
+with address, value, width and writing PC (the first sixteen). A non-zero word
+at startup is code that came in with the image; a `Vector writes:` entry is the
+title installing a handler mid-run; `none` with `(empty)` means the title never
+installs one and interrupts are being left pending.
+
+Handlers that never `RFE` still hit the 50k-step budget. The unwind now
+restores `SR` and returns to `EPC` instead of reinstating a saved register
+file, and after 1000 of those interrupts stop being delivered.
 
 ## Still open
 

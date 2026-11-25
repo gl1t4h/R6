@@ -311,6 +311,125 @@ void cdrom_command_acknowledges_then_completes() {
     R6_CHECK(cpu.gpr[4] == 2);  // the response starts with the drive status
 }
 
+// Raises bit 0 (vblank) with every source unmasked, so an interrupt is
+// pending as soon as the interpreter polls.
+void raise_pending_interrupt(MipsInterpreter& interpreter) {
+    interpreter.hardware().write32(0x1F801074u, 0x7FFu);  // I_MASK
+    interpreter.hardware().raise_interrupt(1u << 0);       // I_STAT vblank
+}
+
+void interrupt_takes_the_exception_vector() {
+    Memory ram(2u * 1024u * 1024u);
+    TestServices services;
+    MipsInterpreter interpreter(ram, services);
+    auto& cpu = interpreter.cpu();
+    cpu.pc = 0x80010000u;
+
+    ram.write32(0x80, 0x401A7000u);  // mfc0 k0, EPC: marks the vector as code
+    raise_pending_interrupt(interpreter);
+
+    interpreter.run(1);
+    // The interrupted PC is kept, not executed: EPC holds it for the return.
+    R6_CHECK(interpreter.cop0(14) == 0x80010000u);
+    R6_CHECK((interpreter.cop0(13) & 0x7Cu) == 0);  // ExcCode 0 (interrupt)
+    R6_CHECK((interpreter.cop0(13) & 0x400u) != 0);  // CAUSE.IP2
+    // SR pushes IEc into IEp and clears IEc, so the handler cannot be entered
+    // again before RFE.
+    R6_CHECK(interpreter.cop0(12) == 0x404u);
+    R6_CHECK(interpreter.interrupts() == 1);
+    R6_CHECK(cpu.pc == 0x80000084u);
+}
+
+void interrupt_handler_returns_through_rfe() {
+    Memory ram(2u * 1024u * 1024u);
+    TestServices services;
+    MipsInterpreter interpreter(ram, services);
+    auto& cpu = interpreter.cpu();
+    cpu.pc = 0x80010000u;
+
+    ram.write32(0x80, 0x401A7000u);      // mfc0 k0, EPC
+    ram.write32(0x84, 0x42000010u);      // rfe
+    ram.write32(0x88, 0x03400008u);      // jr k0
+    ram.write32(0x8C, 0x00000000u);      // delay slot
+    ram.write32(0x10000, 0x24080001u);   // addiu t0, zero, 1
+    ram.write32(0x10004, 0x0000000Du);   // break
+    raise_pending_interrupt(interpreter);
+
+    const auto result = interpreter.run(6);
+    // Four handler instructions, then the interrupted addiu runs.
+    R6_CHECK(cpu.gpr[8] == 1);
+    R6_CHECK(cpu.pc == 0x80010004u);
+    R6_CHECK(interpreter.cop0(12) == 0x401u);
+    R6_CHECK(interpreter.cop0(14) == 0x80010000u);
+    R6_CHECK(result.reason == StopReason::guest_break);
+}
+
+void interrupt_without_a_vector_stays_pending() {
+    Memory ram(2u * 1024u * 1024u);
+    TestServices services;
+    MipsInterpreter interpreter(ram, services);
+    auto& cpu = interpreter.cpu();
+    cpu.pc = 0x80010000u;
+
+    ram.write32(0x10000, 0x24080001u);  // addiu t0, zero, 1
+    ram.write32(0x10004, 0x24080002u);
+    ram.write32(0x10008, 0x24080003u);
+    raise_pending_interrupt(interpreter);
+
+    interpreter.run(3);
+    // Zeroed RAM at the vector is not a handler: nothing jumps there.
+    R6_CHECK(interpreter.interrupts() == 0);
+    R6_CHECK(interpreter.missing_vectors() == 1);
+    R6_CHECK(cpu.gpr[8] == 3);
+    R6_CHECK(cpu.pc == 0x8001000Cu);
+}
+
+void interrupt_overrun_returns_to_epc() {
+    Memory ram(2u * 1024u * 1024u);
+    TestServices services;
+    MipsInterpreter interpreter(ram, services);
+    auto& cpu = interpreter.cpu();
+    cpu.pc = 0x80010000u;
+
+    ram.write32(0x80, 0x1000FFFFu);      // b . (handler that never returns)
+    ram.write32(0x10000, 0x24080001u);   // addiu t0, zero, 1
+    ram.write32(0x10004, 0x0000000Du);   // break
+    raise_pending_interrupt(interpreter);
+
+    const auto result = interpreter.run(60000);
+    // The handler budget expired: the exception is unwound to EPC with the SR
+    // that was pushed, and the interrupted stream continues.
+    R6_CHECK(interpreter.interrupt_overruns() == 1);
+    R6_CHECK(interpreter.cop0(12) == 0x401u);
+    R6_CHECK(cpu.gpr[8] == 1);
+    R6_CHECK(result.reason == StopReason::guest_break);
+}
+
+void exception_vector_writes_are_traced() {
+    Memory ram(2u * 1024u * 1024u);
+    TestServices services;
+    MipsInterpreter interpreter(ram, services);
+    auto& cpu = interpreter.cpu();
+    cpu.pc = 0x80010000u;
+
+    ram.write32(0x10000, 0x3C088000u);  // lui t0, 0x8000
+    ram.write32(0x10004, 0x35080090u);  // ori t0, t0, 0x0090
+    ram.write32(0x10008, 0x3C09401Au);  // lui t1, 0x401A
+    ram.write32(0x1000C, 0x35297000u);  // ori t1, t1, 0x7000
+    ram.write32(0x10010, 0xAD090000u);  // sw t1, 0(t0)
+    ram.write32(0x10014, 0x24080001u);  // addiu t0, zero, 1 (not the vector)
+
+    interpreter.run(6);
+    const auto& writes = interpreter.vector_writes();
+    R6_CHECK(writes.size() == 1);
+    if (writes.size() == 1) {
+        R6_CHECK(writes[0].address == 0x80000090u);
+        R6_CHECK(writes[0].value == 0x401A7000u);
+        R6_CHECK(writes[0].pc == 0x80010010u);
+        R6_CHECK(writes[0].width == 32);
+    }
+}
+
 }  // namespace
 
 void run_mips_interpreter_tests() {
@@ -327,4 +446,9 @@ void run_mips_interpreter_tests() {
     timer_mode_reads_back();
     dma2_linked_list_reaches_the_gpu();
     cdrom_command_acknowledges_then_completes();
+    interrupt_takes_the_exception_vector();
+    interrupt_handler_returns_through_rfe();
+    interrupt_without_a_vector_stays_pending();
+    interrupt_overrun_returns_to_epc();
+    exception_vector_writes_are_traced();
 }

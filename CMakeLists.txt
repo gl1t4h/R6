@@ -12,6 +12,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 add_library(r6-core STATIC
     src/bios_services.cpp
+    src/gte.cpp
     src/mips_interpreter.cpp
     src/software_gpu.cpp
     src/windows_platform_services.cpp
@@ -45,6 +46,7 @@ endif()
 add_executable(r6-tests
     tests/test_main.cpp
     tests/test_bios_services.cpp
+    tests/test_gte.cpp
     tests/test_mips_interpreter.cpp
     tests/test_software_gpu.cpp
 )

@@ -40,6 +40,32 @@ inline std::string upper(std::string text) {
     return text;
 }
 
+inline std::string lowercase_extension(const std::filesystem::path& path) {
+    auto extension = path.extension().string();
+    for (auto& character : extension) {
+        if (character >= 'A' && character <= 'Z') {
+            character = static_cast<char>(character - 'A' + 'a');
+        }
+    }
+    return extension;
+}
+
+// The loader reads raw BIN/CUE only. A .chd is a compressed container, so the
+// useful thing to report is how to expand it, not that the file is missing.
+// Both front ends print the same text from here so the two cannot drift.
+inline bool is_chd_image(const std::filesystem::path& path) {
+    return lowercase_extension(path) == ".chd";
+}
+
+inline const char* chd_hint() {
+    return "A .chd image is a compressed container; the loader reads raw "
+           "BIN/CUE only.\n"
+           "Expand it first with chdman (shipped with MAME), keeping the "
+           "output outside this repository:\n"
+           "  chdman extractcd -i game.chd -o game.cue -ob game.bin\n"
+           "See the \"Disc formats\" section in README.md.";
+}
+
 inline std::vector<std::uint8_t> read_sectors(WindowsPlatformServices& disc,
                                               std::uint32_t lba,
                                               std::uint32_t count) {

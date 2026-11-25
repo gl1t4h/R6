@@ -22,7 +22,7 @@ images that are never included in this repository.
 | Disc boot | In progress | Loads a PS-X EXE from a user-supplied BIN/CUE, executes it on the interpreter, and services kernel/IRQ paths used during early boot. |
 | CD-ROM / DMA | In progress | DMA3 disc reads, CD command responses, and sector delivery are implemented enough for early file streaming; timing-sensitive loader behavior is still being debugged. |
 | GPU / display | In progress | Software GPU handles common GP0/GP1 commands and presents a VRAM display window; guest scene submission depends on further CPU/GTE/timing coverage. |
-| GTE / COP2 | Not implemented | Geometry instructions are accepted/counted but not executed, so 3D scene generation is blocked. |
+| GTE / COP2 | In progress | RTPS/RTPT, NCLIP, AVSZ3/4, MVMVA and SQR compute with the documented saturation and FLAG behaviour, as do the lighting commands NCS, NCCS, NCDS and their triple forms NCT, NCCT and NCDT; the colour commands that work from existing IR (CC, CDP, DPCS, DPCT, INTPL, DCPL) are counted per opcode and named in the `r6-run` report. See `docs/gte-scope.md`. |
 | Native player | In progress | `r6-player` opens a Win32 window and presents the translated display from a user-supplied local disc image. |
 
 Progress is measured by bring-up milestones, not playable game content. On-screen
@@ -124,8 +124,8 @@ Run your own local copy on the development runner:
 Use `build\Release\r6-run.exe` for a Visual Studio build. The runner loads the
 boot executable out of your BIN/CUE, executes it on the native R3000A
 interpreter, and reports the instructions, BIOS calls and GPU traffic it saw. It
-is **not** a playable build: GTE geometry is still missing, and the loader has
-not yet submitted a scene.
+is **not** a playable build: the GTE colour commands that work from existing IR
+are still missing, and the loader has not submitted a scene.
 
 Run the native checks (GPU decoder and BIOS services) and the analysis tests:
 
@@ -147,6 +147,28 @@ The generated file must stay outside this repository. It supports only a small
 instruction subset and deliberately stops on unsupported control flow; it is
 not yet a playable recompilation.
 
+## Disc formats
+
+The loader reads raw BIN/CUE images only. A `.cue` sheet points at its `.bin`
+track and `resolve_bin()` follows that pointer; nothing in the toolchain opens a
+compressed container, so a `.chd` is rejected as a missing image.
+
+Expand it once with `chdman` (shipped with MAME):
+
+```powershell
+chdman extractcd -i "$env:USERPROFILE\Downloads\yourgame.chd" `
+  -o "$env:USERPROFILE\R6-local\game.cue" `
+  -ob "$env:USERPROFILE\R6-local\game.bin"
+```
+
+Write the output outside the repository, as those paths do. The expanded image
+is disc data: `.gitignore` already excludes `*.chd`, `*.cue` and `*.bin`, so it
+cannot be committed by accident, but keeping it out of the tree avoids tools
+picking it up. Point `r6-run` or `r6-player` at the new `.cue`.
+
+Adding a `.chd` reader would mean linking a container library, so BIN/CUE stays
+the supported input and conversion happens on the user's machine.
+
 ## Development rules
 
 - Never add a game image or extracted game files to Git.
@@ -164,6 +186,8 @@ not yet a playable recompilation.
 ├── docs/
 │   ├── asset-policy.md
 │   ├── game-status.md
+│   ├── gte-scope.md
+│   ├── irq-bringup.md
 │   └── recomp-findings.md
 ├── include/
 │   └── r6/
@@ -171,8 +195,9 @@ not yet a playable recompilation.
 ├── tools/
 │   ├── analyze-mips.py
 │   ├── generate-native-stub.py
-│   ├── mips_decode.py
 │   ├── inspect-ps1-disc.py
+│   ├── mips_cfg.py
+│   ├── mips_decode.py
 │   ├── report-indirects.py
 │   └── verify-disc.ps1
 ├── tests/
@@ -203,7 +228,7 @@ None.
 
 | Game | Status | Next milestone |
 | --- | --- | --- |
-| Spider-Man (USA) | Native interpreter runs the guest, its vblank dispatcher, VSync callbacks and the CD loader (whole files stream); emulated-cycle timer/DMA/SPU groundwork is in the working tree | Validate the cycle-timer working-tree batch, reproduce/eliminate remaining `CdSync`/loader stalls on disc, then chase the first display/GPU scene and GTE geometry |
+| Spider-Man (USA) | Native interpreter runs the guest, its vblank dispatcher, VSync callbacks and the CD loader (whole files stream); emulated-cycle timers, DMA interrupt/DMA4 completion and SPU transfer stubs are committed | Confirm the emulated-cycle timers remove the remaining `CdSync`/loader stalls on disc, then chase the first display/GPU scene and GTE geometry |
 
 ## Contributing
 

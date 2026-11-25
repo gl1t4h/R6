@@ -286,12 +286,6 @@ public:
     // shifted out, and the driver waits on it after its final transfer.
     void pad_byte_received() const { pad_irq_delay_ = 4; }
 
-    void acknowledge_interrupts(std::uint32_t bits) {
-        const auto cleared = interrupt_status_ & bits;
-        interrupt_status_ &= ~bits;
-        if (cleared != 0) note_irq("service ack", cleared);
-    }
-
     // Bounded interrupt-controller event log for bring-up.
     const std::vector<std::string>& interrupt_log() const {
         return interrupt_log_;

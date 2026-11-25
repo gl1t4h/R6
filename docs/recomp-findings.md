@@ -481,11 +481,11 @@ Diagnostics added for the next session:
 
 ## Double-clickable player
 
-`src/spiderman_player.cpp` builds `spider-man-r6.exe`, a windowed (no console)
-front end that locates the user's own BIN/CUE in its own folder, `Downloads`,
-`Desktop` or `Documents`, falls back to an open-file dialog, boots the disc's
-PS-X EXE with the same stack correction, and presents the 320x240 display area
-scaled 3x. ESC quits; F12 writes `r6-frame.ppm` next to the executable.
-`--shot <file> --steps N` runs the same path headless and saves one frame.
+`src/player_main.cpp` builds `r6-player.exe`, a windowed (no console) front end
+that locates the user's own BIN/CUE in its own folder, `Downloads`, `Desktop` or
+`Documents`, falls back to an open-file dialog, boots the disc's PS-X EXE with
+the same stack correction, and presents the 320x240 display area scaled 3x.
+ESC quits; F12 writes `r6-frame.ppm` next to the executable. `--shot <file>
+--steps N` runs the same path headless and saves one frame.
 While the guest has not drawn anything the window shows live instruction,
 primitive, disc-sector and stop-state counters rather than a black rectangle.
