@@ -51,6 +51,8 @@ public:
     std::uint64_t dma_lists() const { return dma_lists_; }
     std::uint64_t dma_words() const { return dma_words_; }
     std::uint64_t vblanks() const { return vblank_count_; }
+    std::uint64_t interrupts() const { return interrupts_delivered_; }
+    std::uint32_t cd_sectors_read() { return hardware_.cdrom().sectors_read(); }
     std::uint64_t interrupt_overruns() const { return interrupt_overruns_; }
     // Delivering vertical-blank interrupts is opt-in: the guest handler needs
     // devices that are still stubs, so it can park inside the handler.
@@ -60,6 +62,11 @@ public:
         return unknown_hardware_writes_;
     }
     const std::vector<std::uint32_t>& recent_pcs() const { return recent_pcs_; }
+    // Call sites of the most recent calls, so a stop can be traced back to its
+    // caller chain.
+    const std::vector<std::uint32_t>& recent_calls() const {
+        return recent_calls_;
+    }
     // Hardware register address -> access count, for finding unimplemented
     // devices during bring-up.
     const std::map<std::uint32_t, std::uint64_t>& hardware_reads() const {
@@ -79,12 +86,16 @@ private:
 
     StepResult execute(std::uint32_t instruction, std::uint32_t pc);
     bool service_bios_call();
+    void record_call_site(std::uint32_t pc);
     // Walks a DMA2 linked list and feeds its packets to the GPU.
     void run_dma2_list();
     // Copies a CD-ROM sector into main RAM for DMA channel 3.
     void run_dma3_transfer();
-    // Raises the vertical-blank interrupt and enters the queued guest handler.
+    // Raises the vertical-blank interrupt.
     void poll_vblank();
+    // Enters the queued guest interrupt routine when a pending interrupt is
+    // unmasked, which stands in for the retail kernel's dispatcher.
+    void deliver_interrupt();
 
     std::uint32_t read8(std::uint32_t address);
     std::uint32_t read16(std::uint32_t address);
@@ -101,12 +112,15 @@ private:
     std::vector<std::uint32_t> cop0_;
     std::vector<std::uint32_t> gte_data_;
     std::vector<std::uint32_t> recent_pcs_;
+    std::vector<std::uint32_t> recent_calls_;
 
     std::uint64_t gte_commands_{0};
     std::uint64_t dma_writes_{0};
     std::uint64_t dma_lists_{0};
     std::uint64_t dma_words_{0};
     std::uint64_t vblank_count_{0};
+    std::uint64_t interrupts_delivered_{0};
+    bool interrupts_enabled_{true};
     std::uint64_t interrupt_overruns_{0};
     std::uint32_t vblank_next_{0};
     bool vblank_enabled_{false};

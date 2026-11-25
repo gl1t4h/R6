@@ -51,6 +51,10 @@ public:
     }
     void write_cdrom(std::uint32_t physical, std::uint8_t value) {
         cdrom_.write(physical - hardware::kCdromBase, value);
+        // I_STAT bit 2 is the disc controller. Games route this through the
+        // kernel's interrupt callback, so a pending CD interrupt has to show
+        // up here or the guest waits forever.
+        if (cdrom_.interrupt() != 0) interrupt_status_ |= kInterruptCdrom;
     }
     CdromDevice& cdrom() { return cdrom_; }
 
@@ -140,6 +144,9 @@ public:
     }
 
     void raise_interrupt(std::uint32_t bit) { interrupt_status_ |= bit; }
+
+    static constexpr std::uint32_t kInterruptVblank = 1u << 0;
+    static constexpr std::uint32_t kInterruptCdrom = 1u << 2;
 
     std::uint32_t interrupt_status() const { return interrupt_status_; }
     std::uint32_t interrupt_mask() const { return interrupt_mask_; }

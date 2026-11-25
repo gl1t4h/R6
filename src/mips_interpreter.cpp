@@ -18,6 +18,7 @@ constexpr std::uint32_t kDmaEnd = 0x1F801100u;
 // loop and notice when it returns.
 constexpr std::uint32_t kInterruptReturnAddress = 0x0000FFFCu;
 constexpr std::uint64_t kInterruptStepBudget = 400000u;
+constexpr std::uint64_t kMaxInterruptOverruns = 3;
 
 constexpr std::uint32_t reg(std::uint32_t instruction, std::uint32_t shift) {
     return (instruction >> shift) & 0x1Fu;
@@ -201,6 +202,41 @@ bool MipsInterpreter::service_bios_call() {
     return services_.bios_call(cpu_.pc, cpu_, ram_);
 }
 
+void MipsInterpreter::record_call_site(std::uint32_t pc) {
+    constexpr std::size_t kMaxCallSites = 16;
+    if (recent_calls_.size() >= kMaxCallSites) {
+        recent_calls_.erase(recent_calls_.begin());
+    }
+    recent_calls_.push_back(pc);
+}
+
+void MipsInterpreter::deliver_interrupt() {
+    if (!interrupts_enabled_) return;
+    const auto pending = hardware_.interrupt_status() & hardware_.interrupt_mask();
+    if (pending == 0) return;
+
+    for (std::uint32_t priority = 0; priority < 3; ++priority) {
+        const auto entry = services_.interrupt_entry(priority);
+        if (entry == 0) continue;
+        // SysEnqIntRP entry: { next entry, void (*routine)() }.
+        const auto routine = read32(entry + 4);
+        if (routine < 0x80000000u || routine >= 0x80200000u) return;
+        interrupt_return_pc_ = cpu_.pc;
+        interrupt_saved_ra_ = cpu_.gpr[31];
+        interrupt_steps_ = 0;
+        // The retail kernel enters the dispatcher with the hardware interrupt
+        // pending bit set in CAUSE and defined argument registers. Leaving the
+        // interrupted values in $a0-$a3 makes handlers act on stale pointers.
+        cop0_[13] |= 0x00000400u;  // CAUSE.IP2
+        for (std::size_t reg = 4; reg < 8; ++reg) cpu_.gpr[reg] = 0;
+        cpu_.gpr[31] = kInterruptReturnAddress;
+        cpu_.pc = routine;
+        in_interrupt_ = true;
+        ++interrupts_delivered_;
+        return;
+    }
+}
+
 void MipsInterpreter::poll_vblank() {
     constexpr std::uint32_t kVblankBit = 1u;
     constexpr std::uint32_t kVblankPeriodMicros = 16667u;
@@ -214,23 +250,6 @@ void MipsInterpreter::poll_vblank() {
     vblank_next_ = now + kVblankPeriodMicros;
     ++vblank_count_;
     hardware_.raise_interrupt(kVblankBit);
-
-    if ((hardware_.interrupt_mask() & kVblankBit) == 0) return;
-
-    for (std::uint32_t priority = 0; priority < 3; ++priority) {
-        const auto entry = services_.interrupt_entry(priority);
-        if (entry == 0) continue;
-        // SysEnqIntRP entry: { next entry, void (*routine)() }.
-        const auto routine = read32(entry + 4);
-        if (routine < 0x80000000u || routine >= 0x80200000u) return;
-        interrupt_return_pc_ = cpu_.pc;
-        interrupt_saved_ra_ = cpu_.gpr[31];
-        interrupt_steps_ = 0;
-        cpu_.gpr[31] = kInterruptReturnAddress;
-        cpu_.pc = routine;
-        in_interrupt_ = true;
-        return;
-    }
 }
 
 void MipsInterpreter::run_dma3_transfer() {
@@ -295,19 +314,23 @@ RunResult MipsInterpreter::run(std::uint64_t max_steps) {
 
         if (in_interrupt_) {
             if (++interrupt_steps_ > kInterruptStepBudget) {
-                // Report a handler that never returns, with the same recent-PC
-                // trace as any other stop, instead of hanging the run.
-                ++interrupt_overruns_;
-                result.reason = StopReason::interrupt_stalled;
-                result.pc = cpu_.pc;
-                return result;
+                // The routine left its own context, so drop the call and resume
+                // the interrupted stream. After a few of these, stop delivering
+                // interrupts rather than burning the budget on them.
+                cpu_.pc = interrupt_return_pc_;
+                cpu_.gpr[31] = interrupt_saved_ra_;
+                in_interrupt_ = false;
+                if (++interrupt_overruns_ >= kMaxInterruptOverruns) {
+                    interrupts_enabled_ = false;
+                }
+                continue;
             }
-        } else if (vblank_enabled_ && !was_delay_slot &&
-                   (result.steps & 0x3FFu) == 0) {
+        } else if (!was_delay_slot && (result.steps & 0x3FFu) == 0) {
             // Never interrupt a delay slot: the pending branch target lives in
             // the run loop, not in guest state, so resuming mid-pair would
             // lose it.
-            poll_vblank();
+            if (vblank_enabled_) poll_vblank();
+            deliver_interrupt();
         }
 
         if (current_pc == 0) {
@@ -406,6 +429,7 @@ MipsInterpreter::StepResult MipsInterpreter::execute(
                     break;
                 case 0x09: {
                     const auto link = pc + 8;
+                    record_call_site(pc);
                     result.branch = true;
                     result.target = gpr[rs];
                     gpr[rd] = link;
@@ -543,6 +567,7 @@ MipsInterpreter::StepResult MipsInterpreter::execute(
             result.target = (pc & 0xF0000000u) | ((instruction & 0x03FFFFFFu) << 2);
             break;
         case 0x03:  // jal
+            record_call_site(pc);
             gpr[31] = pc + 8;
             result.branch = true;
             result.target = (pc & 0xF0000000u) | ((instruction & 0x03FFFFFFu) << 2);

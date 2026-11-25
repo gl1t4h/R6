@@ -63,6 +63,7 @@ public:
     }
 
     std::uint32_t sector() const { return sector_; }
+    std::uint32_t sectors_read() const { return sectors_read_; }
     std::uint8_t status_byte() const { return status_; }
     std::uint32_t interrupt() const { return interrupt_; }
 
@@ -99,6 +100,7 @@ private:
             data_.assign(2048, 0);
         }
         if (reading_) ++sector_;
+        ++sectors_read_;
     }
 
     void acknowledge(std::uint32_t value) {
@@ -207,6 +209,7 @@ private:
     std::vector<std::uint8_t> data_;
     std::size_t data_index_{0};
     std::uint32_t sector_{0};
+    std::uint32_t sectors_read_{0};
     bool reading_{false};
 };
 

@@ -74,3 +74,16 @@ Until those exist, `r6-run` (which boots the guest's own executable),
 `r6-diagnostic` and `r6-tests` are the runnable artifacts.
 The renderer is a software rasterizer; there is no GPU or shader pipeline, and
 adding one would not change whether the game runs.
+
+## Running it today
+
+`R6.exe` (built from `src/player_main.cpp`, also `build\R6.exe`) is a
+double-clickable windowed player. It finds your own `.cue`/`.bin`, boots the
+disc's executable and runs it at roughly six million instructions a second
+with a live status line. It does not render the game yet: the guest parks in
+its frame-wait loop (`0x8008D0A0`/`0x8008D160`), which waits for a halfword the
+title's CD interrupt callback writes, and that callback is not serviced
+correctly. See `docs/recomp-findings.md` for the current blocker.
+
+The window title shows instruction count, primitives and display state; the
+window body shows those counters plus how many disc sectors have been read.

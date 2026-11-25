@@ -400,6 +400,7 @@ void SoftwareGpu::execute_environment(std::uint8_t opcode) {
 void SoftwareGpu::fill_rectangle(std::uint32_t rgb,
                                  std::uint32_t position,
                                  std::uint32_t size) {
+    ++fill_rectangles_;
     const auto color = to_bgr555(rgb);
     // Hardware rounds the start down and the width up to 16-pixel units, and
     // the fill is not affected by the drawing area or drawing offset.

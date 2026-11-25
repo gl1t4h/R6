@@ -392,3 +392,50 @@ game's dispatcher (`0x80087660`) but that dispatcher never returns under the
 current direct-call model, so the run parks inside it after about a million
 instructions.
 - GTE maths is still not computed, so any 3D geometry would arrive degenerate.
+
+## Why the frame loop never advances (2026-11-25)
+
+`0x8008B900` is a two-instruction leaf that returns `*(u16*)0x800B2886`. The
+program's main loop (`0x8008D0A0` … `0x8008D210`) alternates with
+`0x8008D160`, calls that leaf, and loops while the halfword is zero. Nothing in
+the main flow writes it: it is set by the title's own CD interrupt callback.
+The guest is therefore waiting on a disc interrupt, not on the display or on
+the timer, which explains why 40,000,000 instructions can execute with the
+display still off.
+
+Work done to reach that conclusion:
+
+- The disc controller now raises `I_STAT` bit 2 when its interrupt flag is
+  non-zero (`HardwareMap::write_cdrom`), which is what the kernel's own
+  dispatch would do.
+- Interrupt delivery was split out of `poll_vblank` into
+  `MipsInterpreter::deliver_interrupt`. It enters the queued routine with
+  `CAUSE.IP2` set and `$a0`-`$a3` zeroed, matching how the retail kernel
+  enters a dispatcher instead of inheriting whatever the interrupted code left
+  in argument registers.
+- With delivery enabled the guest does execute its own callback path
+  (`0x8008BE64` → `0x800916xx` → game code), but the routine leaves its
+  context instead of returning through `$ra`, and one of the calls it makes
+  lands in a `memset`-style loop (`0x80083EA0`) with a 32-bit size, so it
+  cannot finish. A runaway handler is now bounded at 400,000 steps: the
+  interrupted PC and `$ra` are restored and the stream resumes, and delivery
+  stops after three overruns rather than spending the whole budget.
+
+Unhandled kernel vectors at boot are `A(0x13)`, `B(0x19)`, `B(0x5B)`,
+`A(0x72)`, `B(0x4A)`, `B(0x56)`, `B(0x57)`, `B(0x4B)` and `A(0x70)`. The
+memory-card probes are harmless, but `A(0x72)` and `B(0x5B)` are called with
+result pointers (`0x800B2888`, `0x800B2884`) from inside the callback the frame
+loop depends on, so they are the next thing to implement: the callback is
+almost certainly calling them, getting a placeholder result, and then using it
+as a length.
+
+## Double-clickable player
+
+`src/player_main.cpp` builds `R6.exe`, a windowed (no console) front end that
+locates the user's own BIN/CUE in its own folder, `Downloads`, `Desktop` or
+`Documents`, falls back to an open-file dialog, boots the disc's PS-X EXE with
+the same stack correction, and presents the 320x240 display area scaled 3x.
+ESC quits; F12 writes `r6-frame.ppm` next to the executable. `--shot <file>
+--steps N` runs the same path headless and saves one frame. While the guest has
+not drawn anything the window shows live instruction, primitive, disc-sector
+and stop-state counters rather than a black rectangle.

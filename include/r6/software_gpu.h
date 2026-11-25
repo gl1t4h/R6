@@ -57,6 +57,11 @@ public:
     }
     std::uint8_t last_gp1_command() const { return last_gp1_command_; }
     bool display_enabled() const { return display_enabled_; }
+    std::uint32_t fill_rectangles() const { return fill_rectangles_; }
+    std::int32_t draw_area_left() const { return draw_area_left_; }
+    std::int32_t draw_area_top() const { return draw_area_top_; }
+    std::int32_t draw_area_right() const { return draw_area_right_; }
+    std::int32_t draw_area_bottom() const { return draw_area_bottom_; }
     std::uint32_t display_area_x() const {
         return static_cast<std::uint32_t>(display_area_x_);
     }
@@ -146,6 +151,7 @@ private:
     std::size_t download_index_{0};
 
     std::uint32_t rendered_primitives_{0};
+    std::uint32_t fill_rectangles_{0};
     std::uint32_t unsupported_commands_{0};
     std::map<std::uint8_t, std::uint32_t> unsupported_by_opcode_;
     std::uint8_t last_unsupported_opcode_{0};
