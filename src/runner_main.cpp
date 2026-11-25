@@ -209,6 +209,7 @@ int main(int argc, char** argv) {
     std::uint64_t steps = 5000000;
     std::filesystem::path frame_path;
     std::uint32_t entry_override = 0;
+    bool deliver_vblank = false;
     std::vector<std::pair<std::uint32_t, std::uint32_t>> pokes;
 
     for (int index = 1; index < argc; ++index) {
@@ -220,6 +221,8 @@ int main(int argc, char** argv) {
         } else if (argument == "--entry" && index + 1 < argc) {
             entry_override = static_cast<std::uint32_t>(
                 std::stoul(argv[++index], nullptr, 0));
+        } else if (argument == "--vblank") {
+            deliver_vblank = true;
         } else if (argument == "--poke" && index + 1 < argc) {
             // Debug aid: patch one guest word before the run starts, so a
             // startup global can be corrected without editing the image.
@@ -238,7 +241,7 @@ int main(int argc, char** argv) {
 
     if (input.empty()) {
         std::cerr << "usage: r6-run <game.cue|game.bin> [--steps N]"
-                     " [--entry 0xADDR] [--poke 0xADDR=0xVALUE]"
+                     " [--entry 0xADDR] [--poke 0xADDR=0xVALUE] [--vblank]"
                      " [--dump-frame frame.ppm]\n"
                   << "Runs your own local copy. No game data is copied or"
                      " uploaded.\n";
@@ -315,6 +318,7 @@ int main(int argc, char** argv) {
     cpu.gpr[29] =
         image.stack_base != 0 ? image.stack_base : 0x801FFFF0u;
     cpu.gpr[31] = 0;
+    interpreter.set_vblank_enabled(deliver_vblank);
 
     std::cout << "R6 development runner\n"
               << "This executes your local copy; it is not a playable game.\n\n"
@@ -366,6 +370,9 @@ int main(int argc, char** argv) {
         case r6::StopReason::guest_break:
             std::cout << " (guest executed BREAK)\n";
             break;
+        case r6::StopReason::interrupt_stalled:
+            std::cout << " (interrupt routine did not return)\n";
+            break;
     }
 
 
@@ -408,10 +415,30 @@ int main(int argc, char** argv) {
               << " unsupported commands\n"
               << "GTE: " << interpreter.gte_commands()
               << " commands (not computed yet)\n"
-              << "DMA: " << interpreter.dma_writes()
-              << " register writes (not executed yet)\n"
+              << "DMA: " << interpreter.dma_writes() << " register writes, "
+              << interpreter.dma_lists() << " linked lists, "
+              << interpreter.dma_words() << " words sent to the GPU\n"
               << "BIOS: " << services.bios().unhandled_call_count()
-              << " unhandled vectors\n";
+              << " unhandled vectors\n"
+              << "VBlank: " << interpreter.vblanks() << " delivered, "
+              << interpreter.interrupt_overruns() << " handler overruns\n";
+
+    for (std::uint32_t priority = 0; priority < 3; ++priority) {
+        const auto entry = services.interrupt_entry(priority);
+        if (entry == 0) continue;
+        std::cout << "Interrupt entry " << priority << ": 0x" << std::hex
+                  << entry << " next=0x" << ram.read32(entry & kRamMask)
+                  << " routine=0x" << ram.read32((entry + 4) & kRamMask)
+                  << std::dec << "\n";
+    }
+
+    if (!services.bios().unhandled_log().empty()) {
+        std::cout << "\nUnhandled kernel calls (first "
+                  << services.bios().unhandled_log().size() << "):\n";
+        for (const auto& entry : services.bios().unhandled_log()) {
+            std::cout << "  " << entry << "\n";
+        }
+    }
 
     if (!services.bios().tty_output().empty()) {
         std::cout << "\nGuest TTY output:\n" << services.bios().tty_output()

@@ -28,6 +28,13 @@ public:
     // pc identifies the 0xA0/0xB0/0xC0 trap being serviced. Returns false when
     // the address is not a kernel entry point.
     virtual bool bios_call(std::uint32_t pc, CpuState& cpu, Memory& memory) = 0;
+
+    // Address of the guest interrupt routine registered for this priority with
+    // SysEnqIntRP, or zero when none is queued. The interpreter calls it to
+    // deliver hardware interrupts, which the retail kernel would do.
+    virtual std::uint32_t interrupt_entry(std::uint32_t /*priority*/) {
+        return 0;
+    }
 };
 
 class NullPlatformServices final : public PlatformServices {

@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <cstddef>
+#include <vector>
 
 #include "r6/bios_services.h"
 #include "r6/mips_interpreter.h"
@@ -16,7 +17,7 @@ using r6::MipsInterpreter;
 using r6::PlatformServices;
 using r6::StopReason;
 
-class TestServices final : public PlatformServices {
+class TestServices : public PlatformServices {
 public:
     std::uint16_t read_controller(std::size_t) override { return 0xFFFF; }
     void submit_audio_samples(const std::int16_t*, std::size_t) override {}
@@ -36,6 +37,16 @@ public:
     }
 
     BiosServices bios;
+};
+
+class CaptureServices final : public TestServices {
+public:
+    void write_gpu_register(std::uint32_t address,
+                            std::uint32_t value) override {
+        if (address == 0x1F801810u) gp0.push_back(value);
+    }
+
+    std::vector<std::uint32_t> gp0;
 };
 
 std::uint32_t beq(std::uint32_t rs, std::uint32_t rt, std::int32_t offset) {
@@ -220,6 +231,36 @@ void timer_mode_reads_back() {
     R6_CHECK(cpu.gpr[2] == 0x00400002u);
 }
 
+void dma2_linked_list_reaches_the_gpu() {
+    Memory ram(2u * 1024u * 1024u);
+    CaptureServices services;
+    MipsInterpreter interpreter(ram, services);
+    auto& cpu = interpreter.cpu();
+    cpu.pc = 0x80010000u;
+
+    ram.write32(0x10000, 0x3C081F80u);    // lui t0, 0x1F80
+    ram.write32(0x10004, 0x350810A0u);    // ori t0, t0, 0x10A0 (DMA2 MADR)
+    ram.write32(0x10008, 0x3C098002u);    // lui t1, 0x8002
+    ram.write32(0x1000Cu, 0x35290000u);   // ori t1, t1, 0x0000 (list address)
+    ram.write32(0x10010, 0xAD090000u);    // sw t1, 0(t0)
+    ram.write32(0x10014, 0x25080008u);    // addiu t0, t0, 8 (DMA2 CHCR)
+    ram.write32(0x10018, 0x3C090100u);    // lui t1, 0x0100
+    ram.write32(0x1001Cu, 0x35290401u);   // ori t1: start, linked list, to GPU
+    ram.write32(0x10020, 0xAD090000u);    // sw t1, 0(t0)
+
+    // Two-word packet, terminated by the end marker.
+    ram.write32(0x20000, 0x02FFFFFFu);
+    ram.write32(0x20004, 0xAAAAAAAAu);
+    ram.write32(0x20008, 0xBBBBBBBBu);
+
+    interpreter.run(9);
+    R6_CHECK(interpreter.dma_lists() == 1);
+    R6_CHECK(interpreter.dma_words() == 2);
+    R6_CHECK(services.gp0.size() == 2);
+    R6_CHECK(services.gp0[0] == 0xAAAAAAAAu);
+    R6_CHECK(services.gp0[1] == 0xBBBBBBBBu);
+}
+
 }  // namespace
 
 void run_mips_interpreter_tests() {
@@ -233,4 +274,5 @@ void run_mips_interpreter_tests() {
     break_stops_execution();
     dma_start_reads_back_idle();
     timer_mode_reads_back();
+    dma2_linked_list_reaches_the_gpu();
 }

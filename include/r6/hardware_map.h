@@ -15,9 +15,11 @@ constexpr std::uint32_t kTimer1 = 0x1F801110;
 constexpr std::uint32_t kTimer2 = 0x1F801120;
 constexpr std::uint32_t kInterruptStatus = 0x1F801070;
 constexpr std::uint32_t kInterruptMask = 0x1F801074;
+constexpr std::uint32_t kDma0BaseAddress = 0x1F801080;
 constexpr std::uint32_t kDma0ChannelControl = 0x1F801088;
+constexpr std::uint32_t kDma2BaseAddress = 0x1F8010A0;
 constexpr std::uint32_t kDma2ChannelControl = 0x1F8010A8;
-constexpr std::uint32_t kDmaChannelControlStride = 0x10;
+constexpr std::uint32_t kDmaChannelStride = 0x10;
 }  // namespace hardware
 
 // Register file for the devices a booting game polls before it does anything
@@ -45,11 +47,26 @@ public:
         if (address == hardware::kInterruptMask) return interrupt_mask_;
         if (address == hardware::kGpuStatus) return services_.read_gpu_status();
         if (address == hardware::kGpuCommand) return services_.read_gpu_data();
-        const auto channel = dma_channel(address);
+        const auto channel = dma_register(address);
         if (channel >= 0) {
-            return dma_control_[static_cast<std::size_t>(channel)];
+            const auto slot = static_cast<std::size_t>(channel);
+            if (channel % 4 == 0) return dma_address_[slot / 4];
+            if (channel % 4 == 1) return dma_counter_[slot / 4];
+            return dma_control_[slot / 4];
         }
         return 0;
+    }
+
+    // DMA channel base address, word counter and control register, for the
+    // interpreter that executes linked lists.
+    std::uint32_t dma_address(std::size_t channel) const {
+        return dma_address_[channel] & 0x00FFFFFFu;
+    }
+    std::uint32_t dma_counter(std::size_t channel) const {
+        return dma_counter_[channel];
+    }
+    std::uint32_t dma_control(std::size_t channel) const {
+        return dma_control_[channel];
     }
 
     void write32(std::uint32_t address, std::uint32_t value) {
@@ -82,12 +99,23 @@ public:
             interrupt_mask_ = value;
             return;
         }
-        const auto channel = dma_channel(address);
+        const auto channel = dma_register(address);
         if (channel >= 0) {
-            // Starting bits are accepted and the transfer is already complete,
-            // so the busy and trigger bits read back clear.
-            dma_control_[static_cast<std::size_t>(channel)] =
-                value & ~(kDmaBusy | kDmaTrigger);
+            const auto slot = static_cast<std::size_t>(channel / 4);
+            switch (channel % 4) {
+                case 0:
+                    dma_address_[slot] = value & 0x00FFFFFFu;
+                    return;
+                case 1:
+                    dma_counter_[slot] = value;
+                    return;
+                default:
+                    // Starting bits are accepted and the transfer completes
+                    // before the guest can poll, so busy and trigger read
+                    // back clear.
+                    dma_control_[slot] = value & ~(kDmaBusy | kDmaTrigger);
+                    return;
+            }
         }
     }
 
@@ -106,14 +134,18 @@ private:
         std::uint32_t offset{0};
     };
 
-    static int dma_channel(std::uint32_t address) {
-        constexpr std::uint32_t first = hardware::kDma0ChannelControl;
-        constexpr std::uint32_t stride = hardware::kDmaChannelControlStride;
+    // Index of a DMA register within the block: channel * 4 + register, where
+    // register 0 is the base address, 1 the word counter and 2 the control.
+    static int dma_register(std::uint32_t address) {
+        constexpr std::uint32_t first = hardware::kDma0BaseAddress;
+        constexpr std::uint32_t stride = hardware::kDmaChannelStride;
         if (address < first) return -1;
-        const auto index = (address - first) / stride;
-        if (index >= 7) return -1;
-        if ((address - first) % stride != 0) return -1;
-        return static_cast<int>(index);
+        const auto offset = address - first;
+        if (offset % 4 != 0) return -1;
+        const auto index = offset / stride;
+        const auto within = (offset % stride) / 4;
+        if (index >= 7 || within > 2) return -1;
+        return static_cast<int>(index * 4 + within);
     }
 
     std::uint32_t timer_value(std::size_t timer) const {
@@ -122,6 +154,8 @@ private:
 
     PlatformServices& services_;
     std::array<Timer, 3> timers_{};
+    std::array<std::uint32_t, 7> dma_address_{};
+    std::array<std::uint32_t, 7> dma_counter_{};
     std::array<std::uint32_t, 7> dma_control_{};
     std::uint32_t interrupt_status_{0};
     std::uint32_t interrupt_mask_{0};

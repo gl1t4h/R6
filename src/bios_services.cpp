@@ -82,8 +82,10 @@ std::uint32_t BiosServices::handle_a0(std::uint32_t vector, CpuState& cpu,
             return puts(memory, cpu.gpr[4]);
         case 0x3F:  // printf
             return print_format(memory, cpu);
+        case 0x44:  // FlushCache: the host has no instruction cache to write
+            return 0;
         default:
-            record_unhandled(vector);
+            record_unhandled(BiosTable::a0, vector, cpu);
             return 0;
     }
 }
@@ -112,15 +114,31 @@ std::uint32_t BiosServices::handle_b0(std::uint32_t vector, CpuState& cpu,
         case 0x3F:  // puts
             return puts(memory, cpu.gpr[4]);
         default:
-            record_unhandled(vector);
+            record_unhandled(BiosTable::b0, vector, cpu);
             return 0;
     }
 }
 
-std::uint32_t BiosServices::handle_c0(std::uint32_t vector, CpuState&) {
-    // Kernel table entries are recorded rather than guessed at.
-    record_unhandled(vector);
-    return 0;
+std::uint32_t BiosServices::handle_c0(std::uint32_t vector, CpuState& cpu) {
+    switch (vector) {
+        case 0x02:  // SysEnqIntRP(priority, entry)
+            if (cpu.gpr[4] < interrupt_entries_.size()) {
+                interrupt_entries_[cpu.gpr[4]] = cpu.gpr[5];
+                return 1;
+            }
+            return 0;
+        case 0x03:  // SysDeqIntRP(priority, entry)
+            if (cpu.gpr[4] < interrupt_entries_.size()) {
+                interrupt_entries_[cpu.gpr[4]] = 0;
+                return 1;
+            }
+            return 0;
+        case 0x0A:  // ChangeClearRCnt(timer, mode): the caller owns the flag.
+            return 1;
+        default:
+            record_unhandled(BiosTable::c0, vector, cpu);
+            return 0;
+    }
 }
 
 BiosServices::EventSlot* BiosServices::find_event(std::uint32_t handle) {
@@ -357,8 +375,23 @@ void BiosServices::record_call(BiosTable table, std::uint32_t vector) {
     ++call_counts_[{static_cast<std::uint8_t>(table), vector}];
 }
 
-void BiosServices::record_unhandled(std::uint32_t vector) {
+void BiosServices::record_unhandled(BiosTable table, std::uint32_t vector,
+                                   const CpuState& cpu) {
     unhandled_calls_.push_back(vector);
+    constexpr std::size_t kMaxLoggedCalls = 64;
+    if (unhandled_log_.size() >= kMaxLoggedCalls) return;
+    const char prefix =
+        table == BiosTable::a0 ? 'A' : (table == BiosTable::b0 ? 'B' : 'C');
+    std::string entry;
+    entry.push_back(prefix);
+    entry += "(";
+    entry += format_unsigned(vector, 16, false);
+    entry += ")";
+    for (std::size_t index = 4; index < 8; ++index) {
+        entry += index == 4 ? " a=" : ",";
+        entry += format_unsigned(cpu.gpr[index], 16, false);
+    }
+    unhandled_log_.push_back(entry);
 }
 
 std::size_t BiosServices::call_count(BiosTable table,

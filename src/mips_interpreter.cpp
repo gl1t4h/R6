@@ -14,6 +14,10 @@ constexpr std::uint32_t kHardwareBase = 0x1F801000u;
 constexpr std::uint32_t kHardwareEnd = 0x1F803000u;
 constexpr std::uint32_t kDmaBase = 0x1F801080u;
 constexpr std::uint32_t kDmaEnd = 0x1F801100u;
+// Sentinel return address used to call a guest interrupt routine from the run
+// loop and notice when it returns.
+constexpr std::uint32_t kInterruptReturnAddress = 0x0000FFFCu;
+constexpr std::uint64_t kInterruptStepBudget = 400000u;
 
 constexpr std::uint32_t reg(std::uint32_t instruction, std::uint32_t shift) {
     return (instruction >> shift) & 0x1Fu;
@@ -130,11 +134,17 @@ void MipsInterpreter::write32(std::uint32_t address, std::uint32_t value) {
     if (physical >= kHardwareBase && physical < kHardwareEnd) {
         ++hardware_writes_[physical & ~3u];
         if (physical >= kDmaBase && physical < kDmaEnd) {
-            // Transfers complete immediately in the hardware map, so a guest
-            // polling the channel control register sees the busy bit clear.
             ++dma_writes_;
         }
         hardware_.write32(physical, value);
+        if (physical == hardware::kDma2ChannelControl) {
+            const auto start = (value & (1u << 24)) != 0;
+            const auto sync_mode = (value >> 9) & 3u;
+            const auto from_ram = (value & 1u) == 0;
+            if (start && sync_mode == 2 && from_ram) {
+                run_dma2_list();
+            }
+        }
         return;
     }
     ++unknown_hardware_writes_;
@@ -142,6 +152,66 @@ void MipsInterpreter::write32(std::uint32_t address, std::uint32_t value) {
 
 bool MipsInterpreter::service_bios_call() {
     return services_.bios_call(cpu_.pc, cpu_, ram_);
+}
+
+void MipsInterpreter::poll_vblank() {
+    constexpr std::uint32_t kVblankBit = 1u;
+    constexpr std::uint32_t kVblankPeriodMicros = 16667u;
+
+    const auto now = services_.read_timer(0);
+    if (vblank_next_ == 0) {
+        vblank_next_ = now + kVblankPeriodMicros;
+        return;
+    }
+    if (now < vblank_next_) return;
+    vblank_next_ = now + kVblankPeriodMicros;
+    ++vblank_count_;
+    hardware_.raise_interrupt(kVblankBit);
+
+    if ((hardware_.interrupt_mask() & kVblankBit) == 0) return;
+
+    for (std::uint32_t priority = 0; priority < 3; ++priority) {
+        const auto entry = services_.interrupt_entry(priority);
+        if (entry == 0) continue;
+        // SysEnqIntRP entry: { next entry, void (*routine)() }.
+        const auto routine = read32(entry + 4);
+        if (routine < 0x80000000u || routine >= 0x80200000u) return;
+        interrupt_return_pc_ = cpu_.pc;
+        interrupt_saved_ra_ = cpu_.gpr[31];
+        interrupt_steps_ = 0;
+        cpu_.gpr[31] = kInterruptReturnAddress;
+        cpu_.pc = routine;
+        in_interrupt_ = true;
+        return;
+    }
+}
+
+void MipsInterpreter::run_dma2_list() {
+    constexpr std::uint32_t kEndMarker = 0x00FFFFFFu;
+    constexpr std::uint32_t kRamAddressMask = 0x001FFFFCu;
+    constexpr std::size_t kMaxNodes = 4096;
+    constexpr std::uint64_t kMaxWords = 1u << 20;
+
+    auto address = hardware_.dma_address(2) & kRamAddressMask;
+    ++dma_lists_;
+
+    for (std::size_t node = 0; node < kMaxNodes && dma_words_ < kMaxWords;
+         ++node) {
+        // Packet tag: bits 24-31 hold the payload word count and bits 0-23 the
+        // address of the next tag.
+        const auto tag = read32(0x80000000u | address);
+        const auto words = tag >> 24;
+        const auto next = tag & kEndMarker;
+        for (std::uint32_t word = 0; word < words; ++word) {
+            const auto source =
+                (address + 4 + word * 4) & kRamAddressMask;
+            services_.write_gpu_register(hardware::kGpuCommand,
+                                         read32(0x80000000u | source));
+            ++dma_words_;
+        }
+        if (next == kEndMarker) break;
+        address = next & kRamAddressMask;
+    }
 }
 
 RunResult MipsInterpreter::run(std::uint64_t max_steps) {
@@ -154,6 +224,28 @@ RunResult MipsInterpreter::run(std::uint64_t max_steps) {
         const bool was_delay_slot = in_delay_slot;
         const auto target = delay_target;
         in_delay_slot = false;
+
+        if (current_pc == kInterruptReturnAddress) {
+            // The queued interrupt routine returned; resume the interrupted
+            // instruction stream where it left off.
+            cpu_.pc = interrupt_return_pc_;
+            cpu_.gpr[31] = interrupt_saved_ra_;
+            in_interrupt_ = false;
+            continue;
+        }
+
+        if (in_interrupt_) {
+            if (++interrupt_steps_ > kInterruptStepBudget) {
+                // Report a handler that never returns, with the same recent-PC
+                // trace as any other stop, instead of hanging the run.
+                ++interrupt_overruns_;
+                result.reason = StopReason::interrupt_stalled;
+                result.pc = cpu_.pc;
+                return result;
+            }
+        } else if (vblank_enabled_ && (result.steps & 0x3FFu) == 0) {
+            poll_vblank();
+        }
 
         if (current_pc == 0) {
             result.reason = StopReason::returned;

@@ -20,6 +20,8 @@ enum class StopReason {
     // The guest executed BREAK. PsyQ startup code ends with BREAK after main
     // returns, so this is a normal program exit, not a fault.
     guest_break,
+    // A delivered interrupt routine never returned to its caller.
+    interrupt_stalled,
 };
 
 struct RunResult {
@@ -46,6 +48,13 @@ public:
 
     std::uint64_t gte_commands() const { return gte_commands_; }
     std::uint64_t dma_writes() const { return dma_writes_; }
+    std::uint64_t dma_lists() const { return dma_lists_; }
+    std::uint64_t dma_words() const { return dma_words_; }
+    std::uint64_t vblanks() const { return vblank_count_; }
+    std::uint64_t interrupt_overruns() const { return interrupt_overruns_; }
+    // Delivering vertical-blank interrupts is opt-in: the guest handler needs
+    // devices that are still stubs, so it can park inside the handler.
+    void set_vblank_enabled(bool enabled) { vblank_enabled_ = enabled; }
     std::uint64_t unknown_hardware_reads() const { return unknown_hardware_reads_; }
     std::uint64_t unknown_hardware_writes() const {
         return unknown_hardware_writes_;
@@ -70,6 +79,10 @@ private:
 
     StepResult execute(std::uint32_t instruction, std::uint32_t pc);
     bool service_bios_call();
+    // Walks a DMA2 linked list and feeds its packets to the GPU.
+    void run_dma2_list();
+    // Raises the vertical-blank interrupt and enters the queued guest handler.
+    void poll_vblank();
 
     std::uint32_t read8(std::uint32_t address);
     std::uint32_t read16(std::uint32_t address);
@@ -89,6 +102,16 @@ private:
 
     std::uint64_t gte_commands_{0};
     std::uint64_t dma_writes_{0};
+    std::uint64_t dma_lists_{0};
+    std::uint64_t dma_words_{0};
+    std::uint64_t vblank_count_{0};
+    std::uint64_t interrupt_overruns_{0};
+    std::uint32_t vblank_next_{0};
+    bool vblank_enabled_{false};
+    bool in_interrupt_{false};
+    std::uint64_t interrupt_steps_{0};
+    std::uint32_t interrupt_return_pc_{0};
+    std::uint32_t interrupt_saved_ra_{0};
     std::uint64_t unknown_hardware_reads_{0};
     std::uint64_t unknown_hardware_writes_{0};
     std::map<std::uint32_t, std::uint64_t> hardware_reads_;

@@ -37,10 +37,11 @@ None.
   bring-up. The hardware map models the three root counters, DMA channel
   control with instant completion, and `I_STAT`/`I_MASK`, which took a run of
   the USA executable from one kernel call to 49.
-- **Next step:** Vertical-blank interrupts and kernel callback dispatch. With a
-  valid stack the guest now reaches its library initialisation, prints
-  `ResetGraph`/`CD_init` diagnostics and then waits in a loop that only an
-  interrupt handler can release. After that, GTE geometry and DMA2 lists.
+- **Next step:** The CD-ROM controller. DMA2 linked lists and interrupt
+  registration are in place, and `--vblank` reaches the game's own dispatcher,
+  but the guest never writes a single GP0 packet: after `CD_init` it waits on
+  the disc. Command responses, the interrupt flag and DMA3 sector transfers
+  are what unblock the first frame. GTE maths and MDEC come after that.
 - **Playable native build:** No
 - **Distributed game assets:** No
 

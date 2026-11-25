@@ -119,6 +119,10 @@ bool WindowsPlatformServices::bios_call(std::uint32_t pc,
     return true;
 }
 
+std::uint32_t WindowsPlatformServices::interrupt_entry(std::uint32_t priority) {
+    return bios_.interrupt_entry(priority);
+}
+
 void WindowsPlatformServices::set_controller_state(
     std::size_t port,
     std::uint16_t active_low_state) {

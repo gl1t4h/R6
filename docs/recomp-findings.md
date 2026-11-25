@@ -325,3 +325,42 @@ registered callbacks, because library timeouts are not a substitute for them.
 
 `r6-tests` covers the two behaviours that matter for bring-up: a started DMA
 channel reads back idle, and a timer mode register reads back its value.
+
+## 2026-11-24 — Why nothing renders yet
+
+DMA2 linked lists, the path GPU drawing packets actually take, are now walked
+by the interpreter: a channel-control write with the start bit, linked-list
+sync mode and RAM-to-GPU direction sends every packet word from the list to
+GP0. A test builds a two-word list in emulated RAM and asserts both words
+arrive.
+
+Interrupt registration is implemented too. `C(0x02)`/`C(0x03)`
+(`SysEnqIntRP`/`SysDeqIntRP`) now keep the queued entry per priority,
+`C(0x0A)` (`ChangeClearRCnt`) and `A(0x44)` (`FlushCache`) return instead of
+being recorded as unknown, and `--vblank` delivers a vertical-blank interrupt
+by entering the queued routine and resuming the interrupted stream when it
+returns.
+
+With `--vblank` the run does reach the game's own dispatcher: entry
+`0x800C1528`, routine `0x80087660`. That dispatcher maintains a VBlank counter
+at `0x800C1538` (capped at 150), but the run then parks inside the handler, in
+the same timer-polling delay loop the main thread uses, until the handler step
+budget expires. It is therefore off by default; the default run reaches
+40,000,000 instructions instead of stopping at 1.1 million.
+
+What the traces say about the missing renderer:
+
+- The guest never writes GP0 at all: `rendered_primitives()` and
+  `unsupported_commands()` both stay at zero, so there is nothing to rasterise
+  rather than a broken rasteriser.
+- After `CD_init` the guest polls the CD controller status
+  (`0x1F801800`) once and then spends the rest of the run alternating between
+  the timer delay loop and GPU status reads.
+- 19 kernel vectors are still unhandled, including the sound, card and
+  `A(0x72)` entries.
+
+The next subsystem is the CD-ROM controller, not the rasteriser: the disc read
+path only copies user sectors on demand, so a guest that waits for a command
+interrupt or a DMA3 sector transfer never advances. GTE maths and MDEC are
+the milestones after that, because the first thing this title wants to show is
+its intro.

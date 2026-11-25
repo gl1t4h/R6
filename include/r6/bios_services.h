@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <map>
@@ -47,6 +48,19 @@ public:
     }
     std::uint32_t unhandled_vector(std::size_t index) const;
 
+    // SysEnqIntRP/SysDeqIntRP bookkeeping. The interpreter calls the queued
+    // routine when a hardware interrupt has to be delivered.
+    std::uint32_t interrupt_entry(std::uint32_t priority) const {
+        return priority < interrupt_entries_.size()
+                   ? interrupt_entries_[priority]
+                   : 0;
+    }
+    // Human-readable log of the first unhandled calls, arguments included, so
+    // the next kernel vector to implement is obvious during bring-up.
+    const std::vector<std::string>& unhandled_log() const {
+        return unhandled_log_;
+    }
+
 private:
     struct EventSlot {
         bool open{false};
@@ -84,10 +98,13 @@ private:
     std::string read_string(Memory& memory, std::uint32_t address) const;
 
     void record_call(BiosTable table, std::uint32_t vector);
-    void record_unhandled(std::uint32_t vector);
+    void record_unhandled(BiosTable table, std::uint32_t vector,
+                          const CpuState& cpu);
 
+    std::array<std::uint32_t, 3> interrupt_entries_{};
     std::vector<EventSlot> events_{16};
     std::vector<std::uint32_t> unhandled_calls_;
+    std::vector<std::string> unhandled_log_;
     std::map<std::pair<std::uint8_t, std::uint32_t>, std::size_t> call_counts_;
     std::string tty_;
     bool exited_{false};
