@@ -35,15 +35,19 @@ None.
   `BREAK` after `main` returns. The runner reports the recent guest PCs, warns
   when the guest stack leaves RAM, and accepts `--entry` and `--poke` for
   bring-up. The hardware map models the three root counters, DMA channel
-  control with instant completion, and `I_STAT`/`I_MASK`, which took a run of
-  the USA executable from one kernel call to 49.
-- **Next step:** The vertical-blank path. A CD-ROM controller (registers,
-  commands, interrupt flag, DMA3 sector transfers) removed the `CD timeout`
-  loop and the guest now submits DMA2 lists, but its interrupt dispatcher never
-  returns under the current direct-call model, so the frame loop never runs and
-  VRAM stays empty with the display off. Making the kernel's interrupt entry
-  and `rfe` return path work is what turns those packets into a frame; GTE
-  maths and MDEC follow.
+  control with instant completion, and `I_STAT`/`I_MASK`. The disc controller
+  serves sector reads and validates positions, and the guest now reaches its
+  own frame loop. The interrupt controller now implements the real PS1
+  acknowledgement polarity: writing a zero to `I_STAT` clears that source and
+  writing one leaves it unchanged. That let libetc's dispatcher finish instead
+  of retrying on an unacknowledged vblank: an 80M-instruction run delivers
+  over 1,200 vblanks with two handler overruns, and the VSync counter advances.
+- **Next step:** The CD streaming callback. The guest still issues only the
+  loader's two reads, then parks in its CD wait (`0x8008D160` and the timer
+  clear loop around `0x80084C04`) instead of submitting a scene. The next
+  concrete check is what `intrData`/CD callback field the async read wrapper is
+  waiting for, and whether the controller reports the full `GetID`/`GetTN`
+  sequence its init path expects. GTE maths and MDEC follow.
 - **Playable native build:** No
 - **Distributed game assets:** No
 
@@ -64,8 +68,10 @@ program to launch yet. A playable Spider-Man build still needs:
    handlers and thread scheduler the executable expects to find at 0xA0/0xB0/
    0xC0. The native kernel layer covers TTY/exit/events only, so a recompiled
    program still has to start itself the way `_start` expects.
-3. **Bus and DMA** — GPU DMA linked lists (DMA2), CD-ROM sector streaming for
-   `CD.WAD`/`CINEMAS.XA`, timers, and VBlank/IRQ delivery.
+3. **CD streaming and DMA** — GPU DMA linked lists (DMA2) and CD-ROM sectors
+   work for the loader, but the game's async streaming callback never completes,
+   so `CD.WAD`/`CINEMAS.XA` data is not requested after boot. VBlank/IRQ
+   delivery now runs through the guest's own dispatcher and returns.
 4. **Audio and video output** — SPU/XA playback and a real window presenting the
    display area instead of an in-memory frame.
 5. **Input protocol** — the pad serial protocol, not just a raw key state.
@@ -81,10 +87,10 @@ adding one would not change whether the game runs.
 `build\spider-man-r6.exe`) is a
 double-clickable windowed player. It finds your own `.cue`/`.bin`, boots the
 disc's executable and runs it at roughly six million instructions a second
-with a live status line. It does not render the game yet: the guest parks in
-its frame-wait loop (`0x8008D0A0`/`0x8008D160`), which waits for a halfword the
-title's CD interrupt callback writes, and that callback is not serviced
-correctly. See `docs/recomp-findings.md` for the current blocker.
+with a live status line. It does not render the game yet: the guest's vblank
+handler and VSync callbacks now run, but the main loop still waits on its CD
+streaming callback and never submits a scene. See `docs/recomp-findings.md` for
+the current blocker.
 
 The window title shows instruction count, primitives and display state; the
 window body shows those counters plus how many disc sectors have been read.

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <map>
@@ -75,6 +76,21 @@ public:
     }
     const std::vector<std::vector<std::uint32_t>>& irq_traces() const {
         return irq_traces_;
+    }
+    // Tail of an interrupt handler that exhausted its step budget, so an
+    // overrun can be attributed to the loop it actually reached.
+    const std::vector<std::vector<std::uint32_t>>& irq_overrun_traces() const {
+        return irq_overrun_traces_;
+    }
+    // Busiest PCs at the moment a handler exhausted its budget. The tail alone
+    // shows only the last instructions, which can be a plain subroutine that
+    // is not where the time went.
+    const std::vector<std::vector<std::pair<std::uint32_t, std::uint64_t>>>&
+    irq_overrun_hot() const {
+        return irq_overrun_hot_;
+    }
+    const std::vector<std::string>& irq_overrun_log() const {
+        return irq_overrun_log_;
     }
     const std::map<std::uint32_t, std::uint64_t>& irq_hot() const {
         return irq_hot_;
@@ -154,6 +170,15 @@ private:
     // First PCs executed inside the last delivered interrupt routine.
     std::vector<std::uint32_t> irq_pcs_;
     std::vector<std::vector<std::uint32_t>> irq_traces_;
+    // Last instructions executed inside a handler, kept as a ring while it
+    // runs. Copied into irq_overrun_traces_ when the budget expires.
+    std::array<std::uint32_t, 64> irq_tail_{};
+    std::size_t irq_tail_size_{0};
+    std::size_t irq_tail_next_{0};
+    std::vector<std::vector<std::uint32_t>> irq_overrun_traces_;
+    std::vector<std::vector<std::pair<std::uint32_t, std::uint64_t>>>
+        irq_overrun_hot_;
+    std::vector<std::string> irq_overrun_log_;
     // PCs executed inside the last handler, with how often, so a stall can
     // be attributed to a single loop instead of guessed at.
     std::map<std::uint32_t, std::uint64_t> irq_hot_;

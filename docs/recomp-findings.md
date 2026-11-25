@@ -320,8 +320,9 @@ registered callbacks, because library timeouts are not a substitute for them.
   busy and trigger bits read back clear, because the transfer is already done.
   Previously the writes were counted and dropped, so any guest polling for
   completion spun forever.
-- `I_STAT`/`I_MASK` with write-one-to-acknowledge semantics on the status
-  register.
+- `I_STAT`/`I_MASK`. `I_STAT` uses the real PS1 acknowledgement polarity:
+  writing zero clears a source, writing one leaves it unchanged. (An earlier
+  version of this model had it backwards; see the I_STAT section below.)
 
 `r6-tests` covers the two behaviours that matter for bring-up: a started DMA
 channel reads back idle, and a timer mode register reads back its value.
@@ -429,13 +430,62 @@ loop depends on, so they are the next thing to implement: the callback is
 almost certainly calling them, getting a placeholder result, and then using it
 as a length.
 
+## 2026-11-24 — I_STAT polarity: the vblank handler was being starved by a lie
+
+The interrupt dispatcher became the project's blocker because every vblank
+handler overran its 50,000-step budget. The busy-PC table made that concrete:
+inside one handler, the VSync walker loop at `0x8008C318`-`0x8008C33C` ran
+about 3,447 times, and the dispatcher's retry loop at `0x8008BB18` ran the same
+number of passes. The loop is bounded by `slti $s1, 11`, so it could only
+repeat if the pending interrupt it was trying to clear never went away.
+
+The cause was the interrupt controller model, not the guest:
+
+- psx-spx defines `I_STAT` acknowledgement as **write 0 = clear that bit,
+  write 1 = no change**.
+- The model had it inverted (`interrupt_status_ &= ~value`), so libetc's
+  `sh ~(1 << irq)` cleared every source **except** the one it was servicing.
+- The dispatcher therefore saw the vblank bit still set on each retry pass and
+  re-ran all handlers until the budget expired. It looked exactly like a
+  handler that could not return.
+
+Fixed in `HardwareMap::write32` (`interrupt_status_ &= value`) and in
+`MipsInterpreter::write16`, which now merges the untouched half of a 16-bit
+`I_STAT`/`I_MASK` write instead of zeroing it. `tests/test_mips_interpreter.cpp`
+adds a synthetic guest store (`sh 0xFFFE`) that must clear only bit 0 and leave
+bit 2 pending.
+
+Effect on the USA executable (80,000,000 instructions, vblank enabled):
+
+| Before | After |
+| --- | --- |
+| 512 handler overruns in 30M instructions | 2 overruns in 80M |
+| 1,256 vblanks impossible; handlers never returned | 1,256 vblanks, 1,265 interrupts delivered |
+| CD status reads ~233k from dispatcher retries | 262 |
+| VSync counter never advanced reliably | VSync counter and callbacks advance |
+
+The old "run the real exception vector/RFE path" plan is no longer the first
+step. The HLE entry through libetc's `HookEntryInt` continues to be sufficient
+once the controller acknowledges correctly. The next blocker is the game's CD
+streaming callback: after the loader's two reads it still waits in its own CD
+path and submits no scene.
+
+Diagnostics added for the next session:
+
+- `--trace-cd` now also prints the interrupt controller's event log
+  (raise/ack/service transitions with the resulting `I_STAT`/`I_MASK`).
+- The runner prints the last 64 instructions and the busiest PCs of up to four
+  overrunning handlers, plus the interrupted/handler stack pointers.
+
+
+
 ## Double-clickable player
 
-`src/player_main.cpp` builds `R6.exe`, a windowed (no console) front end that
-locates the user's own BIN/CUE in its own folder, `Downloads`, `Desktop` or
-`Documents`, falls back to an open-file dialog, boots the disc's PS-X EXE with
-the same stack correction, and presents the 320x240 display area scaled 3x.
-ESC quits; F12 writes `r6-frame.ppm` next to the executable. `--shot <file>
---steps N` runs the same path headless and saves one frame. While the guest has
-not drawn anything the window shows live instruction, primitive, disc-sector
-and stop-state counters rather than a black rectangle.
+`src/spiderman_player.cpp` builds `spider-man-r6.exe`, a windowed (no console)
+front end that locates the user's own BIN/CUE in its own folder, `Downloads`,
+`Desktop` or `Documents`, falls back to an open-file dialog, boots the disc's
+PS-X EXE with the same stack correction, and presents the 320x240 display area
+scaled 3x. ESC quits; F12 writes `r6-frame.ppm` next to the executable.
+`--shot <file> --steps N` runs the same path headless and saves one frame.
+While the guest has not drawn anything the window shows live instruction,
+primitive, disc-sector and stop-state counters rather than a black rectangle.

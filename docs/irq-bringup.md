@@ -4,6 +4,32 @@ This title never renders because its frame loop waits on a value that only its
 own interrupt callbacks produce. These are the facts established while chasing
 that, so the next session does not repeat the work.
 
+## Correction: I_STAT acknowledges with zero bits, not one
+
+The notes below were written while the interrupt controller used the wrong
+polarity. On the PS1, `I_STAT` is acknowledged by writing a **zero** to a bit:
+zero clears that source, one leaves it unchanged (psx-spx, "Interrupt
+Acknowledge"). The model originally cleared the bits written as one, so
+libetc's dispatcher (`0x8008BA00`) cleared every source except the one it was
+servicing. Its retry loop at `0x8008BB18` therefore saw the vblank bit still
+pending every pass and re-ran all 11 handlers until the step budget expired.
+That is why 144 of 151 handlers overran and why the tail always showed the
+VSync walker loop (`0x8008C318`-`0x8008C33C`) without being stuck on its own.
+
+With the polarity corrected (`HardwareMap::write32`, and halfword writes merged
+in `MipsInterpreter::write16`) the dispatcher exits normally:
+
+- 80M-instruction run: 1,256 vblanks, 1,265 interrupts delivered, **2** handler
+  overruns (was 512 in 30M).
+- `intrData`/VSync count advance, the guest returns from `ReturnFromException`,
+  and the 50k-step handler budget is no longer the limiting factor.
+- CD interrupt traffic fell from 233k status reads to 262, because the
+  dispatcher no longer re-enters the CD callback on every retry.
+
+The remaining blocker is no longer the HLE interrupt entry model. It is the
+game's own CD streaming callback: after the loader's two reads the guest parks
+in its CD wait and never submits a scene (`docs/recomp-findings.md`).
+
 ## What the two named vectors actually are
 
 The kernel jump tables (see psx-spx "Kernel (BIOS)") name them:
@@ -131,7 +157,7 @@ libetc, not by the game. Three mistakes kept it from ever executing:
    `sh` to `I_STAT`; `write16` only handled RAM, the disc and the scratchpad, so
    the vblank bit never cleared and the dispatcher re-entered on every poll.
    Half-word stores to hardware now reach the 32-bit register model (`I_STAT`
-   keeps its write-one-to-clear meaning).
+   uses the zero-clears-bits meaning described at the top of this document).
 
 With those three fixed, `--watch-pc 0x8008C2E8` counts thousands of hits and
 `--peek 0x800B397C` climbs, so the VSync counter moves for the first time.

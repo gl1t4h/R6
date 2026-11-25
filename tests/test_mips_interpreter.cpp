@@ -193,6 +193,28 @@ void break_stops_execution() {
     R6_CHECK(interpreter.cpu().gpr[8] == 1);
 }
 
+void irq_status_acknowledges_zero_bits() {
+    Memory ram(2u * 1024u * 1024u);
+    TestServices services;
+    MipsInterpreter interpreter(ram, services);
+    auto& cpu = interpreter.cpu();
+    cpu.pc = 0x80010000u;
+
+    // Two pending sources: vblank (bit 0) and CD-ROM (bit 2).
+    interpreter.hardware().raise_interrupt(1u << 0);
+    interpreter.hardware().raise_interrupt(1u << 2);
+
+    ram.write32(0x10000, 0x3C081F80u);   // lui t0, 0x1F80
+    ram.write32(0x10004, 0x35081070u);   // ori t0, t0, 0x1070 (I_STAT)
+    ram.write32(0x10008, 0x2409FFFEu);   // addiu t1, zero, -2  (~bit 0)
+    ram.write32(0x1000Cu, 0xA5090000u);  // sh t1, 0(t0)
+
+    interpreter.run(4);
+    // PS1 I_STAT clears bits written as zero, so only vblank is acknowledged
+    // and the CD source survives.
+    R6_CHECK(interpreter.hardware().interrupt_status() == (1u << 2));
+}
+
 void dma_start_reads_back_idle() {
     Memory ram(2u * 1024u * 1024u);
     TestServices services;
@@ -298,6 +320,7 @@ void run_mips_interpreter_tests() {
     bios_trap_prints();
     unsupported_instruction_stops();
     break_stops_execution();
+    irq_status_acknowledges_zero_bits();
     dma_start_reads_back_idle();
     timer_mode_reads_back();
     dma2_linked_list_reaches_the_gpu();

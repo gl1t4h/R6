@@ -210,9 +210,9 @@ bool load_image(Player& player, std::string& error) {
     cpu.gpr[28] = player.exe.gp;
     cpu.gpr[29] = stack_in_ram ? stack : kDefaultStack;
     cpu.gpr[31] = 0;
-    // Vblank ticks are generated for the guest's own handler; the handler runs
-    // (the interpreter keeps the interrupted context intact), but it does not
-    // complete yet, so the display stays off.
+    // Vblank ticks are generated for the guest's own handler. The handler now
+    // returns through the interpreter's context save, but the CD streaming
+    // path it drives is still incomplete, so the display stays off.
     player.cpu->set_vblank_enabled(true);
     return true;
 }

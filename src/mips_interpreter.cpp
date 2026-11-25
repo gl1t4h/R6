@@ -1,5 +1,6 @@
 #include "r6/mips_interpreter.h"
 
+#include <algorithm>
 #include <cstdio>
 
 #include <cstddef>
@@ -170,9 +171,12 @@ void MipsInterpreter::write16(std::uint32_t address, std::uint32_t value) {
     const auto shift = (physical & 3u) * 8u;
     if (aligned == hardware::kInterruptStatus ||
         aligned == hardware::kInterruptMask) {
-        // I_STAT clears every bit written as one, so the untouched half has to
-        // be zero rather than read back and written again.
-        write32(aligned, (value & 0xFFFFu) << shift);
+        // I_STAT clears the bits written as zero, so the untouched half has to
+        // be preserved rather than zeroed. I_MASK is a plain latch and needs
+        // the same merge.
+        const auto current = hardware_.read32(aligned);
+        const auto mask = 0xFFFFu << shift;
+        write32(aligned, (current & ~mask) | ((value & 0xFFFFu) << shift));
         return;
     }
     const auto current = hardware_.read32(aligned);
@@ -314,6 +318,8 @@ void MipsInterpreter::deliver_interrupt() {
         interrupt_steps_ = 0;
         irq_pcs_.clear();
         irq_hot_.clear();
+        irq_tail_size_ = 0;
+        irq_tail_next_ = 0;
         if (irq_traces_.size() < 4) {
             irq_traces_.emplace_back();
             irq_traces_.back().reserve(32);
@@ -333,6 +339,8 @@ void MipsInterpreter::deliver_interrupt() {
         interrupt_steps_ = 0;
         irq_pcs_.clear();
         irq_hot_.clear();
+        irq_tail_size_ = 0;
+        irq_tail_next_ = 0;
         if (has_entry_int) {
             // libetc's dispatcher runs before the priority chains: the guest's
             // own handlers acknowledge I_STAT eagerly, and the dispatcher can
@@ -473,6 +481,8 @@ RunResult MipsInterpreter::run(std::uint64_t max_steps) {
                 interrupt_steps_ = 0;
                 irq_pcs_.clear();
                 irq_hot_.clear();
+                irq_tail_size_ = 0;
+                irq_tail_next_ = 0;
                 continue;
             }
             if (interrupt_routine_index_ < interrupt_routines_.size()) {
@@ -490,6 +500,8 @@ RunResult MipsInterpreter::run(std::uint64_t max_steps) {
                 interrupt_steps_ = 0;
                 irq_pcs_.clear();
                 irq_hot_.clear();
+                irq_tail_size_ = 0;
+                irq_tail_next_ = 0;
                 continue;
             }
             // Every handler returned; resume the interrupted instruction
@@ -512,10 +524,39 @@ RunResult MipsInterpreter::run(std::uint64_t max_steps) {
                 // The routine left its own context, so drop the call and resume
                 // the interrupted stream. After a few of these, stop delivering
                 // interrupts rather than burning the budget on them.
+                if (irq_overrun_traces_.size() < 4 && irq_tail_size_ > 0) {
+                    std::vector<std::uint32_t> tail;
+                    tail.reserve(irq_tail_size_);
+                    const auto start =
+                        (irq_tail_next_ + irq_tail_.size() - irq_tail_size_) %
+                        irq_tail_.size();
+                    for (std::size_t index = 0; index < irq_tail_size_; ++index) {
+                        tail.push_back(
+                            irq_tail_[(start + index) % irq_tail_.size()]);
+                    }
+                    irq_overrun_traces_.push_back(std::move(tail));
+                    std::vector<std::pair<std::uint32_t, std::uint64_t>> hot(
+                        irq_hot_.begin(), irq_hot_.end());
+                    std::sort(hot.begin(), hot.end(),
+                              [](const auto& left, const auto& right) {
+                                  return left.second > right.second;
+                              });
+                    if (hot.size() > 24) hot.resize(24);
+                    irq_overrun_hot_.push_back(std::move(hot));
+                    irq_overrun_log_.push_back(
+                        "overrun interrupted=0x" + format_hex(interrupt_return_pc_) +
+                        " interrupted_sp=0x" +
+                        format_hex(interrupt_saved_gpr_[29]) + " handler_sp=0x" +
+                        format_hex(cpu_.gpr[29]) + " steps=" +
+                        std::to_string(interrupt_steps_));
+                    for (auto site : recent_calls_) {
+                        irq_overrun_log_.push_back("  call 0x" + format_hex(site));
+                    }
+                }
                 cpu_.pc = interrupt_return_pc_;
                 for (std::size_t index = 0; index < 32; ++index) {
-                cpu_.gpr[index] = interrupt_saved_gpr_[index];
-            }
+                    cpu_.gpr[index] = interrupt_saved_gpr_[index];
+                }
                 cpu_.hi = interrupt_saved_hi_;
                 cpu_.lo = interrupt_saved_lo_;
                 cop0_[13] = interrupt_saved_cause_;
@@ -566,6 +607,11 @@ RunResult MipsInterpreter::run(std::uint64_t max_steps) {
         if (recent_pcs_.size() >= 16) recent_pcs_.erase(recent_pcs_.begin());
         recent_pcs_.push_back(current_pc);
         if (in_interrupt_ && irq_pcs_.size() < 64) irq_pcs_.push_back(current_pc);
+        if (in_interrupt_) {
+            irq_tail_[irq_tail_next_] = current_pc;
+            irq_tail_next_ = (irq_tail_next_ + 1) % irq_tail_.size();
+            if (irq_tail_size_ < irq_tail_.size()) ++irq_tail_size_;
+        }
         if (in_interrupt_ && !irq_traces_.empty() &&
             irq_traces_.back().size() < 32) {
             irq_traces_.back().push_back(current_pc);

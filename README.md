@@ -15,7 +15,7 @@ There is not yet a playable native recompilation.
 
 | Game | Region/version | Status | Progress |
 | --- | --- | --- | --- |
-| Spider-Man | USA PlayStation 1 release | Boots into its own frame loop; draws nothing yet | 99% - loads `SLUS_008.75` and executes it on the native CPU (60M+ instructions), libetc's vblank dispatcher runs, and the loader now accepts disc reads: DMA3 transfers reach main RAM and the position check at `0x80089A58` passes, so `CdRead: sector error` is gone; the frame is still black because the HLE interrupt model never returns - 144 of 151 vblank handlers overrun their step budget and spin in guest wait loops |
+| Spider-Man | USA PlayStation 1 release | Boots into its own frame loop; draws nothing yet | 96% — loads `SLUS_008.75`, executes it on the native CPU, and now services the guest's own interrupt dispatcher correctly. `I_STAT` acknowledgement used the wrong polarity (the PS1 clears a bit by writing zero), which made libetc's dispatcher retry forever and kept every vblank callback from returning. With that corrected the VSync counter and callbacks run (over 1,200 vblanks in an 80M-instruction run, two handler overruns), but the game still waits on its CD streaming path and the display stays off |
 
 No games are currently completed.
 
@@ -24,8 +24,9 @@ No games are currently completed.
 `spider-man-r6.exe` (source: `src/spiderman_player.cpp`) is a windowed player:
 it boots your own disc image and shows a frame-rate readout across the top of
 the game screen. The readout is live, but the screen below it is black - the
-guest never finishes the callback that would turn its display on, so the FPS
-counter reports presented frames, not rendered ones.
+guest's interrupt handler now completes, yet the game is still waiting for its
+CD streaming callback before it submits a scene, so the FPS counter reports
+presented frames, not rendered ones.
 
 ## What is and is not included
 
@@ -117,17 +118,14 @@ The current scaffold is a development diagnostic, not a playable game.
 Run your own local copy on the development runner:
 
 ```powershell
-.uild
-6-run.exe "C:\path	o\your\game.cue" --steps 2000000
+.\build\r6-run.exe "C:\path\to\your\game.cue" --steps 2000000
 ```
 
-Use `build\Release
-6-run.exe` for a Visual Studio build. The runner loads the
+Use `build\Release\r6-run.exe` for a Visual Studio build. The runner loads the
 boot executable out of your BIN/CUE, executes it on the native R3000A
 interpreter, and reports the instructions, BIOS calls and GPU traffic it saw. It
-is **not** a playable build: GTE geometry, DMA, interrupts and the kernel thread
-the executable expects are still missing, so the guest returns from its entry
-point after initialisation instead of reaching a render loop.
+is **not** a playable build: GTE geometry and the CD streaming callback are
+still missing, so the guest parks in its CD wait instead of submitting a scene.
 
 Run the native checks (GPU decoder and BIOS services) and the analysis tests:
 
@@ -205,7 +203,7 @@ None.
 
 | Game | Status | Next milestone |
 | --- | --- | --- |
-| Spider-Man (USA) | Interpreter execution runner | GTE geometry, DMA, interrupts and the kernel boot thread |
+| Spider-Man (USA) | Native interpreter runs the guest, its vblank dispatcher and VSync callbacks | CD streaming callback and the first display/GPU scene, then GTE geometry |
 
 ## Contributing
 

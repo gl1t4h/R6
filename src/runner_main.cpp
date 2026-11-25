@@ -3,8 +3,8 @@
 // It loads the game executable out of a local BIN/CUE image, executes it on the
 // native R3000A interpreter, and reports what the program did through the
 // native platform services. It is a pipeline reference, not a playable build:
-// GTE geometry, DMA, interrupts and the CD-ROM controller are not implemented
-// yet, so the game cannot reach its render loop.
+// GTE geometry and the CD-ROM streaming path are still incomplete, so the game
+// cannot reach its render loop.
 
 #include <algorithm>
 #include <cstdint>
@@ -37,6 +37,11 @@ using r6::boot::write_ppm;
 
 constexpr std::uint32_t kRamSize = 2u * 1024u * 1024u;
 constexpr std::uint32_t kRamMask = kRamSize - 1u;
+constexpr std::uint32_t kDefaultStack = 0x801FFFF0u;
+// This title's C runtime reads a stack limit from .data and computes a stack
+// outside RAM. The retail loader supplies a usable one, so correct the global
+// before the guest's startup code reads it, as the windowed player does.
+constexpr std::uint32_t kCrStackGlobal = 0x800B3E70u;
 
 }  // namespace
 
@@ -178,6 +183,13 @@ int main(int argc, char** argv) {
                    image.payload[index]);
     }
 
+    const auto cr_stack = ram.read32(kCrStackGlobal & kRamMask);
+    const bool cr_stack_in_ram =
+        cr_stack >= 0x80000000u && cr_stack < 0x80200000u;
+    if (!cr_stack_in_ram) {
+        ram.write32(kCrStackGlobal & kRamMask, kDefaultStack);
+    }
+
     for (const auto& [address, value] : pokes) {
         ram.write32(address & kRamMask, value);
     }
@@ -233,8 +245,9 @@ int main(int argc, char** argv) {
     auto& cpu = interpreter.cpu();
     cpu.pc = entry_override != 0 ? entry_override : image.entry;
     cpu.gpr[28] = image.gp;
-    cpu.gpr[29] =
-        image.stack_base != 0 ? image.stack_base : 0x801FFFF0u;
+    cpu.gpr[29] = image.stack_base != 0
+                      ? image.stack_base
+                      : (cr_stack_in_ram ? cr_stack : kDefaultStack);
     cpu.gpr[31] = 0;
     interpreter.set_vblank_enabled(deliver_vblank);
 
@@ -286,6 +299,23 @@ int main(int argc, char** argv) {
             std::cout << " 0x" << std::hex << pc;
         }
         std::cout << std::dec << std::endl;
+    }
+    for (const auto& trace : interpreter.irq_overrun_traces()) {
+        std::cout << "IRQ overrun tail:";
+        for (auto pc : trace) {
+            std::cout << " 0x" << std::hex << pc;
+        }
+        std::cout << std::dec << std::endl;
+    }
+    for (const auto& entry : interpreter.irq_overrun_log()) {
+        std::cout << "IRQ " << entry << std::endl;
+    }
+    for (const auto& hot : interpreter.irq_overrun_hot()) {
+        std::cout << "IRQ overrun hot:";
+        for (const auto& [pc, count] : hot) {
+            std::cout << " 0x" << std::hex << pc << std::dec << "=" << count;
+        }
+        std::cout << std::endl;
     }
     for (const auto& entry : interpreter.interrupt_log()) {
         std::cout << entry << std::endl;
@@ -427,6 +457,10 @@ int main(int argc, char** argv) {
     if (trace_cd) {
         std::cout << "CD events:" << std::endl;
         for (const auto& entry : interpreter.cdrom_log()) {
+            std::cout << "  " << entry << std::endl;
+        }
+        std::cout << "IRQ events:" << std::endl;
+        for (const auto& entry : interpreter.hardware().interrupt_log()) {
             std::cout << "  " << entry << std::endl;
         }
     }

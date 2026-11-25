@@ -2,6 +2,8 @@
 
 #include <array>
 #include <cstdint>
+#include <string>
+#include <vector>
 
 #include "r6/cdrom_device.h"
 #include "r6/platform_services.h"
@@ -56,10 +58,14 @@ public:
     // interrupt flag pending, whether that flag was raised by a command or by
     // the data FIFO running dry.
     void refresh_cdrom_interrupt() {
-        if (cdrom_.interrupt() != 0) {
+        const bool pending = cdrom_.interrupt() != 0;
+        const bool raised = (interrupt_status_ & kInterruptCdrom) != 0;
+        if (pending) {
             interrupt_status_ |= kInterruptCdrom;
+            if (!raised) note_irq("cdrom raise", kInterruptCdrom);
         } else {
             interrupt_status_ &= ~kInterruptCdrom;
+            if (raised) note_irq("cdrom clear", kInterruptCdrom);
         }
     }
     void write_cdrom(std::uint32_t physical, std::uint8_t value) {
@@ -140,8 +146,12 @@ public:
             }
         }
         if (address == hardware::kInterruptStatus) {
-            // Writing ones acknowledges the matching interrupt bits.
-            interrupt_status_ &= ~value;
+            // PS1 I_STAT is acknowledged by writing a zero to a bit: one means
+            // "no change". Guest kernel code stores ~(1 << irq) to clear one
+            // source without touching the others.
+            const auto cleared = interrupt_status_ & ~value;
+            interrupt_status_ &= value;
+            if (cleared != 0) note_irq("guest ack", cleared);
             return;
         }
         if (address == hardware::kInterruptMask) {
@@ -185,13 +195,17 @@ public:
         }
     }
 
-    void raise_interrupt(std::uint32_t bit) { interrupt_status_ |= bit; }
+    void raise_interrupt(std::uint32_t bit) {
+        const bool raised = (interrupt_status_ & bit) != 0;
+        interrupt_status_ |= bit;
+        if (!raised) note_irq("raise", bit);
+    }
     // The kernel acknowledges a serviced interrupt by clearing its I_STAT bit.
     // Called from the interpreter's periodic poll: delivers the pad transfer
     // interrupt once the modelled shift-out delay has elapsed.
     void pad_tick() {
         if (pad_irq_delay_ == 0) return;
-        if (--pad_irq_delay_ == 0) interrupt_status_ |= kInterruptPad;
+        if (--pad_irq_delay_ == 0) raise_interrupt(kInterruptPad);
     }
 
     // A byte shifted in from the controller raises the same interrupt as one
@@ -199,7 +213,14 @@ public:
     void pad_byte_received() const { pad_irq_delay_ = 4; }
 
     void acknowledge_interrupts(std::uint32_t bits) {
+        const auto cleared = interrupt_status_ & bits;
         interrupt_status_ &= ~bits;
+        if (cleared != 0) note_irq("service ack", cleared);
+    }
+
+    // Bounded interrupt-controller event log for bring-up.
+    const std::vector<std::string>& interrupt_log() const {
+        return interrupt_log_;
     }
 
     // Pad / SIO0 registers. A transfer must look complete, otherwise the
@@ -249,6 +270,14 @@ private:
         return (services_.read_timer(timer) - timers_[timer].offset) & 0xFFFFu;
     }
 
+    void note_irq(const char* what, std::uint32_t bits) {
+        if (interrupt_log_.size() >= 64) interrupt_log_.erase(interrupt_log_.begin());
+        interrupt_log_.push_back(std::string(what) + " bits=" +
+                                 std::to_string(bits) + " stat=" +
+                                 std::to_string(interrupt_status_) + " mask=" +
+                                 std::to_string(interrupt_mask_));
+    }
+
     PlatformServices& services_;
     CdromDevice cdrom_;
     std::array<Timer, 3> timers_{};
@@ -263,6 +292,7 @@ private:
     std::uint32_t interrupt_status_{0};
     bool cdrom_interrupt_enabled_{false};
     std::uint32_t interrupt_mask_{0};
+    std::vector<std::string> interrupt_log_;
 };
 
 }  // namespace r6
