@@ -852,6 +852,18 @@ int run_headless(Host& host, std::uint64_t frames,
                 std::cout << "(" << left << "," << top << ")(" << right << ","
                           << bottom << ")";
             }
+        {
+            const auto& gpu = host.services->gpu();
+            for (int opcode = 0; opcode < 256; ++opcode) {
+                const auto count = gpu.unsupported_commands(
+                    static_cast<std::uint8_t>(opcode));
+                if (count != 0) {
+                    std::cout << "GPU unsupported opcode 0x" << std::hex
+                              << opcode << std::dec << " x" << count
+                              << std::endl;
+                }
+            }
+        }
             std::cout << " display_writes=" << gpu.display_enable_writes()
                       << " last_display=" << hex32(gpu.last_display_enable_word())
                       << " unsupported=" << gpu.unsupported_commands() << std::endl;
