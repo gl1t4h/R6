@@ -162,9 +162,17 @@ None.
   1070 into `0x801E3600`/`0x801E4600`) went through the consumer at
   `0x80011260` and retired, and the sound system's own state is idle
   (`0x800B5480` = 1 enabled, `0x800B5600` = 1). No CD read was requested
-  after the Pause at LBA 17846. Trace the callback each ring entry
-  carries (its first word is a code pointer such as `0x8001B128`) and
-  find why the job it starts never reaches a slot.
+  after the Pause at LBA 17846.
+  The type-2 request machine at `0x800114C4` never runs at all: its state
+  word `0x800230B0` stays 0, and all 472 writes to it in a 250M run come
+  from the queue-empty path at `0x8001130C`, while `0x800230A0` (15
+  completions) has passed `0x80023098` (14 pushes). The two stream
+  buffers the tick consumes, `0x801E09E0` and `0x801E1430`, are both left
+  in state 3, the active-stream byte `0x800B97E0` is 0 and its countdown
+  `0x800B97DC` is 0, so the sequencer is armed but has nothing queued.
+  Trace the callback each ring entry carries (its first word is a code
+  pointer such as `0x8001B128`) and find why the job it starts never
+  reaches a slot.
 - **Playable native build:** No
 - **Distributed game assets:** No
 
