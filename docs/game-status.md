@@ -423,6 +423,18 @@ window body shows those counters plus how many disc sectors have been read.
   handler/DMA and the sync's flag check, and it is what makes the game retry
   at 14:48:04 and overwrite `0x800C0CE0` before the walk.
 
+- **The one-ahead position fix that was tried and rejected:** the drain trace
+  suggested the drive was reporting one sector past the one the guest held
+  (`cd5C` 17/19/66455 against the interpreter's 16/18/22), so `present_sector`
+  was changed to advance `sector_` only when the next sector is actually
+  delivered (`delivered_in_read_`, reset by ReadN), with `load_sector` no
+  longer bumping it and the XA-skip path advancing on its own. After a
+  `build-full.cmd` rebuild the result was unchanged: the same six sectors, the
+  same `Setloc 14:48:04`, and the walk still reading three `0x0C` records, with
+  the `0x80089AC8` trace byte-identical to before. That disproves the premise:
+  `cd5C` is the guest's own copy counter, not the drive's position. The change
+  was reverted.
+
 - **The ordering fix that was tried and rejected:** `CdromDevice` handed the
   next sector over after 4,000 cycles, roughly 140x faster than a real drive,
   so the following sector arrived inside the guest's per-sector handshake.
