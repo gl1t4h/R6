@@ -666,8 +666,8 @@ merely because both overflowed.
 
 Tests in `tests/test_native_runtime.cpp` compare the native and oracle PCs,
 EPC/SR and exact ordered traces for vector interrupts on VBlank, CD and DMA
-bits; pad delivery; HookEntryInt; and B(17h) ReturnFromException. They also
-check that DMA3/DMA4 completion records its event.
+bits; pad delivery; HookEntryInt; RFE; and B(17h) ReturnFromException. They
+also check that DMA3/DMA4 completion records its event.
 
 The event-aware Silent Hill loaded translation emitted 4,384 blocks and 21,892
 event-tick call sites. It matched 200,000 blocks with `--vblank`, with 326,004
