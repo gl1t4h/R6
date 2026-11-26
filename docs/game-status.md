@@ -1159,15 +1159,26 @@ The module's own init candidates are dead. `0x80092020`, `0x80092068` and
 and sets `0x800AFE8C`, but never touches `0x800AFE80` or
 `0x800BFF3C`-`0x800BFF6C`. Calling it would not populate the table, so it
 cannot be the copy init. The pump is instead reached through the callback
-slot `0x800226BC` (observed as `0x80093170`), which calls `0x800935CC`;
-the game also calls `0x800935CC` directly from `0x801E3098`.
+slot `0x800226BC`, which calls `0x800935CC`; the game also calls
+`0x800935CC` directly from `0x801E3098`. That slot is patched by the CD
+stream-start path, not by an init: at 60M instructions it still holds the
+boot value `0x80013F60`, and by 300M it holds `0x80093170`. The store is at
+`0x80014164` in setter `0x80014154`, called from `0x80093148` inside the
+status handler `0x800930EC`. The handler is entered from `0x801E3268` in
+the stream-start helper `0x801E31CC` with status `0x1E0`; it registers
+`0x8009327C` at `0x800225F0`, sets `0x800231E8`, and issues CD command 27
+(`ReadS`).
 
-The real missing piece is therefore the resident CD driver's own table
-builder, not a copy from `0x800AFE80`. The only valid CD table observed is
-the boot EXE's `0x8002297C`, built before the resident image is loaded.
-Which routine should build `0x800BFF3C` from that table (or from the BIOS
-CD state) is still unidentified; the null table remains a hypothesis for
-the deadlock, not an established cause.
+This path does not build the register table. In the 300M run the only write
+to `0x800BFF3C` is still the loader's zero-fill at `0x80010B0C`; the table
+stays zero after the pump is installed. The stream-start path therefore
+installs the pump before any builder runs. The real missing piece is the
+resident CD driver's own table builder, which must run upstream of
+`0x801E31CC`, not a copy from `0x800AFE80`. The only valid CD table
+observed is the boot EXE's `0x8002297C`, present before the resident image
+is loaded. Which routine should build `0x800BFF3C` from that table (or from
+the BIOS CD state) is still unidentified; the null table remains a
+hypothesis for the deadlock, not an established cause.
 
 The observed fact is that the status gate cannot see a response and the
 504-word payload after the slot-17 header never starts. Whether populating
