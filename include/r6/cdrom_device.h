@@ -250,6 +250,7 @@ private:
         if (data_index_ >= data_.size()) return 0;
         const auto value = data_[data_index_++];
         if (data_index_ >= data_.size()) {
+            note("drained " + std::to_string(presented_sector_));
             // The driver acknowledges the sector interrupt first and only then
             // runs the DMA that empties the FIFO, so the next sector can become
             // ready either before or after the drain. Handle both orders.
@@ -307,6 +308,7 @@ private:
                 std::fill(data_.begin() + kHeaderBytes, data_.end(), std::uint8_t{0});
             }
             const auto presented = sector_;
+            presented_sector_ = presented;
             ++sectors_read_;
             if (reading_) ++sector_;
             // Subheader byte 2 is the submode; bit 2 marks XA-ADPCM audio.
@@ -622,6 +624,8 @@ private:
     std::uint32_t response_reads_{0};
     bool reading_{false};
     bool data_end_raised_{false};
+    // Sector most recently placed in the FIFO, for the drain trace.
+    std::uint32_t presented_sector_{0};
     bool start_read_after_ack_{false};
     bool next_sector_pending_{false};
     bool sector_pending_{false};

@@ -929,3 +929,42 @@ deliver level data is waiting for a read that is never requested, so the honest
 description is "boots and stalls", not "shows a loading screen". Changing the drive's `GetStat` "reading" bit to mean "a transfer is
 in flight" was tried and left the trace byte-identical, so it was reverted
 rather than kept as an unproven hardware change.
+
+## Where the 128-sector stream stops
+
+With the drain trace enabled (`--cd-log`, every sector now logs `drained N` as
+the FIFO empties) the stream is unambiguous. Sectors 128214-128341 arrive in the
+normal order: `sector N loaded`, `ack 7 int=1`, `drained N`, next sector. The
+last one breaks the pattern:
+
+```
+459 sector 128341 loaded
+460 ack 7 int=1
+    (no drained 128341, no sector 128342)
+```
+
+So the guest acknowledges the last sector interrupt and never performs the DMA
+that would empty the FIFO, which is exactly its chunk boundary: 128 sectors is
+256 KiB. The loader is not starved and the drive is not slow; the guest stops
+collecting on purpose.
+
+What it then needs never happens:
+
+- the stage entries 0-35 are populated (entry 33: `80010000 00090003 00000004
+  00000A98 00F00140 38000720 00020001 02133328`), while entry 36 onwards is
+  still allocator fill (`33333333`) because nothing wrote it;
+- the current stage index is 36, so the consumer polls entry 36, which never
+  reaches state 1 or 2;
+- the CD driver's state word at `0x800B1000` is 10, the value the "start a
+  chunk" path writes, yet the chunk descriptor pointer at `0x800C0F38` is zero;
+  that pointer is what the chunk-complete check at `0x80085770` dereferences
+  (`[desc+6] - 1 == [desc+4]`) to set the completion flag `0x800C1508`, and the
+  flag gates the stage arming call at `0x80085904`.
+
+The next thread to pull is that inconsistency: state 10 and a null descriptor
+cannot both come from the straight-line sequence at `0x800856B8`-`0x800856D4`
+that writes them, so either a second writer clears the descriptor or the state
+is written from another path. Also tried and reverted: treating an
+acknowledged-but-undrained sector as the end of the read. The guest acks before
+draining on every sector (sector 16 shows it immediately), so that rule stopped
+the boot after one sector.
