@@ -616,6 +616,14 @@ RunResult MipsInterpreter::run(std::uint64_t max_steps) {
             std::fputc(10, stdout);
             std::fputc(10, stdout);
         }
+        {
+            static const bool trace_table =
+                std::getenv("R6_TRACE_TABLE") != nullptr;
+            if (trace_table && current_pc >= 0x800BF6E0u &&
+                current_pc <= 0x800BF760u) {
+                std::printf("TBL pc %08X\n", current_pc);
+            }
+        }
         if (trace_sync &&
             (current_pc == 0x8008711Cu || current_pc == 0x80086CA8u)) {
             static int pos_hits = 0;

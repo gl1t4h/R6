@@ -616,6 +616,7 @@ int run_headless(Host& host, std::uint64_t frames,
                (max_cycles == 0 ||
                 host.bus->hardware().cycles() < max_cycles)) {
             const auto before = host.cpu.pc;
+            r6::NativeBus::set_trace_pc(before);
             if (sync_trace) {
                 static std::uint32_t last_istat = 0;
                 const auto istat = host.bus->hardware().interrupt_status();

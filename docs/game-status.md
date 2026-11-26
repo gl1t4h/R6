@@ -518,6 +518,18 @@ window body shows those counters plus how many disc sectors have been read.
   1.40-1.50M cycles both runners hold that same four-field record, so the
   parse itself agrees -- the port reads the entry while it is still unset.
 
+- **Table range watch (`R6_TRACE_TABLE`).** Every access to
+  `0x800BF6E0-0x800BF760` is logged with the block that made it. The port
+  writes the whole range from `0x800873AC` (startup), then the parse at
+  `0x800865C8` reads `0x800BF6E8` twice and `0x800BF714` twice and writes the
+  record back into `0x800BF714`/`0x800BF70C`/`0x800BF710`; later reads come
+  from `0x80086760` and `0x80086804`. Only six reads and 42 writes occur, so
+  the values seen by the loader are in place well before the third read --
+  the ordering problem is therefore not a missing parse but a timing offset:
+  the port reaches each CD command roughly 3.3k cycles earlier than the
+  interpreter per read (first `Setloc` at 1,210,646 vs 1,213,964; second
+  1,255,384 vs 1,265,532; third 1,291,250 vs 1,305,026).
+
 - **The one-ahead position fix that was tried and rejected:** the drain trace
   suggested the drive was reporting one sector past the one the guest held
   (`cd5C` 17/19/66455 against the interpreter's 16/18/22), so `present_sector`
