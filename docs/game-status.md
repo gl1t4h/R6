@@ -173,6 +173,26 @@ None.
   Trace the callback each ring entry carries (its first word is a code
   pointer such as `0x8001B128`) and find why the job it starts never
   reaches a slot.
+  A byte-range store watch (`--watch-range`) narrows this further. The
+  sequencer's two buffers receive no payload at all: their headers are
+  written by the tick's own setup loop (`0x800336CC` to `0x80033824`:
+  state 3, sub-state 4, two zero bytes), and the only store inside a body
+  is a 32-bit zero at `+0xC` from `0x800336F4`. The buffers hold 3 and 4
+  nonzero bytes out of 2,640. The active-stream byte `0x800B97E0` and its
+  countdown `0x800B97DC` are written once, by the clear loop at
+  `0x80010B0C`, and never again. The two payload buffers the game did
+  fill are healthy (`0x801E3600` and `0x801E4600` each hold 4,072 of
+  4,096 bytes, with the same content), so the load worked and nothing
+  hands the data on. The earlier claim that the type-2 machine never runs
+  is weaker than it read: every write to `0x800230B0` comes from the
+  queue-empty path, which also clears the state, so a final zero is not
+  proof it never ran. The SPU is not idle either: a 250M run stores 1,490
+  times into `0x1F801C00`-`0x1F801E80` and 48 times into the DMA4
+  registers, leaving SPUCNT at `0xC080` and the transfer address at
+  `0x7F42` (`0x3FA10` in SPU RAM), so sample uploads do happen.
+  The feeder has to arrive as data, not as an immediate: no code contains
+  `0x801E09E0` or `0x801E1430`. Follow the record passed to `0x80011630,
+  whose first word encodes an SPU address in bits 19 to 30.
 - **Playable native build:** No
 - **Distributed game assets:** No
 
