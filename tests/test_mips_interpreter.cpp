@@ -105,6 +105,24 @@ void taken_branch_skips_following_instruction() {
     R6_CHECK(cpu.gpr[11] == 11);
 }
 
+void instruction_charges_two_cycles() {
+    Memory ram(2u * 1024u * 1024u);
+    TestServices services;
+    MipsInterpreter interpreter(ram, services);
+    auto& cpu = interpreter.cpu();
+    cpu.pc = 0x80010000u;
+
+    ram.write32(0x10000, 0x24080005u);   // addiu t0, zero, 5
+    ram.write32(0x10004, 0x24090007u);   // addiu t1, zero, 7
+
+    interpreter.run(2);
+    // Compiled MIPS code retires about one instruction per two clocks. A
+    // one-cycle clock shortened every guest delay loop, so libetc's VSync
+    // wait expired inside a frame and the title never advanced its state.
+    R6_CHECK(interpreter.hardware().cycles() ==
+             2ull * r6::kCyclesPerInstruction);
+}
+
 void single_step_preserves_branch_target() {
     Memory ram(2u * 1024u * 1024u);
     TestServices services;
@@ -715,6 +733,7 @@ void syscall_critical_section_toggles_interrupts() {
 void run_mips_interpreter_tests() {
     arithmetic_and_delay_slot();
     taken_branch_skips_following_instruction();
+    instruction_charges_two_cycles();
     single_step_preserves_branch_target();
     call_and_return();
     load_and_store();
