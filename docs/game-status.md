@@ -223,23 +223,33 @@ window body shows those counters plus how many disc sectors have been read.
 
 ## Native port (Spider-Man)
 
-- **Executable:** `pc/SpiderMan.exe`, built from `src/port_main.cpp` plus the
+- **Executable:** `pc\SpiderMan.exe`, built from `src/port_main.cpp` plus the
   locally generated translation unit. No interpreter is linked into it.
+  `tools/build-port-msvc.cmd <disc> <out-dir>` reproduces the build with the
+  Visual Studio toolchain alone; the CMake targets do the same.
 - **Translation:** `tools/r6-recomp` reads `spiderman.chd` directly, extracts
   `SLUS_008.75` (747,520 bytes at `0x80010000`, entry `0x8008739C`) and emits
   24,214 blocks / 146,599 instructions in the same ABI as
-  `generate-native-stub.py` (`block_XXXXXXXX(CpuState&, NativeBus&)`,
-  `r6_generated::register_functions`).
-- **Differential:** `r6-native --compare --blocks 4000 --vblank` matched the
-  interpreter after every block on registers, HI/LO, COP0, hardware registers,
-  GTE, scratchpad, BIOS bookkeeping, the ordered event trace and all 2 MiB of
-  RAM.
-- **Runtime:** 3,600 fields (60 s of guest time, 291M blocks, 2.03G cycles) in
-  26 s wall time, about 2.3x realtime, with no recompilation miss. The display
-  is enabled, but the guest submits only two GP0 commands and no VRAM pixels.
-- **Blocker:** the guest is parked in the CD wait loop at `0x80084D80`,
-  interrupted every field from EPC `0x80084D80`; the CD controller/DMA
-  handshake is the next seam, not translation coverage.
+  `generate-native-stub.py`.
+- **Presentation:** OpenGL 3.3, `shaders/psx.vert` and `psx.frag`, loaded from
+  disk at startup. Frames per second is shown in the window title and as a
+  5x7 bitmap overlay in the top-left of the presented frame; the overlay is
+  drawn into a copy and never touches guest VRAM. Measured 40-60 FPS at 60 Hz
+  frame pacing (1 ms timer resolution).
+- **Differential:** `r6-native --compare` matches the interpreter for 18,552
+  blocks, then reports a COP0 status mismatch (native `0x00000401`, oracle
+  `0x00000405`, IEp set on the oracle side) at PC `0x8008B9EC`, inside the
+  interrupt entry path. Earlier 4,000-block runs passed, so this is a
+  late-boot divergence in the exception stack, not in the translated code.
+- **Runtime:** 120 fields (9.7M blocks, 67.7M cycles) with no recompilation
+  miss, but the guest reads only 6 disc sectors (LBA 16-19, then `COMPILED.XA`
+  at 66454) and then issues `CdInit` (Init/Demute/GetStat) every frame. It
+  submits 0 GP0 commands and 0 DMA2 lists, so VRAM stays black.
+- **Interpreter comparison:** the same disc on `r6-run --vblank --hot` reads
+  141 sectors and parks at `0x8008CA8C` with hot PCs `0x8008CA7C`,
+  `0x8008CA8C`, `0x8008CB4C` - the CD loader wait already recorded below. The
+  port stalls earlier than that, at `0x80064744`, so the COP0 divergence is
+  the first thing to fix.
 - **Coverage rules learned:** code pointers stored in tables (the 13-entry mode
   table at `0x800B47C4`), `jalr` return continuations and ordinary function
   prologues all reach code that no call-site scan sees. They are seeded

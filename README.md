@@ -24,7 +24,7 @@ images that are never included in this repository.
 | GPU / display | In progress | Software GPU handles common GP0/GP1 commands and presents a VRAM display window; guest scene submission depends on further CPU/GTE/timing coverage. |
 | GTE / COP2 | In progress | RTPS/RTPT, NCLIP, AVSZ3/4, MVMVA and SQR compute with the documented saturation and FLAG behaviour, as do the lighting commands NCS, NCCS, NCDS and their triple forms NCT, NCCT and NCDT; the colour commands that work from existing IR (CC, CDP, DPCS, DPCT, INTPL, DCPL) are counted per opcode and named in the `r6-run` report. See `docs/gte-scope.md`. |
 | Native translation | Boot and loaded-image slices | `tools/generate-native-stub.py` emits one native function per basic block, and `r6-native` executes them through the dispatcher. The bootstrap runs 1,975 blocks while matching the interpreter's registers, HI/LO and 2 MiB RAM, then stops at `InitHeap`. A 130M-instruction RAM snapshot starts the resident main at `0x80032EE0`; the 4,384-block event-aware loaded slice matched 200,000 blocks with GPRs, HI/LO, COP0, hardware registers, GTE, scratchpad, BIOS bookkeeping, an ordered VBlank/pad/DMA/interrupt event trace (326,004 events in the 200k VBlank run) and all RAM compared after every block. Native VBlank, pad and CD/DMA delivery share the interpreter's COP0 exception path, including HookEntryInt and ReturnFromException; DMA2/3/4 transfers complete like the interpreter's. One native bus and one interpreter persist COP0, hardware, GTE/scratchpad and BIOS state across block boundaries, so the run advances to `0x800154CC` instead of resetting into the `0x80013130` wait. The startup trace does not reach the mode dispatcher at `0x80087360`; a targeted mode-3 checkpoint does, reading `0x8002AB60` and executing `0x80087448`. Generated code stays outside the repository. |
-| Native port | In progress | `r6-port` runs the generated blocks continuously and presents the display through an OpenGL 3.3 shader. On Spider-Man it boots the retail `.chd`, executes 24,214 translated blocks for 3,600 fields (291M blocks) with no recompilation miss, and turns the display on, but the guest parks in its CD wait loop (`0x80084D80`) before drawing: 2 GP0 commands, no VRAM pixels. There is no interpreter in the port. |
+| Native port | In progress | `r6-port` runs the generated blocks continuously and presents the display through an OpenGL 3.3 shader, with a live FPS counter in the title bar and an on-screen overlay. On Spider-Man it boots the retail `.chd` and runs its frame loop without a recompilation miss, but the guest never reaches its renderer: it stops reading the disc after 6 sectors and loops `CdInit`, submitting 0 GP0 commands and leaving VRAM black. The interpreter goes further (141 sectors) and then parks in the same CD loader wait, which is this project's documented blocker. | Unblock the CD loader wait (`0x8008CA8C`), then capture the first scene |
 | Native player | In progress | `r6-player` is the development interpreter front end; it presents the reference display, not a recompiled build. |
 
 Progress is measured by bring-up milestones, not playable game content. On-screen
@@ -204,23 +204,37 @@ slice, not a playable build, and the run stops at the block budget.
 differential work. For a complete image, `tools/r6-recomp` reads the user's own
 `.chd`/`.cue`/`.bin` directly and emits the same block-threaded unit, covering
 every reachable block it can prove plus the code pointers and function
-prologues that runtime-installed callbacks use:
+prologues that runtime-installed callbacks use.
+
+With CMake:
 
 ```powershell
 .\build\Release\r6-recomp.exe "C:\path\to\your\game.chd" `
-  "$env:USERPROFILE\R6-local\generated\game_translation.cpp"
+  "$env:USERPROFILE\R6-local\games\translation.cpp"
 
 cmake -S . -B build-native `
-  -DR6_GENERATED_TRANSLATION="$env:USERPROFILE\R6-local\generated\game_translation.cpp"
+  -DR6_GENERATED_TRANSLATION="$env:USERPROFILE\R6-local\games\translation.cpp"
 cmake --build build-native --config Release --target r6-native
 cmake --build build-native --config Release --target r6-port
 ```
 
+On Windows without CMake, `tools/build-port-msvc.cmd` does the same work with
+the Visual Studio toolchain and needs nothing else installed:
+
+```powershell
+.\tools\build-port-msvc.cmd "C:\path\to\your\game.chd" "C:\R6-local\build"
+C:\R6-local\build\r6-port.exe --disc "C:\path\to\your\game.chd"
+```
+
+It locates Visual Studio through `vswhere`, builds `r6-recomp`, translates the
+disc into `translation.cpp`, compiles and links `r6-port.exe`, and copies
+`shaders\` beside it. Every generated file stays in the output directory.
+
 `r6-native` verifies the generated blocks against the interpreter, block by
 block. `r6-port` is the playable front end: it boots the same executable, runs
 the generated blocks continuously with real platform services, and presents the
-GPU display through the OpenGL 3.3 shaders in `shaders/`. Copy `shaders/` next
-to the port executable so they can be edited without rebuilding.
+GPU display through the OpenGL 3.3 shaders in `shaders\`, with a live frames
+per second counter in the title bar and the top-left corner.
 
 The port has no interpreter fallback. An address with no translated block
 stops the run and is printed; add it to an `--extra-leaders` file and re-run

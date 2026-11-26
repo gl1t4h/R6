@@ -14,9 +14,13 @@
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <mmsystem.h>
+
+#pragma comment(lib, "winmm.lib")
 
 #include <GL/gl.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -26,6 +30,7 @@
 #include <iterator>
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "r6/boot_image.h"
@@ -234,6 +239,8 @@ struct Host {
     r6::boot::ExeImage exe;
     std::uint64_t blocks{0};
     bool halted{false};
+    bool trace{false};
+    std::unordered_map<std::uint32_t, std::uint64_t> histogram;
     std::string stop_reason;
 };
 
@@ -340,6 +347,7 @@ bool step_once(Host& host) {
         return false;
     }
     ++host.blocks;
+    if (host.trace) ++host.histogram[cpu.pc & ~3u];
     return true;
 }
 
@@ -358,6 +366,7 @@ struct WindowState {
     GLint scanlines = -1;
     GLint gamma = -1;
     bool running = true;
+    bool show_fps = true;
     double fps = 0.0;
 };
 
@@ -454,8 +463,70 @@ bool load_gl_functions(Gl& gl) {
            gl.load(gl.active_texture, "glActiveTexture");
 }
 
+
+// A 5x7 bitmap font, just enough for the on-screen counter. The overlay is
+// drawn into the presented copy of the guest frame, so it never touches VRAM.
+const std::uint8_t* glyph_rows(char glyph) {
+    static const std::uint8_t kDigits[10][7] = {
+        {0x0E, 0x11, 0x13, 0x15, 0x19, 0x11, 0x0E},  // 0
+        {0x04, 0x0C, 0x04, 0x04, 0x04, 0x04, 0x0E},  // 1
+        {0x0E, 0x11, 0x01, 0x02, 0x04, 0x08, 0x1F},  // 2
+        {0x1F, 0x02, 0x04, 0x02, 0x01, 0x11, 0x0E},  // 3
+        {0x02, 0x06, 0x0A, 0x12, 0x1F, 0x02, 0x02},  // 4
+        {0x1F, 0x10, 0x1E, 0x01, 0x01, 0x11, 0x0E},  // 5
+        {0x06, 0x08, 0x10, 0x1E, 0x11, 0x11, 0x0E},  // 6
+        {0x1F, 0x01, 0x02, 0x04, 0x08, 0x08, 0x08},  // 7
+        {0x0E, 0x11, 0x11, 0x0E, 0x11, 0x11, 0x0E},  // 8
+        {0x0E, 0x11, 0x11, 0x0F, 0x01, 0x02, 0x0C},  // 9
+    };
+    static const std::uint8_t kF[7] = {0x1F, 0x10, 0x10, 0x1E, 0x10, 0x10, 0x10};
+    static const std::uint8_t kP[7] = {0x1E, 0x11, 0x11, 0x1E, 0x10, 0x10, 0x10};
+    static const std::uint8_t kS[7] = {0x0F, 0x10, 0x10, 0x0E, 0x01, 0x01, 0x1E};
+    static const std::uint8_t kSpace[7] = {0, 0, 0, 0, 0, 0, 0};
+    static const std::uint8_t kDot[7] = {0, 0, 0, 0, 0, 0x0C, 0x0C};
+    if (glyph >= '0' && glyph <= '9') return kDigits[glyph - '0'];
+    if (glyph == 'F') return kF;
+    if (glyph == 'P') return kP;
+    if (glyph == 'S') return kS;
+    if (glyph == '.') return kDot;
+    return kSpace;
+}
+
+void draw_overlay_text(std::vector<std::uint32_t>& pixels, int x, int y,
+                       const std::string& text, std::uint32_t colour,
+                       int scale) {
+    constexpr int kWidth = 320;
+    constexpr int kHeight = 240;
+    int cursor = x;
+    for (const char glyph : text) {
+        const auto* rows = glyph_rows(glyph);
+        for (int row = 0; row < 7; ++row) {
+            for (int column = 0; column < 5; ++column) {
+                if ((rows[row] & (1u << (4 - column))) == 0) continue;
+                for (int dy = 0; dy < scale; ++dy) {
+                    for (int dx = 0; dx < scale; ++dx) {
+                        const int px = cursor + column * scale + dx;
+                        const int py = y + row * scale + dy;
+                        if (px < 0 || py < 0 || px >= kWidth || py >= kHeight) {
+                            continue;
+                        }
+                        pixels[static_cast<std::size_t>(py) * kWidth + px] =
+                            colour;
+                    }
+                }
+            }
+        }
+        cursor += 6 * scale;
+    }
+}
+
 void present(WindowState& state, Gl& gl, bool scanline_effect) {
-    const auto frame = state.host->services->gpu().display_frame();
+    auto frame = state.host->services->gpu().display_frame();
+    if (state.show_fps) {
+        const auto text = std::to_string(static_cast<int>(state.fps + 0.5)) + " FPS";
+        draw_overlay_text(frame, 5, 5, text, 0xFF000000u, 2);
+        draw_overlay_text(frame, 4, 4, text, 0xFFFFFFFFu, 2);
+    }
     static const std::uint32_t kWidth = 320;
     static const std::uint32_t kHeight = 240;
 
@@ -518,19 +589,30 @@ int run_headless(Host& host, std::uint64_t frames,
         std::cout << "Stop: " << host.stop_reason << "\n";
     }
     if (!screenshot.empty()) {
-        r6::boot::write_ppm(gpu.display_frame(), 320, 240, screenshot);
+        auto frame = gpu.display_frame();
+        draw_overlay_text(frame, 5, 5, "60 FPS", 0xFF000000u, 2);
+        draw_overlay_text(frame, 4, 4, "60 FPS", 0xFFFFFFFFu, 2);
+        r6::boot::write_ppm(frame, 320, 240, screenshot);
         std::cout << "Wrote " << screenshot.string() << "\n";
     }
     if (host.bus) {
-        const auto& bus = *host.bus;
+        auto& bus = *host.bus;
         std::cout << "Clock: " << bus.hardware().cycles() << " cycle(s), "
                   << bus.hardware().interrupt_status() << " I_STAT, "
-                  << bus.hardware().interrupt_mask() << " I_MASK, in handler "
-                  << (bus.in_interrupt() ? "yes" : "no") << "\n";
-        const auto& events = bus.events().events();
-        const auto first = events.size() > 8 ? events.size() - 8 : 0;
-        for (std::size_t index = first; index < events.size(); ++index) {
-            std::cout << "  event: " << events[index] << "\n";
+                  << bus.hardware().interrupt_mask() << " I_MASK\n";
+        if (host.trace) {
+            std::vector<std::pair<std::uint64_t, std::uint32_t>> hot;
+            hot.reserve(host.histogram.size());
+            for (const auto& entry : host.histogram) {
+                hot.emplace_back(entry.second, entry.first);
+            }
+            std::sort(hot.begin(), hot.end(), std::greater<>());
+            std::cout << "Hot PCs (" << host.histogram.size()
+                      << " distinct):\n";
+            for (std::size_t index = 0; index < hot.size() && index < 14; ++index) {
+                std::cout << "  " << hex32(hot[index].second) << "  "
+                          << hot[index].first << "\n";
+            }
         }
     }
     return host.halted ? 1 : 0;
@@ -544,6 +626,7 @@ int main(int argc, char** argv) {
     std::uint64_t frames = 0;  // 0 = interactive
     bool headless = false;
     bool scanlines = true;
+    bool trace = false;
 
     for (int index = 1; index < argc; ++index) {
         const std::string argument = argv[index];
@@ -558,6 +641,8 @@ int main(int argc, char** argv) {
             headless = true;
         } else if (argument == "--no-scanlines") {
             scanlines = false;
+        } else if (argument == "--trace") {
+            trace = true;
         } else if (image.empty()) {
             image = argument;
         }
@@ -570,6 +655,7 @@ int main(int argc, char** argv) {
     }
 
     Host host;
+    host.trace = trace;
     host.image = image;
     std::string error;
     if (!load_boot(host, error)) {
@@ -648,8 +734,10 @@ int main(int argc, char** argv) {
     ShowWindow(window, SW_SHOW);
     UpdateWindow(window);
 
+    timeBeginPeriod(1);
     auto last_frame = GetTickCount64();
-    auto last_count = host.blocks;
+    auto fps_mark = last_frame;
+    std::uint64_t fps_frames = 0;
     MSG message{};
     while (state.running) {
         while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE)) {
@@ -674,21 +762,26 @@ int main(int argc, char** argv) {
             if (!step_once(host)) break;
         }
         present(state, gl, scanlines);
-
-        if (now - last_frame >= 1000) {
-            const auto blocks = host.blocks - last_count;
-            state.fps = static_cast<double>(blocks);
-            last_count = host.blocks;
+        ++fps_frames;
+        const auto stamp = GetTickCount64();
+        if (stamp - fps_mark >= 500) {
+            state.fps = fps_frames * 1000.0 /
+                        static_cast<double>(stamp - fps_mark);
+            fps_frames = 0;
+            fps_mark = stamp;
         }
         if (host.halted) {
             std::cerr << "r6-port: stopped: " << host.stop_reason << "\n";
             SetWindowTextW(window, L"R6 - stopped (see console)");
             break;
         }
-        const std::string title = "r6-port - " + hex32(host.cpu.pc);
+        const std::string title = "R6 - Spider-Man - " +
+                                  std::to_string(static_cast<int>(state.fps + 0.5)) +
+                                  " FPS - " + hex32(host.cpu.pc);
         SetWindowTextA(window, title.c_str());
     }
 
+    timeEndPeriod(1);
     wglMakeCurrent(nullptr, nullptr);
     if (state.gl_context != nullptr) wglDeleteContext(state.gl_context);
     return host.halted ? 1 : 0;
