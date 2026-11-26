@@ -676,3 +676,33 @@ recorded events in each engine and an equal full-stream fingerprint, in
 addition to the existing GPR, HI/LO, COP0, hardware, GTE, scratchpad, BIOS and
 2 MiB RAM comparisons. The run still stops on the block budget at
 `0x800154CC`. Generated translations remain local and are not committed.
+
+## Full-image translation from a .chd
+
+The stub generator proves blocks against the interpreter; the port needs the
+whole image. `tools/r6-recomp` closes that gap and records four things about
+this title that a call-site scan alone misses.
+
+1. **Mode table.** The entry at `0x8008739C` builds `0x800B47C4` and calls
+   thirteen function pointers in sequence (`lw t0,0(s0)`, `jalr t0`). The first
+   one, `0x8001B460`, has no `jal` and no data word pointing at it until the
+   table is read. Seeding every 32-bit word that points into the image found
+   1,254 distinct targets and moved the run past the table.
+2. **jalr continuations.** The loop's `bne` sits immediately after the `jalr`
+   delay slot (`0x80087494`). That continuation is real code but is not a
+   branch target, so the walker now seeds `pc + 8` for every indirect call.
+   Without it the port stops the first time a mode entry returns.
+3. **Runtime callbacks.** The CD path reaches `0x8008996C`, a normal
+   `addiu sp,sp,-24` prologue that is installed into a structure at runtime.
+   Seeding all 1,083 negative-frame prologues covers it and the rest of the
+   callback family.
+4. **Interrupts inside a block.** Per-instruction event polling can take an
+   interrupt halfway through a translated block and set EPC to an instruction
+   with no block of its own. The port opts into block-boundary interrupt
+   delivery, so EPC is always a translated entry and no instruction is skipped
+   or run twice.
+
+After those four rules the port runs 3,600 fields without a miss. The remaining
+stop is behavioural, not translational: the guest waits on the CD stream at
+`0x80084D80` and never submits a scene. `r6-native --compare` still matches the
+interpreter for 4,000 blocks, so the generated code is not the suspect.

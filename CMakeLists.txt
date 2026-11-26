@@ -44,6 +44,17 @@ if (WIN32)
     target_link_libraries(r6-player PRIVATE gdi32 comdlg32 shell32)
 endif()
 
+# Full-image translator: reads the user's own .chd/.cue/.bin and emits the
+# same block-threaded translation unit that r6-native and r6-port consume.
+add_executable(r6-recomp
+    tools/r6-recomp.cpp
+    src/chd_image.cpp
+)
+
+target_include_directories(r6-recomp PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
 # The generated translation unit is a user-local, derived artifact. Point this
 # at a file outside the repository to build the native execution slice.
 set(R6_GENERATED_TRANSLATION "" CACHE FILEPATH
@@ -57,6 +68,18 @@ if(R6_GENERATED_TRANSLATION)
     )
     target_link_libraries(r6-native PRIVATE r6-core)
     target_compile_definitions(r6-native PRIVATE R6_HAS_GENERATED_TRANSLATION=1)
+
+    # Windowed port: same generated blocks, real platform services and an
+    # OpenGL 3.3 shader presentation instead of the differential harness.
+    add_executable(r6-port
+        src/port_main.cpp
+        "${R6_GENERATED_TRANSLATION_ABS}"
+    )
+    target_link_libraries(r6-port PRIVATE r6-core)
+    target_compile_definitions(r6-port PRIVATE R6_HAS_GENERATED_TRANSLATION=1)
+    if (WIN32)
+        target_link_libraries(r6-port PRIVATE gdi32 user32 opengl32)
+    endif()
 endif()
 
 add_executable(r6-tests
@@ -92,8 +115,12 @@ if (MSVC)
     target_compile_options(r6-run PRIVATE /W4 /permissive-)
     target_compile_options(r6-tests PRIVATE /W4 /permissive-)
     target_compile_options(r6-player PRIVATE /W4 /permissive-)
+    target_compile_options(r6-recomp PRIVATE /W4 /permissive-)
     if(TARGET r6-native)
         target_compile_options(r6-native PRIVATE /W4 /permissive-)
+    endif()
+    if(TARGET r6-port)
+        target_compile_options(r6-port PRIVATE /W4 /permissive-)
     endif()
 else()
     target_compile_options(r6-core PRIVATE -Wall -Wextra -Wpedantic)
@@ -101,8 +128,12 @@ else()
     target_compile_options(r6-run PRIVATE -Wall -Wextra -Wpedantic)
     target_compile_options(r6-tests PRIVATE -Wall -Wextra -Wpedantic)
     target_compile_options(r6-player PRIVATE -Wall -Wextra -Wpedantic)
+    target_compile_options(r6-recomp PRIVATE -Wall -Wextra -Wpedantic)
     if(TARGET r6-native)
         target_compile_options(r6-native PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+    if(TARGET r6-port)
+        target_compile_options(r6-port PRIVATE -Wall -Wextra -Wpedantic)
     endif()
 endif()
 

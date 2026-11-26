@@ -211,6 +211,21 @@ public:
             return false;
         }
         if (!allow_interrupt) return false;
+        // A generated block is a single native function: an interrupt taken
+        // halfway through it would set EPC to an instruction whose block does
+        // not exist, and the dispatcher cannot resume there. The port enables
+        // block-boundary delivery so every EPC is a translated block entry.
+        if (block_boundary_interrupts_) return false;
+        return deliver_interrupt(cpu);
+    }
+
+    // Opt-in for continuous runs: take any pending interrupt now, which is a
+    // block boundary, instead of inside a block. Latency is at most one block.
+    void set_block_boundary_interrupts(bool enabled) {
+        block_boundary_interrupts_ = enabled;
+    }
+    bool service_interrupt(CpuState& cpu) {
+        if (!block_boundary_interrupts_ || in_interrupt_) return false;
         return deliver_interrupt(cpu);
     }
 
@@ -480,6 +495,7 @@ private:
     std::array<std::uint8_t, 0x400> scratchpad_{};
     EventTrace events_;
     bool vblank_enabled_{false};
+    bool block_boundary_interrupts_{false};
     std::uint64_t vblank_next_{0};
     std::uint64_t vblank_polls_{0};
     std::uint64_t vblank_count_{0};

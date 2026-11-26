@@ -220,3 +220,28 @@ not submitted a scene. See `docs/recomp-findings.md` for the current blocker.
 
 The window title shows instruction count, primitives and display state; the
 window body shows those counters plus how many disc sectors have been read.
+
+## Native port (Spider-Man)
+
+- **Executable:** `pc/SpiderMan.exe`, built from `src/port_main.cpp` plus the
+  locally generated translation unit. No interpreter is linked into it.
+- **Translation:** `tools/r6-recomp` reads `spiderman.chd` directly, extracts
+  `SLUS_008.75` (747,520 bytes at `0x80010000`, entry `0x8008739C`) and emits
+  24,214 blocks / 146,599 instructions in the same ABI as
+  `generate-native-stub.py` (`block_XXXXXXXX(CpuState&, NativeBus&)`,
+  `r6_generated::register_functions`).
+- **Differential:** `r6-native --compare --blocks 4000 --vblank` matched the
+  interpreter after every block on registers, HI/LO, COP0, hardware registers,
+  GTE, scratchpad, BIOS bookkeeping, the ordered event trace and all 2 MiB of
+  RAM.
+- **Runtime:** 3,600 fields (60 s of guest time, 291M blocks, 2.03G cycles) in
+  26 s wall time, about 2.3x realtime, with no recompilation miss. The display
+  is enabled, but the guest submits only two GP0 commands and no VRAM pixels.
+- **Blocker:** the guest is parked in the CD wait loop at `0x80084D80`,
+  interrupted every field from EPC `0x80084D80`; the CD controller/DMA
+  handshake is the next seam, not translation coverage.
+- **Coverage rules learned:** code pointers stored in tables (the 13-entry mode
+  table at `0x800B47C4`), `jalr` return continuations and ordinary function
+  prologues all reach code that no call-site scan sees. They are seeded
+  automatically. Interrupts are delivered at block boundaries in the port so
+  EPC is always a translated entry.
