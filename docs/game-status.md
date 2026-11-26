@@ -552,6 +552,16 @@ window body shows those counters plus how many disc sectors have been read.
   interpreter per read (first `Setloc` at 1,210,646 vs 1,213,964; second
   1,255,384 vs 1,265,532; third 1,291,250 vs 1,305,026).
 
+- **Value watch finds the entry (`R6_TRACE_VALUE`).** Logging the block that
+  loads a given value shows the bad operand is loaded from `0x800BF6E8`, not
+  from `0x800BF714`: `VALR 800BF6E8 = 000C0016 pc=800865C8` and again from
+  `pc=80086804`. Snapshots date the write: the whole table (`0x800BF6E0`) is
+  still zero at 1.26M cycles and reads `01 00 00 00 01 00 00 00 16 00 0C 00`
+  at 1.5M, written by the block at `0x800873AC`. The interpreter holds
+  `... 16 00 00 00` at the same entry -- one halfword apart. So `0x000C0016`
+  is a packed pair: the correct low half `0x0016` merged with a junk high half
+  `0x000C` (the filler byte of the sector-66454 payload), not a mistimed read.
+
 - **The one-ahead position fix that was tried and rejected:** the drain trace
   suggested the drive was reporting one sector past the one the guest held
   (`cd5C` 17/19/66455 against the interpreter's 16/18/22), so `present_sector`

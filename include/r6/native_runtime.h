@@ -3,6 +3,7 @@
 #include <array>
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <cstdio>
 #include <stdexcept>
 #include <unordered_map>
@@ -93,7 +94,27 @@ public:
     }
     inline static std::uint32_t trace_pc_ = 0;
 
+    // Value watch: reports the block that loads a specific value, which is how
+    // a wrong operand gets tied to the load that produced it.
+    static void trace_value(std::uint32_t address, std::uint32_t value) {
+        static const char* const mode = std::getenv("R6_TRACE_VALUE");
+        if (mode == nullptr) return;
+        if (std::strcmp(mode, "all") == 0) {
+            if (address < 0x800BE000u || address > 0x800C0000u) return;
+        } else if (value != 0x000C0016u) {
+            return;
+        }
+        std::fprintf(stderr, "VALR %08X = %08X pc=%08X\n", address, value,
+                     trace_pc_);
+    }
+
     std::uint32_t read32(std::uint32_t address) {
+        const auto value = read32_inner(address);
+        trace_value(address, value);
+        return value;
+    }
+
+    std::uint32_t read32_inner(std::uint32_t address) {
         note_watch(address, "read32");
         trace_table('R', address);
         const auto physical = address & 0x1FFFFFFFu;
