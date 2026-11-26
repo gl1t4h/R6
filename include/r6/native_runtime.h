@@ -201,7 +201,7 @@ public:
         }
         if (physical >= hardware::kSpuBase &&
             physical < hardware::kSpuEnd) {
-            write32(physical, value & 0xFFFFu);
+            hardware_.write_spu16(physical, value & 0xFFFFu);
             return;
         }
         const auto aligned = physical & ~3u;
@@ -550,8 +550,16 @@ private:
         }
     }
 
-    // DMA4's SPU data is not consumed yet, but its completion flag is.
+    // DMA4 feeds sound RAM, where the voice model reads its ADPCM headers.
     void run_dma4_transfer() {
+        const auto counter = hardware_.dma_counter(4);
+        auto words = counter & 0xFFFFu;
+        if (words == 0) words = 0x10000u;
+        const auto address = 0x80000000u | hardware_.dma_address(4);
+        for (std::uint32_t index = 0; index < words; ++index) {
+            hardware_.write_spu_ram_word(
+                ram_.read32((address + index * 4) & kRamMask));
+        }
         hardware_.complete_dma(4);
         events_.record("dma4");
     }

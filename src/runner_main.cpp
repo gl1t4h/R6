@@ -679,6 +679,18 @@ int main(int argc, char** argv) {
               << "DMA: " << interpreter.dma_writes() << " register writes, "
               << interpreter.dma_lists() << " linked lists, "
               << interpreter.dma_words() << " words sent to the GPU\n"
+              << "SPU: " << interpreter.spu_register_writes()
+              << " register writes, " << interpreter.spu_dma_words()
+              << " DMA words, " << interpreter.spu_key_ons()
+              << " key-ons, " << interpreter.spu_key_offs()
+              << " key-offs, " << interpreter.spu_voice_ends()
+              << " voice ends, " << interpreter.spu_irqs() << " IRQs\n"
+              << "SPU walk: " << interpreter.spu_walks_with_end()
+              << " of " << interpreter.spu_key_ons()
+              << " key-ons found an end flag; first start 0x" << std::hex
+              << interpreter.spu_first_start() << std::dec
+              << " with " << interpreter.spu_first_samples()
+              << " samples\n"
               << "BIOS: " << services.bios().unhandled_call_count()
               << " unhandled vectors, " << interpreter.cd_sectors_read()
               << " disc sectors read\n"

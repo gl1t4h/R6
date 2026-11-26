@@ -698,17 +698,24 @@ window body shows those counters plus how many disc sectors have been read.
   machine never gets another frame. This is the same "stream left in state
   3" defect recorded earlier, now tied directly to the frozen frame loop.
   `R6_TRACE_LOOP=1` prints the retry caller's return address.
-- **Why the stream never completes:** the completion stores in the sound tick
-  (`0x80033898`, `0x800338B0`, `0x80033A80`, `0x80033A94`, `0x80033AD8`) sit
-  behind `0x8002EA28`, which counts, over the 15 voice records of the
-  28-byte table at `0x800B5508`, the entries whose byte `+4` is non-zero.
-  `0x8002EA78` returns `*(record + 0x18) - that_count` (free voices). The
-  tick only advances a stream when no voice is active, so every stream
-  record stays in state 3 while the sound driver believes its voices are
-  still playing. R6 models no SPU voice state at all: the whole
-  `0x1F801C00`-`0x1F801E00` block is a 16-bit register stub that reads zero,
-  so the driver can never observe a voice ending. That is the defect that
-  holds the 1602 scene, and the black frame, in place.
+- **The sound-voice hypothesis was wrong:** the completion stores in the
+  sound tick (`0x80033898`, `0x800338B0`, `0x80033A80`, `0x80033A94`,
+  `0x80033AD8`) are gated on the 15 voice records at `0x800B5508` being
+  free, but at 400M every one of those records is already empty (`+4` = 0).
+  Voices never held the stream. The stream records at `0x801A8040` stay in
+  state 3 because nothing in the streaming module (`0x80093xxx`) moves them
+  to state 2, the only state the poll `0x800934EC` accepts; every other
+  state returns 1, so the 2,000-retry loop at `0x801E331C` gives up and the
+  frame loop never runs again.
+- **SPU voice model:** the SPU now has 512 KiB of sound RAM filled by DMA4,
+  the 24-voice register file, key on/off, ENDX (cleared by key-on, set at a
+  LOOP-END block), the current-volume register, and IRQ9 at the IRQ address
+  once SPUCNT bits 15 and 6 enable it. At 400M it is exercised: 745 register
+  writes, 512 DMA words, 48 key-ons, 48 key-offs, 0 voice ends, 0 IRQs, and
+  48 of 48 walks found an end flag (first start `0x1000`, 28 samples). The
+  driver keys each voice off long before it would end and never polls ENDX,
+  so the model changes none of the boot state; the stream stall is upstream
+  of the sound module.
 - **New debug knob:** `R6_TRACE_DECRYPT=1` prints each `0x80010AD0` call as
   `dst`, `src`, `count` and `ra`. Interpreter-only, off by default.
 - **Test target repair:** `tests/test_unaligned.cpp` was added by `f694247`

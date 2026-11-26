@@ -248,9 +248,9 @@ void MipsInterpreter::write16(std::uint32_t address, std::uint32_t value) {
     // Hardware registers are 32 bits wide, and guest code stores to them a
     // half at a time (the interrupt dispatcher acknowledges I_STAT that way).
     if (physical >= hardware::kSpuBase && physical < hardware::kSpuEnd) {
-        // SPU registers really are 16 bits wide; merging into a 32-bit word
-        // would land the write on the neighbouring register.
-        write32(physical, value & 0xFFFFu);
+        // SPU registers really are 16 bits wide; a word store at this address
+        // would land on the neighbouring register.
+        hardware_.write_spu16(physical, value & 0xFFFFu);
         return;
     }
     const auto aligned = physical & ~3u;
@@ -554,10 +554,16 @@ void MipsInterpreter::run_dma3_transfer() {
 
 void MipsInterpreter::run_dma4_transfer() {
     // SPU transfers are manual mode: the counter's low half is the word count
-    // and zero means 0x10000. The sound data itself is not consumed yet, but
-    // the completion flag is: libspu waits for the channel-4 handler to deliver
-    // its EvSpu event before it will finish initialising.
-    ++dma_words_;
+    // and zero means 0x10000. The words land in sound RAM at the transfer
+    // cursor, because the sound driver keys voices on against that data and
+    // the voice model reads its ADPCM headers from there.
+    const auto counter = hardware_.dma_counter(4);
+    auto words = counter & 0xFFFFu;
+    if (words == 0) words = 0x10000u;
+    const auto address = 0x80000000u | hardware_.dma_address(4);
+    for (std::uint32_t index = 0; index < words; ++index) {
+        hardware_.write_spu_ram_word(read32(address + index * 4));
+    }
     hardware_.complete_dma(4);
     events_.record("dma4");
 }

@@ -46,6 +46,12 @@ constexpr std::uint32_t kSpuTransferControl = 0x1F801DAC;
 constexpr std::uint32_t kSpuStatus = 0x1F801DAE;
 constexpr std::uint32_t kSpuBase = 0x1F801C00;
 constexpr std::uint32_t kSpuEnd = 0x1F801E00;
+constexpr std::uint32_t kSpuKeyOn = 0x1F801D88;
+constexpr std::uint32_t kSpuKeyOff = 0x1F801D8C;
+constexpr std::uint32_t kSpuEndx = 0x1F801D9C;
+constexpr std::uint32_t kSpuIrqAddress = 0x1F801DA4;
+// I_STAT bit 9 is the SPU, asserted while SPUSTAT bit 6 is set.
+constexpr std::uint32_t kInterruptSpu = 1u << 9;
 constexpr std::uint32_t kCdromBase = 0x1F801800;
 constexpr std::uint32_t kCdromEnd = 0x1F801803;
 constexpr std::uint32_t kDmaChannelStride = 0x10;
@@ -143,18 +149,8 @@ public:
             return dma_control_[slot / 4];
         }
         if (address == hardware::kDmaInterrupt) return dma_interrupt_;
-        if (address == hardware::kSpuTransferAddress) {
-            return spu_transfer_address_;
-        }
-        if (address == hardware::kSpuControl) return spu_control_;
-        if (address == hardware::kSpuTransferControl) {
-            return spu_transfer_control_;
-        }
-        if (address == hardware::kSpuStatus) {
-            // SPU status flags (DMA busy, IRQ9) are not modelled. Reporting
-            // "idle" lets libspu's "wait for DMAF clear" loops finish, which
-            // is what a real SPU does once the transfer has landed.
-            return 0;
+        if (address >= hardware::kSpuBase && address < hardware::kSpuEnd) {
+            return read_spu(address);
         }
         return 0;
     }
@@ -172,6 +168,13 @@ public:
     }
 
     void write32(std::uint32_t address, std::uint32_t value) {
+        if (address >= hardware::kSpuBase && address < hardware::kSpuEnd) {
+            // The register block is 16 bits wide, so a word store covers two
+            // registers (key on/off are written that way).
+            write_spu16(address, value & 0xFFFFu);
+            write_spu16(address + 2u, (value >> 16) & 0xFFFFu);
+            return;
+        }
         if (address == hardware::kGpuCommand ||
             address == hardware::kGpuStatus) {
             services_.write_gpu_register(address, value);
@@ -253,25 +256,45 @@ public:
                 (dma_interrupt_ & kFlagMask) | (value & 0x00FFFFFFu);
             return;
         }
-        if (address == hardware::kSpuTransferAddress) {
-            spu_transfer_address_ = value & 0xFFFFu;
-            return;
-        }
-        if (address == hardware::kSpuDataFifo) {
-            // FIFO contents are not used yet. libspu checks that the transfer
-            // address it programmed is still what the status register reports
-            // after a manual write, so leave the address alone here.
-            return;
-        }
-        if (address == hardware::kSpuControl) {
-            spu_control_ = value & 0xFFFFu;
-            return;
-        }
-        if (address == hardware::kSpuTransferControl) {
-            spu_transfer_control_ = value & 0xFFFFu;
-            return;
-        }
     }
+
+    // Halfword write, used by the interpreters' 16-bit store path so a sh does
+    // not overwrite the neighbouring register.
+    void write_spu16(std::uint32_t address, std::uint32_t value) {
+        const auto index = (address - hardware::kSpuBase) / 2u;
+        spu_write_register(index, static_cast<std::uint16_t>(value));
+    }
+
+    // Copies one DMA4 word into sound RAM at the transfer cursor. The guest
+    // uploads ADPCM data this way before keying a voice on.
+    void write_spu_ram_word(std::uint32_t value) {
+        const auto address = spu_transfer_cursor_ & kSpuAddressMask;
+        spu_ram_[address >> 1] = static_cast<std::uint16_t>(value);
+        spu_ram_[((address + 2u) & kSpuAddressMask) >> 1] =
+            static_cast<std::uint16_t>(value >> 16);
+        spu_dma_words_ += 2u;
+        spu_transfer_cursor_ = (address + 4u) & kSpuAddressMask;
+        spu_transfer_address_ = (spu_transfer_cursor_ >> 3) & 0xFFFFu;
+    }
+
+    bool spu_voice_active(std::size_t voice) const {
+        return voice < spu_voices_.size() && spu_voices_[voice].active;
+    }
+    std::uint32_t spu_endx() const { return spu_endx_; }
+    // Bring-up counters: distinguish "the game never touches the SPU" from
+    // "the model saw the writes and still did not change the outcome".
+    std::uint64_t spu_register_writes() const { return spu_register_writes_; }
+    std::uint64_t spu_key_ons() const { return spu_key_ons_; }
+    std::uint64_t spu_key_offs() const { return spu_key_offs_; }
+    std::uint64_t spu_voice_ends() const { return spu_voice_ends_; }
+    std::uint64_t spu_irqs() const { return spu_irqs_; }
+    std::uint64_t spu_dma_words() const { return spu_dma_words_; }
+    // Voices whose ADPCM walk found a LOOP-END flag, and the first key-on's
+    // start address and sample count, so an empty walk can be told apart from
+    // a driver that simply never uploads sample data.
+    std::uint64_t spu_walks_with_end() const { return spu_walks_with_end_; }
+    std::uint32_t spu_first_start() const { return spu_first_start_; }
+    std::uint32_t spu_first_samples() const { return spu_first_samples_; }
 
     // Called when a DMA channel finishes. The channel flag in 0x1F8010F4 is
     // what the guest's DMA handler dispatches on, and the DMA interrupt is
@@ -293,6 +316,13 @@ public:
     // interpreter happened to be running.
     void advance_cycles(std::uint64_t count) {
         cycles_ += count;
+        // Voices are advanced in batches; a per-instruction update would cost
+        // more than the rest of the device model together.
+        spu_tick_cycles_ += count;
+        if (spu_tick_cycles_ >= kSpuTickCycles) {
+            spu_tick_cycles_ = 0;
+            tick_spu();
+        }
         if (gpu_vblank_cycles_ > count) {
             gpu_vblank_cycles_ -= count;
         } else {
@@ -395,6 +425,245 @@ public:
     }
 
 private:
+    // The SPU is modelled far enough to let a driver release a voice: the
+    // 512 KiB sound RAM fed by DMA4, the voice register file, key on/off,
+    // ENDX and the IRQ address. Samples are not mixed; a voice's position is
+    // derived from the cycles since key-on scaled by its pitch, and its end
+    // from the ADPCM block headers in sound RAM.
+    static constexpr std::uint32_t kSpuAddressMask = 0x7FFFFu;
+    static constexpr std::uint32_t kSpuRamMask = 0x3FFFFu;
+    static constexpr std::uint32_t kSpuSize = 0x80000u;
+    static constexpr std::uint32_t kSpuVoiceCount = 24u;
+    static constexpr std::uint32_t kSpuVoiceBytes = 0x180u;
+    static constexpr std::uint32_t kAdpcmBlockBytes = 16u;
+    static constexpr std::uint32_t kAdpcmBlockSamples = 28u;
+    static constexpr std::uint32_t kAdpcmBlockLimit = 0x8000u;
+    static constexpr std::uint32_t kSpuSampleRate = 44100u;
+    static constexpr std::uint64_t kSpuClock = 33868800u;
+    static constexpr std::uint32_t kPitchOne = 0x1000u;
+    static constexpr std::uint32_t kSpuEnable = 0x8000u;
+    static constexpr std::uint32_t kSpuIrqEnable = 0x0040u;
+    static constexpr std::uint64_t kSpuTickCycles = 512u;
+
+    struct SpuVoice {
+        std::array<std::uint16_t, 8> registers{};
+        bool active{false};
+        bool loops{false};
+        std::uint64_t key_on_cycle{0};
+        std::uint32_t pitch{kPitchOne};
+        std::uint32_t start_address{0};
+        std::uint32_t end_address{0};
+        std::uint32_t total_samples{0};
+        std::uint32_t current_address{0};
+    };
+
+    std::uint32_t read_spu(std::uint32_t address) const {
+        const auto index = (address - hardware::kSpuBase) / 2u;
+        return spu_register(index) |
+               (static_cast<std::uint32_t>(spu_register(index + 1)) << 16);
+    }
+
+    std::uint16_t spu_register(std::uint32_t index) const {
+        const auto offset = index * 2u;
+        if (offset < kSpuVoiceBytes) {
+            const auto voice = offset / 0x10u;
+            const auto reg = (offset % 0x10u) / 2u;
+            const auto& state = spu_voices_[voice];
+            // Current ADSR volume reads as full while the voice plays, zero
+            // once it has ended, which is what a driver polls to see life.
+            if (reg == 6) return state.active ? 0x7FFFu : 0u;
+            return state.registers[reg];
+        }
+        if (offset < 0x180u || offset >= 0x180u + 0x80u) return 0;
+        switch (offset) {
+            case 0x19Cu:
+                return static_cast<std::uint16_t>(spu_endx_);
+            case 0x19Eu:
+                return static_cast<std::uint16_t>(spu_endx_ >> 16);
+            case 0x1A4u:
+                return static_cast<std::uint16_t>(spu_irq_address_);
+            case 0x1A6u:
+                return static_cast<std::uint16_t>(spu_transfer_address_);
+            case 0x1AAu:
+                return static_cast<std::uint16_t>(spu_control_);
+            case 0x1ACu:
+                return static_cast<std::uint16_t>(spu_transfer_control_);
+            case 0x1AEu:
+                return spu_irq_pending_ ? 0x0040u : 0u;
+            default:
+                break;
+        }
+        return spu_registers_[(offset - 0x180u) / 2u];
+    }
+
+    void spu_write_register(std::uint32_t index, std::uint16_t value) {
+        ++spu_register_writes_;
+        const auto offset = index * 2u;
+        if (offset < kSpuVoiceBytes) {
+            const auto voice = offset / 0x10u;
+            const auto reg = (offset % 0x10u) / 2u;
+            auto& state = spu_voices_[voice];
+            state.registers[reg] = value;
+            if (reg == 2) state.pitch = value == 0 ? kPitchOne : value;
+            if (reg == 3) state.start_address = value * 8u;
+            return;
+        }
+        if (offset < 0x180u || offset >= 0x180u + 0x80u) return;
+        switch (offset) {
+            case 0x188u:
+                spu_key_on(value);
+                return;
+            case 0x18Au:
+                spu_key_on(static_cast<std::uint32_t>(value) << 16);
+                return;
+            case 0x18Cu:
+                spu_key_off(value);
+                return;
+            case 0x18Eu:
+                spu_key_off(static_cast<std::uint32_t>(value) << 16);
+                return;
+            case 0x1A4u:
+                spu_irq_address_ = value & 0xFFFFu;
+                return;
+            case 0x1A6u:
+                spu_transfer_address_ = value & 0xFFFFu;
+                spu_transfer_cursor_ = (value & 0xFFFFu) * 8u;
+                return;
+            case 0x1A8u:
+                spu_write_fifo(value);
+                return;
+            case 0x1AAu:
+                write_spu_control(value);
+                return;
+            case 0x1ACu:
+                spu_transfer_control_ = value;
+                return;
+            default:
+                spu_registers_[(offset - 0x180u) / 2u] = value;
+                return;
+        }
+    }
+
+    void spu_write_fifo(std::uint16_t value) {
+        const auto address = spu_transfer_cursor_ & kSpuAddressMask;
+        spu_ram_[address >> 1] = value;
+        spu_transfer_cursor_ = (address + 2u) & kSpuAddressMask;
+        spu_transfer_address_ = (spu_transfer_cursor_ >> 3) & 0xFFFFu;
+    }
+
+    void write_spu_control(std::uint16_t value) {
+        const bool was_enabled = (spu_control_ & kSpuEnable) != 0;
+        spu_control_ = value;
+        // Clearing bit 6 acknowledges the IRQ: the level drops with SPUSTAT
+        // bit 6 and I_STAT bit 9 clears with it.
+        if ((value & kSpuIrqEnable) == 0 && spu_irq_pending_) {
+            spu_irq_pending_ = false;
+            interrupt_status_ &= ~hardware::kInterruptSpu;
+        }
+        if (was_enabled && (value & kSpuEnable) == 0) {
+            for (auto& voice : spu_voices_) voice.active = false;
+        }
+    }
+
+    void spu_key_on(std::uint32_t mask) {
+        for (std::uint32_t voice = 0; voice < kSpuVoiceCount; ++voice) {
+            if ((mask & (1u << voice)) == 0) continue;
+            auto& state = spu_voices_[voice];
+            ++spu_key_ons_;
+            state.active = true;
+            state.key_on_cycle = cycles_;
+            state.start_address =
+                static_cast<std::uint32_t>(state.registers[3]) * 8u;
+            state.current_address = state.start_address;
+            state.pitch =
+                state.registers[2] == 0 ? kPitchOne : state.registers[2];
+            // ENDX clears for a voice when it is keyed on.
+            spu_endx_ &= ~(1u << voice);
+            walk_adpcm(state);
+            if (spu_key_ons_ == 1) {
+                spu_first_start_ = state.start_address;
+                spu_first_samples_ = state.total_samples;
+            }
+            if (state.total_samples != 0) ++spu_walks_with_end_;
+        }
+    }
+
+    void spu_key_off(std::uint32_t mask) {
+        for (std::uint32_t voice = 0; voice < kSpuVoiceCount; ++voice) {
+            if ((mask & (1u << voice)) != 0) {
+                if (spu_voices_[voice].active) ++spu_key_offs_;
+                spu_voices_[voice].active = false;
+            }
+        }
+    }
+
+    // Scans the ADPCM blocks from the voice's start address for the LOOP-END
+    // flag, so the voice knows how many samples it can play before it ends.
+    void walk_adpcm(SpuVoice& voice) {
+        auto address = voice.start_address & kSpuAddressMask;
+        std::uint32_t samples = 0;
+        voice.total_samples = 0;
+        voice.loops = false;
+        for (std::uint32_t block = 0; block < kAdpcmBlockLimit; ++block) {
+            const auto header = spu_ram_[(address >> 1) & kSpuRamMask];
+            const auto flags = static_cast<std::uint8_t>(header >> 8);
+            samples += kAdpcmBlockSamples;
+            address = (address + kAdpcmBlockBytes) & kSpuAddressMask;
+            if ((flags & 0x01u) == 0) continue;
+            voice.total_samples = samples;
+            voice.end_address = address;
+            voice.loops = (flags & 0x02u) != 0;
+            return;
+        }
+        // No end marker in the uploaded data yet: hold the voice until it is
+        // keyed off, as a real SPU would keep reading whatever is in RAM.
+        voice.end_address = address;
+    }
+
+    void tick_spu() {
+        for (std::uint32_t voice = 0; voice < kSpuVoiceCount; ++voice) {
+            auto& state = spu_voices_[voice];
+            if (!state.active) continue;
+            const auto elapsed = cycles_ - state.key_on_cycle;
+            auto played = elapsed * kSpuSampleRate *
+                          static_cast<std::uint64_t>(state.pitch) /
+                          (kSpuClock * kPitchOne);
+            if (state.total_samples != 0 &&
+                played >= state.total_samples) {
+                spu_endx_ |= 1u << voice;
+                if (!state.loops) {
+                    ++spu_voice_ends_;
+                    state.active = false;
+                    state.current_address = state.end_address;
+                    continue;
+                }
+                played %= state.total_samples;
+            }
+            const auto block = played / kAdpcmBlockSamples;
+            state.current_address =
+                (state.start_address +
+                 static_cast<std::uint32_t>(block) * kAdpcmBlockBytes) &
+                kSpuAddressMask;
+        }
+        poll_spu_irq();
+    }
+
+    void poll_spu_irq() {
+        if ((spu_control_ & kSpuEnable) == 0) return;
+        if ((spu_control_ & kSpuIrqEnable) == 0) return;
+        if (spu_irq_pending_) return;
+        const auto target = (spu_irq_address_ * 8u) & kSpuAddressMask;
+        for (const auto& voice : spu_voices_) {
+            if (!voice.active) continue;
+            if ((voice.current_address & ~7u) == (target & ~7u)) {
+                spu_irq_pending_ = true;
+                ++spu_irqs_;
+                raise_interrupt(hardware::kInterruptSpu);
+                return;
+            }
+        }
+    }
+
     static constexpr std::uint32_t kDmaBusy = 1u << 24;
     static constexpr std::uint32_t kDmaTrigger = 1u << 28;
     // 33.8688 MHz / 60 fields / 263 scanlines.
@@ -459,6 +728,26 @@ private:
     std::uint32_t spu_transfer_address_{0};
     std::uint32_t spu_control_{0};
     std::uint32_t spu_transfer_control_{0};
+    // Sound RAM lives on the heap: half a megabyte by value would overflow
+    // the host stack in the small test drivers.
+    std::vector<std::uint16_t> spu_ram_ =
+        std::vector<std::uint16_t>(kSpuSize / 2, 0u);
+    std::array<SpuVoice, kSpuVoiceCount> spu_voices_{};
+    std::array<std::uint16_t, 0x40> spu_registers_{};
+    std::uint32_t spu_transfer_cursor_{0};
+    std::uint32_t spu_irq_address_{0};
+    std::uint32_t spu_endx_{0};
+    bool spu_irq_pending_{false};
+    std::uint64_t spu_tick_cycles_{0};
+    std::uint64_t spu_register_writes_{0};
+    std::uint64_t spu_key_ons_{0};
+    std::uint64_t spu_key_offs_{0};
+    std::uint64_t spu_walks_with_end_{0};
+    std::uint32_t spu_first_start_{0};
+    std::uint32_t spu_first_samples_{0};
+    std::uint64_t spu_voice_ends_{0};
+    std::uint64_t spu_irqs_{0};
+    std::uint64_t spu_dma_words_{0};
     std::array<Timer, 3> timers_{};
     std::array<std::uint32_t, 7> dma_address_{};
     std::array<std::uint32_t, 7> dma_counter_{};

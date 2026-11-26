@@ -154,6 +154,23 @@ public:
         return sr_writes_;
     }
     std::uint32_t irq_status() { return hardware_.interrupt_status(); }
+    bool spu_voice_active(std::size_t voice) {
+        return hardware_.spu_voice_active(voice);
+    }
+    std::uint32_t spu_endx() { return hardware_.spu_endx(); }
+    std::uint64_t spu_register_writes() {
+        return hardware_.spu_register_writes();
+    }
+    std::uint64_t spu_dma_words() { return hardware_.spu_dma_words(); }
+    std::uint64_t spu_key_ons() { return hardware_.spu_key_ons(); }
+    std::uint64_t spu_key_offs() { return hardware_.spu_key_offs(); }
+    std::uint64_t spu_voice_ends() { return hardware_.spu_voice_ends(); }
+    std::uint64_t spu_irqs() { return hardware_.spu_irqs(); }
+    std::uint64_t spu_walks_with_end() {
+        return hardware_.spu_walks_with_end();
+    }
+    std::uint32_t spu_first_start() { return hardware_.spu_first_start(); }
+    std::uint32_t spu_first_samples() { return hardware_.spu_first_samples(); }
     std::uint32_t irq_mask() { return hardware_.interrupt_mask(); }
     std::uint32_t cd_sectors_read() { return hardware_.cdrom().sectors_read(); }
     std::uint64_t interrupt_overruns() const { return interrupt_overruns_; }

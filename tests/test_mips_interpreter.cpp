@@ -68,6 +68,35 @@ std::uint32_t jal(std::uint32_t target) {
     return 0x0C000000u | ((target & 0x0FFFFFFFu) >> 2);
 }
 
+std::uint32_t lui(std::uint32_t rt, std::uint32_t immediate) {
+    return (0x0Fu << 26) | (rt << 16) | (immediate & 0xFFFFu);
+}
+
+std::uint32_t ori(std::uint32_t rt, std::uint32_t rs, std::uint32_t immediate) {
+    return (0x0Du << 26) | (rs << 21) | (rt << 16) |
+           (immediate & 0xFFFFu);
+}
+
+std::uint32_t addiu(std::uint32_t rt, std::uint32_t rs, std::uint32_t immediate) {
+    return (0x09u << 26) | (rs << 21) | (rt << 16) |
+           (immediate & 0xFFFFu);
+}
+
+std::uint32_t sw(std::uint32_t rt, std::uint32_t offset, std::uint32_t rs) {
+    return (0x2Bu << 26) | (rs << 21) | (rt << 16) |
+           (offset & 0xFFFFu);
+}
+
+std::uint32_t bne(std::uint32_t rs, std::uint32_t rt, std::int32_t offset) {
+    return (0x05u << 26) | (rs << 21) | (rt << 16) |
+           (static_cast<std::uint32_t>(offset) & 0xFFFFu);
+}
+
+std::uint32_t sh(std::uint32_t rt, std::uint32_t offset, std::uint32_t rs) {
+    return (0x29u << 26) | (rs << 21) | (rt << 16) |
+           (offset & 0xFFFFu);
+}
+
 void arithmetic_and_delay_slot() {
     Memory ram(2u * 1024u * 1024u);
     TestServices services;
@@ -749,6 +778,94 @@ void syscall_critical_section_toggles_interrupts() {
 
 }  // namespace
 
+// Fills sound RAM through DMA4 and keys voice 0 on, so the voice model has
+// real ADPCM headers to walk.
+void start_spu_voice(Memory& ram, MipsInterpreter& interpreter,
+                     std::uint32_t source, std::uint32_t control) {
+    auto& cpu = interpreter.cpu();
+    cpu.pc = 0x80010000u;
+    std::uint32_t pc = 0x10000u;
+    auto emit = [&](std::uint32_t instruction) {
+        ram.write32(pc, instruction);
+        pc += 4u;
+    };
+    emit(lui(8, 0x1F80));
+    emit(addiu(8, 8, 0x10C0));     // DMA4 base
+    emit(lui(9, 0x8000 | (source >> 16)));
+    emit(ori(9, 9, source & 0xFFFFu));
+    emit(sw(9, 0, 8));             // MADR
+    emit(addiu(9, 0, 8));          // eight words
+    emit(sw(9, 4, 8));             // BCR
+    emit(lui(9, 0x0100));
+    emit(ori(9, 9, 1));            // start, main RAM to device
+    emit(sw(9, 8, 8));             // CHCR triggers the transfer
+    emit(addiu(8, 8, 0xCC8));      // 0x1F801D88
+    emit(addiu(9, 0, control));
+    emit(sh(9, 0x22, 8));          // SPUCNT at 0x1F801DAA
+    emit(sw(0, 0x1C, 8));          // IRQA = 0 at 0x1F801DA4
+    emit(addiu(9, 0, 1));
+    emit(sw(9, 0, 8));             // key on voice 0
+    emit(addiu(10, 0, 20000));
+    emit(bne(10, 0, 0));           // spin, decrementing in the delay slot
+    emit(addiu(10, 10, 0xFFFF));
+    emit(0);                       // park
+    interpreter.run(200000);
+}
+
+void spu_voice_sets_endx_at_the_adpcm_end_flag() {
+    Memory ram(2u * 1024u * 1024u);
+    TestServices services;
+    MipsInterpreter interpreter(ram, services);
+
+    // One 16-byte block whose header flags byte is LOOP-END (bit 0).
+    ram.write32(0x20000, 0x00000100u);
+    ram.write32(0x20004, 0);
+    ram.write32(0x20008, 0);
+    ram.write32(0x2000C, 0);
+    ram.write32(0x20010, 0);
+    ram.write32(0x20014, 0);
+    ram.write32(0x20018, 0);
+    ram.write32(0x2001C, 0);
+    start_spu_voice(ram, interpreter, 0x00020000u, 0x8000u);
+
+    // 28 samples at 44.1 kHz last about 21,500 cycles, well inside the spin.
+    R6_CHECK((interpreter.peek(0x1F801D9Cu) & 1u) != 0u);
+    R6_CHECK(interpreter.spu_endx() == 1u);
+    R6_CHECK(!interpreter.spu_voice_active(0));
+}
+
+void spu_voice_keeps_playing_without_an_end_flag() {
+    Memory ram(2u * 1024u * 1024u);
+    TestServices services;
+    MipsInterpreter interpreter(ram, services);
+
+    for (std::uint32_t word = 0; word < 8; ++word) {
+        ram.write32(0x20000 + word * 4, 0);
+    }
+    start_spu_voice(ram, interpreter, 0x00020000u, 0x8000u);
+
+    R6_CHECK(interpreter.spu_voice_active(0));
+    R6_CHECK(interpreter.spu_endx() == 0u);
+    // Current ADSR volume reports a live voice to a polling driver.
+    R6_CHECK((interpreter.peek(0x1F801C0Cu) & 0xFFFFu) != 0u);
+}
+
+void spu_irq_raises_bit_nine_and_clears_on_acknowledge() {
+    Memory ram(2u * 1024u * 1024u);
+    TestServices services;
+    MipsInterpreter interpreter(ram, services);
+
+    ram.write32(0x20000, 0x00000100u);
+    for (std::uint32_t word = 1; word < 8; ++word) {
+        ram.write32(0x20000 + word * 4, 0);
+    }
+    // SPUCNT bit 15 enables the SPU and bit 6 the IRQ; voice 0 starts at 0,
+    // which is also IRQA, so the level asserts on the first tick.
+    start_spu_voice(ram, interpreter, 0x00020000u, 0x8040u);
+    R6_CHECK((interpreter.irq_status() & 0x200u) != 0u);
+    R6_CHECK((interpreter.peek(0x1F801DAEu) & 0x40u) != 0u);
+}
+
 void run_mips_interpreter_tests() {
     arithmetic_and_delay_slot();
     taken_branch_skips_following_instruction();
@@ -779,4 +896,7 @@ void run_mips_interpreter_tests() {
     exception_vector_writes_are_traced();
     dma_interrupt_flags_are_write_one_to_clear();
     syscall_critical_section_toggles_interrupts();
+    spu_voice_sets_endx_at_the_adpcm_end_flag();
+    spu_voice_keeps_playing_without_an_end_flag();
+    spu_irq_raises_bit_nine_and_clears_on_acknowledge();
 }
