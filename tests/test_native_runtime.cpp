@@ -229,6 +229,48 @@ void run_scratchpad_and_dma_test() {
     R6_CHECK(has_event(dma4_bus.events(), "dma4"));
 }
 
+// The CD stream reads each sector as an 8-word header followed by a
+// 504-word payload on channel 3. Only the payload may raise the completion
+// interrupt: a header callback would publish a record whose data the tick
+// has not read yet. CHCR must also stay busy until the scheduled
+// completion, so a driver that polls it sees the transfer take time.
+void run_dma3_completion_test() {
+    Memory memory(2u * 1024u * 1024u, true);
+    NullPlatformServices services;
+
+    r6::NativeBus bus(memory, services);
+    bus.write32(r6::hardware::kDmaInterrupt, 0x00880000u);
+
+    const auto busy = [&bus]() {
+        return (bus.hardware().read32(r6::hardware::kDma3ChannelControl) &
+                (1u << 24)) != 0u;
+    };
+
+    // An 8-word sector header completes without pulling the interrupt.
+    bus.write32(r6::hardware::kDma3BaseAddress, 0x00100000u);
+    bus.write32(r6::hardware::kDma3BaseAddress + 4u, 8u);
+    bus.write32(r6::hardware::kDma3ChannelControl, 1u << 24);
+    R6_CHECK(busy());
+    bus.advance_cycles(15u);
+    R6_CHECK(busy());
+    bus.advance_cycles(1u);
+    R6_CHECK(!busy());
+    R6_CHECK((bus.hardware().read32(r6::hardware::kDmaInterrupt) &
+              (1u << 27)) != 0u);
+    R6_CHECK((bus.hardware().interrupt_status() &
+              r6::hardware::kDmaInterruptBit) == 0u);
+    R6_CHECK(bus.hardware().take_dma_completion() == 0u);
+
+    // A 504-word payload does raise it, once the transfer completes.
+    bus.write32(r6::hardware::kDma3BaseAddress + 4u, 504u);
+    bus.write32(r6::hardware::kDma3ChannelControl, 1u << 24);
+    R6_CHECK(bus.hardware().take_dma_completion() == 0u);
+    bus.advance_cycles(16u);
+    R6_CHECK((bus.hardware().interrupt_status() &
+              r6::hardware::kDmaInterruptBit) != 0u);
+    R6_CHECK(bus.hardware().take_dma_completion() == (1u << 3));
+}
+
 void run_vblank_and_pad_event_trace_test() {
     Memory native_ram(2u * 1024u * 1024u, true);
     Memory oracle_ram(2u * 1024u * 1024u, true);
@@ -480,6 +522,7 @@ void run_native_runtime_tests() {
     run_memory_snapshot_test();
     run_device_state_test();
     run_scratchpad_and_dma_test();
+    run_dma3_completion_test();
     run_interrupt_event_trace_test();
     run_hook_entry_int_event_trace_test();
     run_vblank_and_pad_event_trace_test();
