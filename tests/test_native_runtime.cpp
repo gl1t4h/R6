@@ -280,6 +280,30 @@ void run_vblank_and_pad_event_trace_test() {
     R6_CHECK(native.events().same_as(oracle.events()));
 }
 
+void run_rfe_event_trace_test() {
+    Memory native_ram(2u * 1024u * 1024u, true);
+    Memory oracle_ram(2u * 1024u * 1024u, true);
+    EventTestServices native_services;
+    EventTestServices oracle_services;
+    r6::NativeBus native(native_ram, native_services);
+    r6::MipsInterpreter oracle(oracle_ram, oracle_services);
+    CpuState native_cpu{};
+    native_cpu.pc = 0x80010000u;
+    native_cpu.cop0[12] = 0x00000404u;
+    oracle.cpu() = native_cpu;
+    oracle.set_cop0(native_cpu.cop0);
+    native_ram.write32(0x10000u, 0x42000010u);  // rfe
+    oracle_ram.write32(0x10000u, 0x42000010u);
+
+    native.rfe(native_cpu);
+    native_cpu.pc += 4u;
+    const auto result = oracle.run_event_step();
+    R6_CHECK(result.reason == r6::StopReason::step_budget);
+    R6_CHECK(native_cpu.pc == oracle.cpu().pc);
+    R6_CHECK(native_cpu.cop0[12] == oracle.cop0(12));
+    R6_CHECK(native.events().same_as(oracle.events()));
+}
+
 void run_cd_dma_interrupt_event_trace_test() {
     for (const auto bit : {1u << 2, 1u << 3}) {
         Memory native_ram(2u * 1024u * 1024u, true);
@@ -456,6 +480,7 @@ void run_native_runtime_tests() {
     run_interrupt_event_trace_test();
     run_hook_entry_int_event_trace_test();
     run_vblank_and_pad_event_trace_test();
+    run_rfe_event_trace_test();
     run_cd_dma_interrupt_event_trace_test();
     run_ram_snapshot_round_trip();
 }
