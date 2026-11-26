@@ -922,8 +922,10 @@ That is not yet a picture, and the measurements say why:
   All 48 stage entries stay at state 0 and the read stream stops after 128
   sectors (LBA 128342), so nothing refills the queue.
 
-So the loading screen is what a real console would show at this point: the
-pipeline that would deliver level data is waiting for a read that is never
-requested. Changing the drive's `GetStat` "reading" bit to mean "a transfer is
+What the window shows is therefore black: three black clears and a set of
+triangles clipped to one pixel produce no visible content, and no loading
+screen is reached either — the guest never submits one. The pipeline that would
+deliver level data is waiting for a read that is never requested, so the honest
+description is "boots and stalls", not "shows a loading screen". Changing the drive's `GetStat` "reading" bit to mean "a transfer is
 in flight" was tried and left the trace byte-identical, so it was reverted
 rather than kept as an unproven hardware change.
