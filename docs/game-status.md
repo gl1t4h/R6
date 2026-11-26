@@ -408,6 +408,30 @@ window body shows those counters plus how many disc sectors have been read.
   fix next, not the interrupt path: interrupts delivered at 1.3M cycles are
   16 in the port against 15 in the interpreter.
 
+- **Build trap: header changes were silently discarded.** `link2.cmd`-style
+  relinks compiled the port sources against the current headers but linked a
+  *prebuilt* `SpiderMan_translation.obj` produced from much older ones. The
+  bus and the CD device are header-only classes, so both object files carry
+  COMDAT copies of `NativeBus::write32` and `CdromDevice::load_sector`, and the
+  linker kept the stale copy from the translation object. Every change made in
+  `native_runtime.h` or `cdrom_device.h` therefore ran the old code while
+  appearing to be applied — including all earlier attempts to trace the CD
+  path, which printed nothing. Always regenerate the translation with
+  `tools/build-port-msvc.cmd` (or compile `translation.cpp` in the same `cl`
+  invocation as the port sources) when a header changes.
+
+- **The CD path delivers the directory sector intact.** With a regenerated
+  translation the DMA3 trace shows the guest's own reads landing correctly:
+  a 3-word transfer of the 12-byte header to `0x800B382C` and a 512-word
+  transfer of the 2048-byte payload to `0x800C0CE0`. For the volume descriptor
+  the payload starts `01 43 44 30` (`"CD001"`) and the header reads
+  `00 02 16 02`; for the directory the header reads `00 02 18 02` and the
+  payload starts `01 00 16 00`, the game's own 24-byte record format
+  (`u16 1, u32 22, u32 1, u16 7, u32 0x1F52F, u16 1, "CINEMAS"`). The device
+  is not dropping or corrupting the sector, so the wrong seek is not a CD
+  delivery bug: the interpreter issues the same first DMA pair with the same
+  destinations, and diverges later in guest parsing.
+
 - **The directory walk that picks the wrong file:** the guest's file search
   walks records with `lbu v0,0(s0)` at `0x800868B4`; `beq v0,zero,0x800869F0`
   at `0x800868BC` ends the walk, `lbu`/`addu s0,s0,v0` at `0x800869C4-0x800869CC`
