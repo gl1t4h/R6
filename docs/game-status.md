@@ -75,6 +75,10 @@ None.
 
 - **Platform:** PlayStation 1
 - **Region:** USA
+- **Tested with:** a local `.cue` beside a single-track MODE2/2352 `.bin`
+  (616,494,480 bytes, one `INDEX 01 00:00:00`). The CHD reader is covered by
+  synthetic fixtures and by the open check below, but every measurement in
+  this section comes from the `.bin`/`.cue` pair.
 - **Status:** Interpreter execution runner (early boot) + native translation
   slice
 - **Progress:** 10%
@@ -252,6 +256,19 @@ Until those exist, `r6-run` (which boots the guest's own executable),
 `r6-diagnostic` and `r6-tests` are the runnable artifacts.
 The renderer is a software rasterizer; there is no GPU or shader pipeline, and
 adding one would not change whether the game runs.
+
+## Test machine
+
+The instruction rates, vblank counts and timing numbers quoted above were
+measured on one desktop, built Release with MSVC:
+
+- **CPU:** Intel Core i5-14400F
+- **Memory:** 16 GB
+- **GPU:** NVIDIA GeForce RTX 3050
+- **OS:** Windows 11 Pro 10.0.26300
+
+A 250M-step Silent Hill run takes about 45 seconds there, and the disc
+images used were `.cue`/`.bin` pairs rather than CHDs.
 
 ## Running it today
 
