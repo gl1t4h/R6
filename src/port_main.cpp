@@ -201,6 +201,14 @@ bool is_bios_entry(std::uint32_t pc) {
     return physical == 0xA0u || physical == 0xB0u || physical == 0xC0u;
 }
 
+std::string hex2(std::uint32_t value) {
+    static const char digits[] = "0123456789ABCDEF";
+    std::string text(2, '0');
+    text[0] = digits[(value >> 4) & 0xFu];
+    text[1] = digits[value & 0xFu];
+    return text;
+}
+
 std::string hex32(std::uint32_t value) {
     char text[16]{};
     std::snprintf(text, sizeof(text), "0x%08X", value);
@@ -595,7 +603,7 @@ int run_headless(Host& host, std::uint64_t frames,
                  std::uint64_t pc_to,
                  const std::filesystem::path& dump_state,
                  std::uint32_t watch_change, bool cd_log,
-                 bool watch_cd) {
+                 bool watch_cd, bool walk_trace) {
     std::uint64_t presented = 0;
     std::uint64_t sector_last = 0;
     std::uint32_t watch_last =
@@ -609,6 +617,20 @@ int run_headless(Host& host, std::uint64_t frames,
                 host.bus->hardware().cycles() < max_cycles)) {
             const auto before = host.cpu.pc;
             if (!step_once(host)) break;
+            if (walk_trace && before == 0x800868B4u) {
+                static int walk_records = 0;
+                if (walk_records < 200) {
+                    ++walk_records;
+                    const auto s0 = host.cpu.gpr[16];
+                    std::cout << "WK " << host.bus->hardware().cycles()
+                              << " s0=" << hex32(s0)
+                              << " n=" << host.cpu.gpr[18] << " bytes=";
+                    for (std::uint32_t i = 0; i < 24; ++i) {
+                        std::cout << hex2(host.ram.read8((s0 + i) & 0x1FFFFFu));
+                    }
+                    std::cout << std::endl;
+                }
+            }
             if (watch_cd) {
                 const auto sectors = host.bus->hardware().cdrom().sectors_read();
                 if (sectors != sector_last) {
@@ -717,6 +739,7 @@ int main(int argc, char** argv) {
     std::uint32_t watch_change = 0;
     bool cd_log = false;
     bool watch_cd = false;
+    bool walk_trace = false;
     bool bios_log = false;
     std::uint64_t frames = 0;  // 0 = interactive
     std::uint64_t max_cycles = 0;
@@ -740,6 +763,8 @@ int main(int argc, char** argv) {
             bios_log = true;
         } else if (argument == "--watch-cd") {
             watch_cd = true;
+        } else if (argument == "--walk-trace") {
+            walk_trace = true;
         } else if (argument == "--cd-log") {
             cd_log = true;
         } else if (argument == "--watch-change" && index + 1 < argc) {
@@ -803,7 +828,7 @@ int main(int argc, char** argv) {
     if (headless) {
         return run_headless(host, frames == 0 ? 600 : frames, screenshot,
                            max_cycles, pc_from, pc_to, dump_state,
-                           watch_change, cd_log, watch_cd);
+                           watch_change, cd_log, watch_cd, walk_trace);
     }
 
     WNDCLASSEXW window_class{};

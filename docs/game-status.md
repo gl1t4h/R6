@@ -408,6 +408,21 @@ window body shows those counters plus how many disc sectors have been read.
   fix next, not the interrupt path: interrupts delivered at 1.3M cycles are
   16 in the port against 15 in the interpreter.
 
+- **The walk, captured in both runners** (`--walk-trace` on the port,
+  `R6_TRACE_WALK=1` on the interpreter; both print `s0`, the record counter
+  and the 24 bytes at `s0` for each iteration of `0x800868B4`):
+  the interpreter walks eight real records out of `0x800C0CE0` with lengths
+  `0x30, 0x38, 0x38, 0x36, 0x3C, 0x3C, 0x3C`, advancing
+  `0x800C0CE0 -> 0x800C0D10 -> 0x800C0D40 -> 0x800C0D78 -> ...` (LBA 22 and
+  size `0x800` in the first record) and stops on a zero length byte, which is
+  the end of the directory. The port walks three times with length byte `0x0C`
+  (`0x800C0CE0 -> 0x800C0CEC -> 0x800C0CF8`) over a buffer that reads
+  `0C 0C 0C 0C ... 00 00`, i.e. the payload of the bogus sector-66454 read,
+  not the directory. So the port's search does not stop in the middle of a
+  good directory: the directory sector has already been overwritten before the
+  walk starts, because the port issues the 14:48:04 read *first* and walks
+  afterwards, while the interpreter walks straight after the 18/19 read.
+
 - **Build trap: header changes were silently discarded.** `link2.cmd`-style
   relinks compiled the port sources against the current headers but linked a
   *prebuilt* `SpiderMan_translation.obj` produced from much older ones. The

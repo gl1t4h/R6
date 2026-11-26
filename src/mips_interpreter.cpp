@@ -586,8 +586,23 @@ RunResult MipsInterpreter::run_event_step() {
 RunResult MipsInterpreter::run(std::uint64_t max_steps) {
     RunResult result;
 
+    static const bool trace_walk = std::getenv("R6_TRACE_WALK") != nullptr;
     while (result.steps < max_steps) {
         const auto current_pc = cpu_.pc;
+        if (trace_walk && current_pc == 0x800868B4u) {
+            static int walk_records = 0;
+            if (walk_records < 200) {
+                ++walk_records;
+                const auto s0 = cpu_.gpr[16];
+                std::printf("WK %llu s0=%08X n=%u bytes=",
+                            static_cast<unsigned long long>(hardware_.cycles()),
+                            s0, cpu_.gpr[18]);
+                for (std::uint32_t i = 0; i < 24; ++i) {
+                    std::printf("%02X", read8(s0 + i) & 0xFFu);
+                }
+                std::fputc(10, stdout);
+            }
+        }
         for (auto& entry : watched_) {
             if (entry.first == current_pc) ++entry.second;
         }
