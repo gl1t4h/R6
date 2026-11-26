@@ -678,6 +678,37 @@ window body shows those counters plus how many disc sectors have been read.
   buffer whose pointer is `0x800AFDC0` (`0x800F5E00` at 400M) and is pumped
   by `0x8008F07C` from `0x80034B00`, not by the handoff. Whether that leg
   runs and what consumes `0x800FDE00` are the next questions.
+- **Why the scene never activates:** `0x8008F398` (sets `0x800AFDEC`,
+  installs the 1602 payload into `0x800C4850`/`0x800BC728`, starts the
+  scene) has one caller, `0x80034CD4`, and that call is gated on
+  `*(0x800CC258) == 0x20`. `0x800CC258` is set to `0x20` only at
+  `0x8003ABD4`, inside the sound scene-start function `0x8003AB28`. Neither
+  that function nor its dispatcher `0x8003AA4C` executes at all in 400M
+  steps (`--watch-pc` reports 0 for both), so the gate can never open. The
+  sound module is registered in the function table at `0x800A9798`
+  (`0x8003AB28`) and `0x800A97AC` (`0x8003AA4C`), and whatever should call
+  through that table does not.
+- **The 400M stall, found:** the frame body `0x800C9D6C` runs 254 times,
+  then the guest spins at `0x80093550` (8,689,077 executions).
+  `0x800934EC` is a non-blocking poll on the 32-byte stream pool at
+  `*(0x800C49B8)` = `0x801A8040`, indexed by `*(0x800C49A4)` = 0; every
+  entry is in **state 3**, flags `0x8001`. The poll only advances on state
+  1/2, so a 2,000-retry loop in the RAM trampoline at `0x801E331C` (return
+  address `0x801E3340`) always fails; the caller repeats it and the boot
+  machine never gets another frame. This is the same "stream left in state
+  3" defect recorded earlier, now tied directly to the frozen frame loop.
+  `R6_TRACE_LOOP=1` prints the retry caller's return address.
+- **Why the stream never completes:** the completion stores in the sound tick
+  (`0x80033898`, `0x800338B0`, `0x80033A80`, `0x80033A94`, `0x80033AD8`) sit
+  behind `0x8002EA28`, which counts, over the 15 voice records of the
+  28-byte table at `0x800B5508`, the entries whose byte `+4` is non-zero.
+  `0x8002EA78` returns `*(record + 0x18) - that_count` (free voices). The
+  tick only advances a stream when no voice is active, so every stream
+  record stays in state 3 while the sound driver believes its voices are
+  still playing. R6 models no SPU voice state at all: the whole
+  `0x1F801C00`-`0x1F801E00` block is a 16-bit register stub that reads zero,
+  so the driver can never observe a voice ending. That is the defect that
+  holds the 1602 scene, and the black frame, in place.
 - **New debug knob:** `R6_TRACE_DECRYPT=1` prints each `0x80010AD0` call as
   `dst`, `src`, `count` and `ra`. Interpreter-only, off by default.
 - **Test target repair:** `tests/test_unaligned.cpp` was added by `f694247`
