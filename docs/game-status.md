@@ -238,9 +238,10 @@ None.
   and `+0x9C8`; the block and the `CdRead` body are ordinary guest RAM, and
   the body reserves its `+0x28` patch window and a `+0x3C` resume entry. The
   body has no CD read behind it, so both entries return 0. Re-running the
-  traced boot, the hook installs at `0x80001128` and `0xDFFC` holds
-  `0x8000113C`; `0x28`, `0x3C` and `0x9C8` stay zero, and everything else is
-  unchanged (682 sectors, 0 unhandled vectors, same CD counters).
+  traced boot, the hook installs at `0x80001128`, `0xDFFC` holds
+  `0x8000113C`, and the B0 stub lands at `0x800019C8` inside the modelled
+  block. The old patch sites `0x28` and `0x3C` stay zero, and everything
+  else is unchanged (682 sectors, 0 unhandled vectors, same CD counters).
 - **Playable native build:** No
 - **Distributed game assets:** No
 
