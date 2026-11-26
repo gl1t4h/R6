@@ -1004,3 +1004,28 @@ measure, with `--watch-change 800B0FC8` (the DMA mode word) as the marker.
 Also tried and reverted: treating an acknowledged-but-undrained sector as the
 end of the read. The guest acks before draining on every sector (sector 16 shows
 it immediately), so that rule stopped the boot after one sector.
+
+## Stage entry layout
+
+The entries are 32 bytes each and are written by the guest itself: each sector
+arrives as an 8-word DMA (the 32-byte header, into the entry) followed by a
+504-word DMA (the 2016-byte payload, into a data buffer). The layout, from the
+code that reads and writes it:
+
+| offset | field | evidence |
+| --- | --- | --- |
+| `0x00` | `u16` state: 0 empty, 1 ready, 2 released, 4 consumed | compared against 1 and 2 at `0x80086B2C`/`0x80086B6C`, set to 4 at `0x80086B80`, cleared at `0x80086B50` |
+| `0x02` | `u16` constant `0x8001` | every populated entry |
+| `0x04` | `u16` slot inside the group, wrapping at the group size | counts 0-9 then wraps |
+| `0x06` | `u16` entries in the group | `lhu 6(...)` at `0x800872FC` |
+| `0x08` | `u32` group number, 1-based | increments every 10 entries |
+| `0x0C` | `u32` constant `0x00000A98` | every populated entry |
+| `0x10` | `u32` constant `0x00F00140` | every populated entry |
+| `0x14` | `u32` constant `0x38000720` | every populated entry |
+| `0x18` | `u32` constant `0x00020001` | every populated entry |
+| `0x1C` | `u32` group/slot tag | increases with the group |
+
+An allocated but unfilled entry starts with a zero halfword and keeps the
+allocator fill from `+4`, which is how `work/diag/dsstate.py` tells unwritten
+entries from consumed ones. The earlier reading of `0x80010000` as a data
+pointer was wrong: that word is the state halfword followed by the constant.

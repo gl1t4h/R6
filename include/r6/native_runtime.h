@@ -366,6 +366,14 @@ public:
             if (physical == hardware::kDma3ChannelControl) {
                 const auto start = (value & (1u << 24)) != 0;
                 const auto to_ram = (value & 1u) == 0;
+                if (std::getenv("R6_TRACE_DMA3") != nullptr) {
+                    // The guest programming channel 3 is the only way a
+                    // transfer can happen, so this line separates "the guest
+                    // never asked" from "we were asked and did nothing".
+                    std::fprintf(stderr, "D3W %llu chcr=%08X start=%u to_ram=%u\n",
+                                 static_cast<unsigned long long>(hardware_.cycles()), value,
+                                 start ? 1u : 0u, to_ram ? 1u : 0u);
+                }
                 if (start && to_ram) run_dma3_transfer();
             }
             if (physical == hardware::kDma4ChannelControl) {
@@ -517,10 +525,18 @@ private:
         if (words > kMaxWords) words = kMaxWords;
         const auto address = 0x80000000u | hardware_.dma_address(3);
         const bool trace_dma3 = std::getenv("R6_TRACE_DMA3") != nullptr;
+        if (trace_dma3) {
+            // The cycle stamp is what lets a transfer be matched against the
+            // CD events in the same log; without it a stopped DMA and a DMA
+            // that never happened look identical.
+            std::fprintf(stderr, "D3 %llu addr=%08X words=%u counter=%08X\n",
+                         static_cast<unsigned long long>(hardware_.cycles()), address, words,
+                         counter);
+        }
         for (std::uint32_t index = 0; index < words; ++index) {
             const auto value = hardware_.cdrom().read_word();
             const auto target = (address + index * 4) & kRamMask;
-            if (trace_dma3 && index < 12) {
+            if (trace_dma3 && index < 4) {
                 std::fprintf(stderr, "W3 %08X <- %08X\n", target, value);
             }
             ram_.write32(target, value);
