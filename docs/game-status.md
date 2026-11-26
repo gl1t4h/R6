@@ -392,6 +392,26 @@ window body shows those counters plus how many disc sectors have been read.
   fix next, not the interrupt path: interrupts delivered at 1.3M cycles are
   16 in the port against 15 in the interpreter.
 
+- **The directory walk that picks the wrong file:** the guest's file search
+  walks records with `lbu v0,0(s0)` at `0x800868B4`; `beq v0,zero,0x800869F0`
+  at `0x800868BC` ends the walk, `lbu`/`addu s0,s0,v0` at `0x800869C4-0x800869CC`
+  advances by the record's own length byte, and `slti v0,s2,64` at `0x800869D0`
+  caps it at 64 records. The buffer it walks is `0x800C0CE0`, filled by the
+  read issued at `0x80086A6C` (`Setloc` from `a1`, `CdRead(a0, 0x800C0CE0, 0x80)`,
+  `CdReadSync`). In the port the parsed-name table at `0x800BF0E8` only ever
+  receives `"."` and `".."`: `--watch-change 800BF128` records no write at all
+  for the third slot, while the interpreter fills `0x800BF118` with `CD.HED;1`,
+  `CD.WAD;1` and `COMPILED.XA`. By 1.295M cycles the port's buffer holds one
+  24-byte record (`01 00 | 16 00 00 00 | 01 00 00 00 | 07 00 | 2F F5 01 00 |
+  01 00 | "CINEMAS"`, the same shape as the game's own table at `0x80093A19`)
+  instead of the raw 2048-byte directory sector, and a block at `0x8008D8CC`
+  later writes `0x0C0C0C0C` over it — the guest is taking its read-failure
+  fallback. The BIOS traces agree on the first 79 kernel calls and first part
+  company at call 80, where the port runs `A(0x18)` strncmp against
+  `"CD.HED;1"` (result -1, no match) and the interpreter runs `A(0x2A)` memcpy
+  filling its table. So the wrong `Setloc` is a symptom: the sector data never
+  reaches the guest's directory buffer intact.
+
 - **Coverage rules learned:** code pointers stored in tables (the 13-entry mode
   table at `0x800B47C4`), `jalr` return continuations and ordinary function
   prologues all reach code that no call-site scan sees. They are seeded
