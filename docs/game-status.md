@@ -300,13 +300,24 @@ None.
   only decodes the records when the tick is nonzero: both statuses 0 -> 2
   (`0x800C98D4`), either 4 -> 3 (`0x800C9904`), either 8 -> 4
   (`0x800C991C`). The tick returns 0 on every path: it has a single `jr $ra`
-  (`0x800340D8`), both branches to the shared return (`0x80033F10`,
+  (`0x800340D8`), the only branch into the epilogue body is `0x800340A4`
+  (`j 0x800340B0`), both branches to the shared return (`0x80033F10`,
   `0x80033F30`) sit after `sw $zero, 60($sp)` at `0x80033F00`, and the
-  return-1 switch at `0x80034078` needs that local in 1..25. Measured over
-  150M steps: `0x800340A8` (return 1) 0 times, `0x800340AC` (return 0) 441
-  times, `0x800C98D4` 0 times, and the loop check `0x800C9AD0` 18 times. So
-  no record status can ever cause the transition here, and the two starters
-  stay unreachable; status 3 is a symptom of the re-arm, not the gate.
+  return-1 switch at `0x80034078` needs that local in 1..25. The mask block
+  is only entered at `0x80033F38` from `0x80033F20`, i.e. after the zeroing,
+  and its loop back-edge is `0x80034024 -> 0x80033F64`, also after it; the
+  only stores to `60($sp)` are `0x80033588` and `0x8003366C` (both 1) before
+  that point and `0x80033F00` itself. One path needs care: the status
+  dispatch table `0x80025178` does point at the epilogue, `6 -> 0x800340A4`
+  (return 1) and `7 -> 0x800340AC` (return 0), but it is dead code: the
+  guards at `0x80033788` (`beq a2, s5` with `s5 = 3`) and `0x80033790`
+  (`sltiu a2, 6`) divert `a2 == 3` to `0x80033850` and any `a2 >= 6` to
+  `0x80033828`, so only indices 0-2, 4 and 5 reach `jr $v0`. Measured after
+  rebuilding the tree over 150M steps: tick 441 calls, `0x800340A8` (return 1) 0
+  times, `0x800340AC` (return 0) 441 times, `0x800C98D4` 0 times, loop check
+  `0x800C9AD0` 18 times, substate `0x800BCCC0` still 1. So no record status
+  can ever cause the transition here, and the two starters stay unreachable;
+  status 3 is a symptom of the re-arm, not the gate.
 - **The smallest real gap is upstream of the wait:** handler 1 is only
   entered when the sound module's phase word `0x800BCD0C` is 1, and that word
   is driven by the module itself, cycling 0..7 through `0x80032850`,
