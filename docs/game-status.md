@@ -287,6 +287,35 @@ None.
   buffers do hold data (4,072 non-zero bytes each, shared head), so this is
   not a lost transfer: the handshake is gated on the voice slot, and only
   the starters `0x8002E94C`/`0x8002E990` set the flags that build the mask.
+- **The substate-1 gate, traced:** the boot state machine is `0x800C99A4`
+  with base `0x800BC728` (state +0x594, substate +0x598, sub-substate +0x59C)
+  and dispatch table `0x800C9580` (`0` -> `0x800C9A34`, `1` -> `0x800C9A84`,
+  `2` -> `0x800C9AE4`, `3` -> `0x800C9B10`, `4` -> `0x800C9B18`,
+  `5` -> `0x800C9B30`). Handler 1 returns to the dispatcher unless the sound
+  module's phase word `0x800BCD0C` is exactly 1, then loops on
+  `substate = task_wait()` (the store at `0x800C9ABC` is the `jal` delay slot)
+  until substate >= 2 (`slti`/`beq` at `0x800C9AD0`).
+- **Why substate 1 cannot reach 2 in this image:** `task_wait` returns 1
+  whenever the tick `0x80033548` returns 0 (`0x800C9884`-`0x800C9890`), and
+  only decodes the records when the tick is nonzero: both statuses 0 -> 2
+  (`0x800C98D4`), either 4 -> 3 (`0x800C9904`), either 8 -> 4
+  (`0x800C991C`). The tick returns 0 on every path: it has a single `jr $ra`
+  (`0x800340D8`), both branches to the shared return (`0x80033F10`,
+  `0x80033F30`) sit after `sw $zero, 60($sp)` at `0x80033F00`, and the
+  return-1 switch at `0x80034078` needs that local in 1..25. Measured over
+  150M steps: `0x800340A8` (return 1) 0 times, `0x800340AC` (return 0) 441
+  times, `0x800C98D4` 0 times, and the loop check `0x800C9AD0` 18 times. So
+  no record status can ever cause the transition here, and the two starters
+  stay unreachable; status 3 is a symptom of the re-arm, not the gate.
+- **The smallest real gap is upstream of the wait:** handler 1 is only
+  entered when the sound module's phase word `0x800BCD0C` is 1, and that word
+  is driven by the module itself, cycling 0..7 through `0x80032850`,
+  `0x80032730`, `0x80032760`, `0x800326A4`, `0x80032804`, `0x800C9678` and
+  `0x800C970C`. The guest therefore parks in a loop with no exit while the
+  driver reports no work, which means the missing piece is not SPU voices, XA
+  or the stream records but whatever should keep the machine out of this
+  phase (or let the driver report an active voice there). The next probe is
+  that phase machine, not the sound path.
 - **Kernel jump tables:** `GetB0Table` and `GetC0Table` used to return 0, so
   libcd's hook installer treated address 0 as the BIOS `CdRead` body: it wrote
   its five-word trampoline to `0x28` and stored `0x3C` in the `0xDFFC`
