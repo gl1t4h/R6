@@ -773,7 +773,16 @@ MipsInterpreter::StepResult MipsInterpreter::execute(
                     gpr[rd] = link;
                     break;
                 }
-                case 0x0C:  // syscall
+                case 0x0C:  // syscall: libetc Enter/ExitCriticalSection.
+                    // The kernel implements syscall 1 by masking interrupts and
+                    // syscall 2 by restoring them. Treating these as no-ops lets
+                    // a VBlank land in the middle of a driver section that is
+                    // not reentrant, which corrupts the interrupt stack.
+                    if (gpr[4] == 1) {
+                        cop0_[12] &= ~1u;
+                    } else if (gpr[4] == 2) {
+                        cop0_[12] |= 1u;
+                    }
                     break;
                 case 0x0D:  // break
                     result.halted = true;

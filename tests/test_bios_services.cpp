@@ -188,6 +188,21 @@ void file_write_reaches_stdout() {
     R6_CHECK(bios.unhandled_call_count() == 0);
 }
 
+// _card_info is the retail card probe.  Silent Hill waits for a ready
+// result before it leaves its memory-card initialisation path.
+void card_info_reports_ready() {
+    BiosServices bios;
+    Memory memory(0x2000);
+    CpuState cpu;
+
+    cpu.gpr[9] = 0xAB;
+    cpu.gpr[4] = 0;
+    bios.dispatch(BiosTable::a0, cpu, memory);
+    R6_CHECK(cpu.gpr[2] == 1);
+    R6_CHECK(bios.unhandled_call_count() == 0);
+    R6_CHECK(bios.call_count(BiosTable::a0, 0xAB) == 1);
+}
+
 void unhandled_vectors_are_recorded() {
     BiosServices bios;
     Memory memory(0x2000);
@@ -216,5 +231,6 @@ void run_bios_services_tests() {
     exit_sets_state();
     event_slots();
     file_write_reaches_stdout();
+    card_info_reports_ready();
     unhandled_vectors_are_recorded();
 }

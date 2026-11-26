@@ -667,6 +667,23 @@ void exception_vector_writes_are_traced() {
     }
 }
 
+void syscall_critical_section_toggles_interrupts() {
+    Memory ram(2u * 1024u * 1024u);
+    TestServices services;
+    MipsInterpreter interpreter(ram, services);
+    auto& cpu = interpreter.cpu();
+    cpu.pc = 0x80010000u;
+
+    ram.write32(0x10000, 0x24040001u);  // addiu a0, zero, 1
+    ram.write32(0x10004, 0x0000000Cu);  // syscall 1: enter critical section
+    ram.write32(0x10008, 0x24040002u);  // addiu a0, zero, 2
+    ram.write32(0x1000C, 0x0000000Cu);  // syscall 2: exit critical section
+
+    const auto result = interpreter.run(4);
+    R6_CHECK(result.reason == StopReason::step_budget);
+    R6_CHECK((interpreter.cop0_status() & 1u) != 0);
+}
+
 }  // namespace
 
 void run_mips_interpreter_tests() {
@@ -695,4 +712,5 @@ void run_mips_interpreter_tests() {
     interrupt_falls_back_to_entry_int();
     interrupt_overrun_returns_to_epc();
     exception_vector_writes_are_traced();
+    syscall_critical_section_toggles_interrupts();
 }

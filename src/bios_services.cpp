@@ -390,6 +390,9 @@ std::uint32_t BiosServices::handle_a0(std::uint32_t vector, CpuState& cpu,
             return 0;
         case 0x72:  // _96_remove(): dequeues the CD interrupt; none is queued.
             return 0;
+        case 0xAB:  // _card_info(port): report a ready card, as the retail
+                    // kernel does after a successful card probe.
+            return 1;
         default:
             record_unhandled(BiosTable::a0, vector, cpu);
             return 0;
