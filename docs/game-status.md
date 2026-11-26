@@ -955,16 +955,21 @@ What it then needs never happens:
   still allocator fill (`33333333`) because nothing wrote it;
 - the current stage index is 36, so the consumer polls entry 36, which never
   reaches state 1 or 2;
-- the CD driver's state word at `0x800B1000` is 10, the value the "start a
-  chunk" path writes, yet the chunk descriptor pointer at `0x800C0F38` is zero;
-  that pointer is what the chunk-complete check at `0x80085770` dereferences
-  (`[desc+6] - 1 == [desc+4]`) to set the completion flag `0x800C1508`, and the
-  flag gates the stage arming call at `0x80085904`.
+- the CD driver's state word at `0x800B1000` is 10, written once at cycle
+  5,128,886 by `0x800856D0`, the "start a chunk" path;
+- the chunk descriptor at `0x800BF0C8` (note: `lw v0,-3896(v0)` with
+  `v0=0x800C0000` addresses `0x800BF0C8`, not `0x800C0F38`) is `0x80148F54`,
+  which is `0x80148AD4 + 32*36` — the stage entry the loader has not filled. Its
+  contents are still the allocator fill pattern, so the entry sits at state 0.
 
-The next thread to pull is that inconsistency: state 10 and a null descriptor
-cannot both come from the straight-line sequence at `0x800856B8`-`0x800856D4`
-that writes them, so either a second writer clears the descriptor or the state
-is written from another path. Also tried and reverted: treating an
-acknowledged-but-undrained sector as the end of the read. The guest acks before
-draining on every sector (sector 16 shows it immediately), so that rule stopped
-the boot after one sector.
+The chunk-complete path (`0x800850C8`) is what sets that descriptor, from
+`[0x800C1510] + 32*[0x800C1514]`, and it then takes the `state == 0` branch at
+`0x80085134`. That branch is the next-chunk setup: it writes the chunk length
+**128** (`0x8008516C`) and the DMA mode word `0x00020943` (`0x80085180`). So the
+code that would request the next 128-sector transfer exists and is on the path
+the run reaches; whether it is entered at the stall is the next thing to
+measure, with `--watch-change 800B0FC8` (the DMA mode word) as the marker.
+
+Also tried and reverted: treating an acknowledged-but-undrained sector as the
+end of the read. The guest acks before draining on every sector (sector 16 shows
+it immediately), so that rule stopped the boot after one sector.
