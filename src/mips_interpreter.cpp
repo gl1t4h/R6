@@ -1,5 +1,7 @@
 #include "r6/mips_interpreter.h"
 
+#include "r6/unaligned.h"
+
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
@@ -1210,21 +1212,7 @@ MipsInterpreter::StepResult MipsInterpreter::execute(
             break;
         case 0x22: {  // lwl
             const auto address = gpr[rs] + sign_extend16(immediate(instruction));
-            const auto aligned = read32(address & ~3u);
-            switch (address & 3u) {
-                case 0:
-                    gpr[rt] = (gpr[rt] & 0x00FFFFFFu) | (aligned << 24);
-                    break;
-                case 1:
-                    gpr[rt] = (gpr[rt] & 0x0000FFFFu) | (aligned << 16);
-                    break;
-                case 2:
-                    gpr[rt] = (gpr[rt] & 0x000000FFu) | (aligned << 8);
-                    break;
-                default:
-                    gpr[rt] = aligned;
-                    break;
-            }
+            gpr[rt] = lwl(gpr[rt], read32(address & ~3u), address);
             break;
         }
         case 0x23:  // lw
@@ -1238,21 +1226,7 @@ MipsInterpreter::StepResult MipsInterpreter::execute(
             break;
         case 0x26: {  // lwr
             const auto address = gpr[rs] + sign_extend16(immediate(instruction));
-            const auto aligned = read32(address & ~3u);
-            switch (address & 3u) {
-                case 0:
-                    gpr[rt] = aligned;
-                    break;
-                case 1:
-                    gpr[rt] = (gpr[rt] & 0xFF000000u) | (aligned >> 8);
-                    break;
-                case 2:
-                    gpr[rt] = (gpr[rt] & 0xFFFF0000u) | (aligned >> 16);
-                    break;
-                default:
-                    gpr[rt] = (gpr[rt] & 0xFFFFFF00u) | (aligned >> 24);
-                    break;
-            }
+            gpr[rt] = lwr(gpr[rt], read32(address & ~3u), address);
             break;
         }
         case 0x28:  // sb
@@ -1263,22 +1237,8 @@ MipsInterpreter::StepResult MipsInterpreter::execute(
             break;
         case 0x2A: {  // swl
             const auto address = gpr[rs] + sign_extend16(immediate(instruction));
-            auto aligned = read32(address & ~3u);
-            switch (address & 3u) {
-                case 0:
-                    aligned = (aligned & 0xFFFFFF00u) | (gpr[rt] >> 24);
-                    break;
-                case 1:
-                    aligned = (aligned & 0xFFFF0000u) | (gpr[rt] >> 16);
-                    break;
-                case 2:
-                    aligned = (aligned & 0xFF000000u) | (gpr[rt] >> 8);
-                    break;
-                default:
-                    aligned = gpr[rt];
-                    break;
-            }
-            write32(address & ~3u, aligned);
+            write32(address & ~3u,
+                    swl(gpr[rt], read32(address & ~3u), address));
             break;
         }
         case 0x2B:  // sw
@@ -1286,22 +1246,8 @@ MipsInterpreter::StepResult MipsInterpreter::execute(
             break;
         case 0x2E: {  // swr
             const auto address = gpr[rs] + sign_extend16(immediate(instruction));
-            auto aligned = read32(address & ~3u);
-            switch (address & 3u) {
-                case 0:
-                    aligned = gpr[rt];
-                    break;
-                case 1:
-                    aligned = (aligned & 0x000000FFu) | (gpr[rt] << 8);
-                    break;
-                case 2:
-                    aligned = (aligned & 0x0000FFFFu) | (gpr[rt] << 16);
-                    break;
-                default:
-                    aligned = (aligned & 0x00FFFFFFu) | (gpr[rt] << 24);
-                    break;
-            }
-            write32(address & ~3u, aligned);
+            write32(address & ~3u,
+                    swr(gpr[rt], read32(address & ~3u), address));
             break;
         }
         case 0x32:  // lwc2

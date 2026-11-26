@@ -8,6 +8,7 @@
 #include <stdexcept>
 #include <unordered_map>
 
+#include "r6/unaligned.h"
 #include "r6/cpu_state.h"
 #include "r6/event_trace.h"
 #include "r6/gte.h"

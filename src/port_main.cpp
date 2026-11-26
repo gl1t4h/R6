@@ -841,6 +841,21 @@ int run_headless(Host& host, std::uint64_t frames,
                   << bus.hardware().interrupt_status() << " I_STAT, "
                   << bus.hardware().interrupt_mask() << " I_MASK\n";
         const auto& bios = host.services->bios();
+        {
+            const auto& gpu = host.services->gpu();
+            std::uint32_t left = 0, top = 0, right = 0, bottom = 0;
+            const bool drawn = gpu.filled_vram_bounds(left, top, right, bottom);
+            std::cout << "GPU: primitives=" << gpu.rendered_primitives()
+                      << " vram_pixels=" << gpu.filled_vram_pixels()
+                      << " bounds=" << (drawn ? "yes" : "none");
+            if (drawn) {
+                std::cout << "(" << left << "," << top << ")(" << right << ","
+                          << bottom << ")";
+            }
+            std::cout << " display_writes=" << gpu.display_enable_writes()
+                      << " last_display=" << hex32(gpu.last_display_enable_word())
+                      << " unsupported=" << gpu.unsupported_commands() << std::endl;
+        }
         std::cout << "BIOS calls: " << bios.total_calls() << "\n";
         for (const auto& entry : bios.calls()) {
             const auto table = static_cast<r6::BiosTable>(entry.first.first);

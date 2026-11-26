@@ -8,6 +8,7 @@ void run_gte_tests();
 void run_mips_interpreter_tests();
 void run_chd_image_tests();
 void run_native_runtime_tests();
+void run_unaligned_tests();
 
 int main() {
     run_software_gpu_tests();
@@ -16,6 +17,7 @@ int main() {
     run_mips_interpreter_tests();
     run_chd_image_tests();
     run_native_runtime_tests();
+    run_unaligned_tests();
 
     const auto failures = r6::test::failure_count();
     if (failures == 0) {

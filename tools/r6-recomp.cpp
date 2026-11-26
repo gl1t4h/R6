@@ -940,17 +940,7 @@ private:
             case 0x22: {
                 const auto a = "address_" + suffix;
                 line("const std::uint32_t " + a + " = " + source(rs) + " + " + offset + ";");
-                line("const std::uint32_t aligned_" + suffix + " = bus.read32(" + a + " & ~3u);");
-                // LWL keeps the bytes below the addressed one and shifts the
-                // fetched word down from the top; the alignment-0 case keeps a
-                // single byte, and only alignment 3 takes the whole word.
-                store(rt, "static_cast<std::uint32_t>((" + a + " & 3u) == 0u ? ((" +
-                              source(rt) + " & 0x00FFFFFFu) | (aligned_" + suffix +
-                              " << 24)) : (" + a + " & 3u) == 1u ? ((" + source(rt) +
-                              " & 0x0000FFFFu) | (aligned_" + suffix + " << 16)) : (" +
-                              a + " & 3u) == 2u ? ((" + source(rt) +
-                              " & 0x000000FFu) | (aligned_" + suffix +
-                              " << 8)) : aligned_" + suffix + ")");
+                store(rt, "r6::lwl(" + source(rt) + ", bus.read32(" + a + " & ~3u), " + a + ")");
                 break;
             }
             case 0x23: {
@@ -974,13 +964,7 @@ private:
             case 0x26: {
                 const auto a = "address_" + suffix;
                 line("const std::uint32_t " + a + " = " + source(rs) + " + " + offset + ";");
-                line("const std::uint32_t aligned_" + suffix + " = bus.read32(" + a + " & ~3u);");
-                store(rt, "static_cast<std::uint32_t>((" + a + " & 3u) == 0u ? aligned_" +
-                              suffix + " : (" + a + " & 3u) == 1u ? ((" + source(rt) +
-                              " & 0xFF000000u) | (aligned_" + suffix + " >> 8)) : (" + a +
-                              " & 3u) == 2u ? ((" + source(rt) +
-                              " & 0xFFFF0000u) | (aligned_" + suffix + " >> 16)) : ((" +
-                              source(rt) + " & 0xFFFFFF00u) | (aligned_" + suffix + " >> 24)))");
+                store(rt, "r6::lwr(" + source(rt) + ", bus.read32(" + a + " & ~3u), " + a + ")");
                 break;
             }
             case 0x28: {
@@ -998,14 +982,8 @@ private:
             case 0x2A: {
                 const auto a = "address_" + suffix;
                 line("const std::uint32_t " + a + " = " + source(rs) + " + " + offset + ";");
-                line("const std::uint32_t aligned_" + suffix + " = bus.read32(" + a + " & ~3u);");
-                line("bus.write32(" + a + " & ~3u, (" + a + " & 3u) == 0u ? ((" +
-                     "aligned_" + suffix + " & 0xFFFFFF00u) | (" + source(rt) +
-                     " >> 24)) : (" + a + " & 3u) == 1u ? ((" + "aligned_" + suffix +
-                     " & 0xFFFF0000u) | (" + source(rt) + " >> 16)) : (" + a +
-                     " & 3u) == 2u ? ((" + "aligned_" + suffix +
-                     " & 0xFF000000u) | (" + source(rt) + " >> 8)) : " + source(rt) +
-                     ");");
+                line("bus.write32(" + a + " & ~3u, r6::swl(" + source(rt) +
+                     ", bus.read32(" + a + " & ~3u), " + a + "));");
                 break;
             }
             case 0x2B: {
@@ -1017,14 +995,8 @@ private:
             case 0x2E: {
                 const auto a = "address_" + suffix;
                 line("const std::uint32_t " + a + " = " + source(rs) + " + " + offset + ";");
-                line("const std::uint32_t aligned_" + suffix + " = bus.read32(" + a + " & ~3u);");
-                line("bus.write32(" + a + " & ~3u, (" + a + " & 3u) == 0u ? " +
-                     source(rt) + " : (" + a + " & 3u) == 1u ? ((" + "aligned_" +
-                     suffix + " & 0x000000FFu) | (" + source(rt) + " << 8)) : (" + a +
-                     " & 3u) == 2u ? ((" + "aligned_" + suffix +
-                     " & 0x0000FFFFu) | (" + source(rt) + " << 16)) : ((" +
-                     "aligned_" + suffix + " & 0x00FFFFFFu) | (" + source(rt) +
-                     " << 24)));");
+                line("bus.write32(" + a + " & ~3u, r6::swr(" + source(rt) +
+                     ", bus.read32(" + a + " & ~3u), " + a + "));");
                 break;
             }
             case 0x32: {
