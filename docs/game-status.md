@@ -617,6 +617,26 @@ window body shows those counters plus how many disc sectors have been read.
   init. A retail BIOS dump *and* a Silent Hill image are therefore both
   required before an emulator run can supply the reference.
 
+- **Root cause found and fixed: the translator's `lwl` was wrong.** The
+  write-value watch named block `0x800865C8` (the directory-record copy) and the
+  generated code showed its `lwl` emission taking the alignment-0 formula for
+  every case: `(rt & 0xFFFFFF) | (aligned << 24)` where the alignment-1 case
+  needs `(rt & 0xFFFF) | (aligned << 16)`, and the alignment-3 case must take the
+  whole word. Stale bits of `rt` (here `0x0C` from a previous record) therefore
+  survived into the extent, producing `0x000C0016` instead of `0x00000016`,
+  which sent the third read to sector 66454. `lwr`, `swl` and `swr` were checked
+  and are correct. After fixing `tools/r6-recomp.cpp` and regenerating:
+  `TBLW 800BF6E8 = 00000016`, the third `Setloc` operand is `0x16` (MSF
+  `00:02:22`), the walk parses **eight** records (`n=0..7` plus terminator),
+  and a 3M-cycle run streams 90 sectors, last 469 (was 6 sectors, last 66454);
+  a 20M-cycle run streams 128 sectors, last 128342. The frame is still empty
+  apart from the frame-rate overlay (312 white pixels).
+- **Why the differential harness missed it:** the translated run and the
+  interpreter start from the same snapshot, so they carry the *same* stale
+  register value into the block and both produce the same wrong result. A bug
+  of this shape is invisible to an oracle that shares the input state; only the
+  live two-run comparison exposed it.
+
 - **The one-ahead position fix that was tried and rejected:** the drain trace
   suggested the drive was reporting one sector past the one the guest held
   (`cd5C` 17/19/66455 against the interpreter's 16/18/22), so `present_sector`

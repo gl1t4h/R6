@@ -941,13 +941,16 @@ private:
                 const auto a = "address_" + suffix;
                 line("const std::uint32_t " + a + " = " + source(rs) + " + " + offset + ";");
                 line("const std::uint32_t aligned_" + suffix + " = bus.read32(" + a + " & ~3u);");
-                store(rt, "static_cast<std::uint32_t>((" + a + " & 3u) == 0u ? aligned_" +
-                              suffix + " : (" + a + " & 3u) == 1u ? " +
-                              "((" + source(rt) + " & 0x00FFFFFFu) | (aligned_" + suffix +
-                              " << 24)) : (" + a + " & 3u) == 2u ? ((" + source(rt) +
-                              " & 0x0000FFFFu) | (aligned_" + suffix + " << 16)) : ((" +
-                              source(rt) + " & 0x000000FFu) | (aligned_" + suffix +
-                              " << 8)))");
+                // LWL keeps the bytes below the addressed one and shifts the
+                // fetched word down from the top; the alignment-0 case keeps a
+                // single byte, and only alignment 3 takes the whole word.
+                store(rt, "static_cast<std::uint32_t>((" + a + " & 3u) == 0u ? ((" +
+                              source(rt) + " & 0x00FFFFFFu) | (aligned_" + suffix +
+                              " << 24)) : (" + a + " & 3u) == 1u ? ((" + source(rt) +
+                              " & 0x0000FFFFu) | (aligned_" + suffix + " << 16)) : (" +
+                              a + " & 3u) == 2u ? ((" + source(rt) +
+                              " & 0x000000FFu) | (aligned_" + suffix +
+                              " << 8)) : aligned_" + suffix + ")");
                 break;
             }
             case 0x23: {
