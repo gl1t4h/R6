@@ -14,7 +14,9 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <memory>
 #include <string>
 #include <vector>
@@ -65,13 +67,54 @@ struct Player {
 
 Player* g_player = nullptr;
 
+bool looks_like_tim(const std::filesystem::path& path) {
+    std::ifstream file(path, std::ios::binary);
+    std::uint8_t magic[4]{};
+    file.read(reinterpret_cast<char*>(magic), sizeof(magic));
+    return file.gcount() == static_cast<std::streamsize>(sizeof(magic)) &&
+           magic[0] == 0x10u && magic[1] == 0u && magic[2] == 0u &&
+           magic[3] == 0u;
+}
+
+bool has_iso9660_pvd(const std::filesystem::path& path) {
+    std::ifstream file(path, std::ios::binary);
+    if (!file) return false;
+    // Accept a cooked 2048-byte image and the two common raw-sector layouts.
+    for (const std::uint64_t offset : {16ull * 2048ull,
+                                        16ull * 2352ull + 24ull,
+                                        16ull * 2352ull + 16ull}) {
+        char magic[6]{};
+        file.clear();
+        file.seekg(static_cast<std::streamoff>(offset), std::ios::beg);
+        file.read(magic, sizeof(magic));
+        if (file.gcount() == static_cast<std::streamsize>(sizeof(magic)) &&
+            magic[0] == '\x01' && std::memcmp(magic + 1, "CD001", 5) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool is_disc_image(const std::filesystem::path& path) {
+    auto extension = path.extension().string();
+    for (auto& character : extension) {
+        if (character >= 'A' && character <= 'Z') {
+            character = static_cast<char>(character - 'A' + 'a');
+        }
+    }
+    if (extension == ".chd") {
+        r6::WindowsPlatformServices services(path);
+        return services.disc_open() &&
+               !r6::boot::list_root(services).empty();
+    }
+    return has_iso9660_pvd(r6::boot::resolve_bin(path));
+}
+
 std::filesystem::path scan_for_image(const std::filesystem::path& root,
                                      int max_depth) {
     std::error_code error;
     if (!std::filesystem::is_directory(root, error)) return {};
 
-    std::filesystem::path chd_fallback;
-    std::filesystem::path bin_fallback;
     std::size_t visited = 0;
     for (auto it = std::filesystem::recursive_directory_iterator(
              root, std::filesystem::directory_options::skip_permission_denied,
@@ -91,15 +134,12 @@ std::filesystem::path scan_for_image(const std::filesystem::path& root,
                 character = static_cast<char>(character - 'A' + 'a');
             }
         }
-        if (extension == ".cue") return entry.path();
-        if (extension == ".chd" && chd_fallback.empty()) {
-            chd_fallback = entry.path();
+        if (extension != ".cue" && extension != ".chd" && extension != ".bin") {
+            continue;
         }
-        if (extension == ".bin" && bin_fallback.empty()) {
-            bin_fallback = entry.path();
-        }
+        if (is_disc_image(entry.path())) return entry.path();
     }
-    return chd_fallback.empty() ? bin_fallback : chd_fallback;
+    return {};
 }
 
 std::filesystem::path user_profile() {
@@ -163,7 +203,13 @@ bool load_image(Player& player, std::string& error) {
 
     const auto files = r6::boot::list_root(*player.services);
     if (files.empty()) {
-        error = "No ISO9660 filesystem was found. Is this a PlayStation 1 disc?";
+        error = "No ISO9660 filesystem was found in:\n" + player.bin.string();
+        if (looks_like_tim(player.bin)) {
+            error += "\n\nThis looks like a PlayStation TIM texture, not a disc "
+                     "image. Choose your .cue, .chd or raw .bin disc image.";
+        } else {
+            error += "\n\nThis is not a PlayStation 1 disc image.";
+        }
         if (!player.services->disc_error().empty()) {
             error += "\n" + player.services->disc_error();
         }
@@ -473,6 +519,10 @@ int WINAPI WinMain(HINSTANCE instance, HINSTANCE, LPSTR command_line, int) {
     player.image = image;
     std::string error;
     if (!load_image(player, error)) {
+        if (!shot.empty()) {
+            std::fprintf(stderr, "r6-player: %s\n", error.c_str());
+            return 1;
+        }
         MessageBoxA(nullptr, error.c_str(), "R6 Player", MB_OK | MB_ICONERROR);
         return 1;
     }

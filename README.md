@@ -202,6 +202,9 @@ slice, not a playable build, and the run stops at the block budget.
 `r6-run` and `r6-player` read raw BIN/CUE images and CHD version 5 CD images. A
 `.cue` sheet points at its `.bin` track and `resolve_bin()` follows that
 pointer, so either front end accepts a `.cue`, a `.bin` or a `.chd` directly.
+The player validates the ISO9660 descriptor before accepting an auto-discovered
+image; a texture or other non-disc `.bin` is skipped instead of being opened as
+a CD.
 
 The CHD reader covers the containers `chdman` writes:
 

@@ -180,8 +180,9 @@ adding one would not change whether the game runs.
 
 `r6-player.exe` (built from `src/player_main.cpp`, also
 `build\r6-player.exe`) is a
-double-clickable windowed player. It finds your own `.cue`/`.bin`/`.chd`, boots
-the disc's executable and runs it at roughly six million instructions a second
+double-clickable windowed player. It finds your own `.cue`/`.bin`/`.chd`,
+validates the ISO9660 descriptor before accepting an auto-discovered image,
+boots the disc's executable and runs it at roughly six million instructions a second
 with a live status line. It does not render the game yet: the vblank handler
 and VSync callbacks run and the loader streams files, but the main loop has
 not submitted a scene. See `docs/recomp-findings.md` for the current blocker.
