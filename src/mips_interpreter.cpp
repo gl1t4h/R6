@@ -598,6 +598,12 @@ RunResult MipsInterpreter::run(std::uint64_t max_steps) {
                         static_cast<unsigned long long>(hardware_.cycles()),
                         current_pc, cpu_.gpr[4], cpu_.gpr[5], cpu_.gpr[31],
                         cpu_.gpr[2], cpu_.gpr[16], cpu_.gpr[17]);
+            std::printf("   cd3C=%08X cd50=%08X cd54=%08X cd58=%08X cd60=%08X "
+                        "vs=%08X",
+                        read32(0x800B1C3Cu), read32(0x800B1C50u),
+                        read32(0x800B1C54u), read32(0x800B1C58u),
+                        read32(0x800B1C60u), read32(0x800B397Cu));
+            std::fputc(10, stdout);
             std::fputc(10, stdout);
         }
         if (trace_walk && current_pc == 0x800868B4u) {

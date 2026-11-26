@@ -423,6 +423,19 @@ window body shows those counters plus how many disc sectors have been read.
   handler/DMA and the sync's flag check, and it is what makes the game retry
   at 14:48:04 and overwrite `0x800C0CE0` before the walk.
 
+- **The ordering fix that was tried and rejected:** `CdromDevice` handed the
+  next sector over after 4,000 cycles, roughly 140x faster than a real drive,
+  so the following sector arrived inside the guest's per-sector handshake.
+  Setting `kSectorDelayCycles` to one field (564,480 cycles, the real 1/75 s
+  sector rate) makes the boot sequence correct in rate but changes nothing
+  about the failure: `CdReadSync` still returns 1 and the seek is still
+  14:48:04. The sync's exit path is `0x8008A130` -> `lw v0,0(s2)` ->
+  `0x8008A138 beq v0,zero,0x8008A14C`: when libcd's read-complete flag
+  (`0x800B1C60`) is zero it takes the failure return, and the error branch at
+  `0x8008A0E8` never runs. The flag is cleared by the guest's own drain path
+  (`0x8008DA60` -> `0x8008996C`), so it is not something the device can guard;
+  the device change was reverted.
+
 - **The walk, captured in both runners** (`--walk-trace` on the port,
   `R6_TRACE_WALK=1` on the interpreter; both print `s0`, the record counter
   and the 24 bytes at `s0` for each iteration of `0x800868B4`):

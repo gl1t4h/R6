@@ -638,7 +638,14 @@ int run_headless(Host& host, std::uint64_t frames,
                           << " ra=" << hex32(host.cpu.gpr[31])
                           << " v0=" << hex32(host.cpu.gpr[2])
                           << " s0=" << hex32(host.cpu.gpr[16])
-                          << " s1=" << hex32(host.cpu.gpr[17]) << std::endl;
+                          << " s1=" << hex32(host.cpu.gpr[17])
+                          << " cd3C=" << hex32(host.ram.read32(0x800B1C3Cu))
+                          << " cd50=" << hex32(host.ram.read32(0x800B1C50u))
+                          << " cd54=" << hex32(host.ram.read32(0x800B1C54u))
+                          << " cd58=" << hex32(host.ram.read32(0x800B1C58u))
+                          << " cd60=" << hex32(host.ram.read32(0x800B1C60u))
+                          << " vs=" << hex32(host.ram.read32(0x800B397Cu))
+                          << std::endl;
             }
             if (walk_trace && before == 0x800868B4u) {
                 static int walk_records = 0;
