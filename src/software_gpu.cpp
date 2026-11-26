@@ -761,7 +761,8 @@ void SoftwareGpu::submit_gp1(std::uint32_t word) {
         case 0x02:  // acknowledge IRQ
             break;
         case 0x03:  // display enable
-            display_enabled_ = (word & 1u) != 0;
+            // GP1(03h) bit 0 is DMSK: 0 = display on, 1 = display off.
+            display_enabled_ = (word & 1u) == 0;
             ++display_enable_writes_;
             last_display_enable_word_ = word;
             break;

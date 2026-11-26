@@ -159,9 +159,13 @@ void status_and_display_control() {
     R6_CHECK(!gpu.display_enabled());
     R6_CHECK((gpu.status() & (1u << 23)) != 0);
 
-    gpu.submit_gp1(0x03000001u);
+    gpu.submit_gp1(0x03000000u);
     R6_CHECK(gpu.display_enabled());
     R6_CHECK((gpu.status() & (1u << 23)) == 0);
+
+    gpu.submit_gp1(0x03000001u);
+    R6_CHECK(!gpu.display_enabled());
+    R6_CHECK((gpu.status() & (1u << 23)) != 0);
     R6_CHECK(gpu.last_gp1_command() == 0x03);
 }
 
