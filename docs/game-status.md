@@ -138,8 +138,8 @@ None.
   their transfers, and the per-block differential compares full hardware
   registers, GTE registers, scratchpad and BIOS bookkeeping, not just cycles.
 - **Next step:** Follow the state-2 wait instead of the movie path. The
-  frame loop `0x80010ECC` runs (61 iterations by 250M), the sound fade
-  reaches state 1, but `0x800C9874` returns 1 every time because
+  handler at `0x800C9A84` runs 61 times by 250M, and the sound fade
+  reaches state 1 by 400M, but `0x800C9874` returns 1 every time because
   `0x80033548` reports no active task: all eight slot states at
   `0x800B5508` are zero. The task dispatcher `0x8002ED7C` runs 740 times
   while the request entry points (`0x8002E94C`, `0x8002F640`,
