@@ -662,6 +662,22 @@ window body shows those counters plus how many disc sectors have been read.
   pack plus these 330. The second call copies `0x801E2600` to `0x800C9578`
   at cycle 44,410,196. The only earlier use of `0x8010A600` is a single
   sector at `cd=103`, overwritten by the pack.
+- **The 1602 scene load completes:** a 400M-step run with
+  `R6_FORCE_SOUND_TICK=1` and store watches on `0x800C4840`,
+  `0x800C4844` and `0x800FDE00` shows the handoff publishing the pair once
+  (`0x800C4840` = `0x642` at `0x8008F030`, `0x800C4844` = `0x652` at
+  `0x8008F03C`) and then, as the very next watched event, the first fill of
+  `0x800FDE00` (`0xD0002000` from the CD DMA store PC `0x80015C88`); 128
+  stores land in the first 512 bytes. `0x8008F048` posts file 1602 there
+  and the transfer retires, so this leg of the scene load is not the
+  blocker. The ring's type-2 machine also runs at this stage: `0x800230B0`
+  cycles 0 -> 1 at `0x80011528`, 2/3/4 at `0x80011618`, back to 0 at
+  `0x800112E4`, 660 times in the run. The older note that `0x800114C4`
+  never runs describes the boot before the handoff.
+- **Still open:** the second half of the pair, file 1618, goes to the
+  buffer whose pointer is `0x800AFDC0` (`0x800F5E00` at 400M) and is pumped
+  by `0x8008F07C` from `0x80034B00`, not by the handoff. Whether that leg
+  runs and what consumes `0x800FDE00` are the next questions.
 - **New debug knob:** `R6_TRACE_DECRYPT=1` prints each `0x80010AD0` call as
   `dst`, `src`, `count` and `ra`. Interpreter-only, off by default.
 - **Test target repair:** `tests/test_unaligned.cpp` was added by `f694247`
