@@ -90,6 +90,7 @@ add_executable(r6-tests
     tests/test_mips_interpreter.cpp
     tests/test_native_runtime.cpp
     tests/test_software_gpu.cpp
+    tests/test_unaligned.cpp
 )
 
 target_include_directories(r6-tests PRIVATE

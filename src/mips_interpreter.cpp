@@ -62,6 +62,13 @@ MipsInterpreter::MipsInterpreter(Memory& ram, PlatformServices& services)
         hardware_.cdrom().set_sector_delay(
             std::strtoull(delay, nullptr, 0));
     }
+    // Debug aid: the resident sound tick zeroes its work counter at
+    // 0x80033F00, so it can only return 0 and the boot's substate-1 wait can
+    // never complete. With this set, its return-0 stub reports one finished
+    // slot instead, which lets the rest of the boot run be measured.
+    if (const char* force = std::getenv("R6_FORCE_SOUND_TICK")) {
+        force_sound_tick_ = std::strtoul(force, nullptr, 0) != 0;
+    }
 }
 
 void MipsInterpreter::note_cdrom_poll(std::uint32_t physical) {
@@ -857,6 +864,11 @@ RunResult MipsInterpreter::run(std::uint64_t max_steps) {
 
         const auto instruction = read32(current_pc);
         const auto step = execute(instruction, current_pc);
+        if (force_sound_tick_ && current_pc == 0x800340ACu) {
+            // 0x800340AC is the tick's `addu $v0, $zero, $zero` return. The
+            // boot waits on this value, so report one slot of work here.
+            cpu_.gpr[2] = 1;
+        }
         ++result.steps;
         hardware_.advance_cycles(kCyclesPerInstruction);
         if (step.returned_from_exception && in_interrupt_) {

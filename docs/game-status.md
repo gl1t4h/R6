@@ -597,6 +597,25 @@ window body shows those counters plus how many disc sectors have been read.
   entry before it is set (see the lookup note earlier), and the bad extent
   follows from that, not from a lost `0x800B1C60` flag.
 
+- **Debug knob: `R6_FORCE_SOUND_TICK=1`.** The interpreter rewrites the sound
+  tick's return-0 stub (`0x800340AC`, `addu $v0,$zero,$zero`) to report 1,
+  which is a debug-only override (the recompiled port does not honour it).
+  It fires only once the sound overlay is loaded, because that address exists
+  only after the load. Results: at **60M steps it does nothing** — main state
+  is still 1 and the tick never runs, so the dumped frame is 0/76,800
+  non-black. At 150M it moves the boot substate 1 -> 2 -> 4 -> 6
+  (`0x800C9ABC`, `0x800C9C3C`) and handler 6 (`0x800C9C50`) starts counting
+  `0x800B9FDC` toward its 181-frame wait (reached 100). At **400M** the counter
+  is 714, handler 7 (`0x800C9CA0`) runs 77 times, `0x8008EF20` is called once
+  and main state advances 2 -> 6 at `0x800C9D60`, so the tick really is the
+  gate for the sound-init stage — but the display frame is still **0/76,800
+  non-black**, so whatever comes after the handler-7 handoff has its own
+  blocker and 400M steps do not reach the first scene. The knob is therefore
+  a confirmed diagnosis of the sound wait, not a fix for the black frame.
+- **Test target repair:** `tests/test_unaligned.cpp` was added by `f694247`
+  but never listed in the `r6-tests` sources, so the target stopped linking
+  (`run_unaligned_tests` unresolved). It is now compiled in and the suite
+  passes again.
 - **Resuming a captured state:** `r6-run` and `r6-port` accept
   `--state FILE` (an `R6S1` snapshot) plus `--entry ADDR`, matching
   `r6-native --snapshot`. Registers and RAM come from the snapshot and the

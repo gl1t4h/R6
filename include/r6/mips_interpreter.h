@@ -318,6 +318,10 @@ private:
     std::uint64_t interrupt_step_budget_{2000000u};
     // Steps between interrupt polls; R6_IRQ_POLL overrides it for bring-up.
     std::uint32_t irq_poll_{0x400};
+    // Bring-up knob: R6_FORCE_SOUND_TICK makes the sound tick's return-0
+    // stub report one finished slot, so the boot wait it feeds can be
+    // measured without modelling the driver. Debug only.
+    bool force_sound_tick_{false};
     // SR before the exception push, kept so an abandoned handler can be unwound
     // without leaving interrupts disabled.
     std::uint32_t interrupt_saved_sr_{0};
