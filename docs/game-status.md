@@ -267,8 +267,9 @@ measured on one desktop, built Release with MSVC:
 - **GPU:** NVIDIA GeForce RTX 3050
 - **OS:** Windows 11 Pro 10.0.26300
 
-A 250M-step Silent Hill run takes about 45 seconds there, and the disc
-images used were `.cue`/`.bin` pairs rather than CHDs.
+A 250M-step Silent Hill run takes about 45 seconds there. The Silent Hill
+runs used a `.cue`/`.bin` pair rather than a CHD; the Spider-Man notes above
+still come from CHD images.
 
 ## Running it today
 
