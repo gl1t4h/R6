@@ -59,6 +59,24 @@ void MipsInterpreter::note_cdrom_poll(std::uint32_t physical) {
 
 void MipsInterpreter::note_watched_write(std::uint32_t address,
                                          std::uint32_t value, int width) {
+    if (!watch_ranges_.empty()) {
+        const auto bytes = static_cast<std::uint32_t>(width / 8);
+        for (auto& range : watch_ranges_) {
+            if (address + bytes <= range.begin || address >= range.end) {
+                continue;
+            }
+            ++range.stores;
+            range.bytes += bytes;
+            ++range_hot_[cpu_.pc];
+            if (range_samples_.size() < 6) {
+                range_samples_.push_back(
+                    "write" + std::to_string(width) + " 0x" +
+                    format_hex(address) + " = 0x" + format_hex(value) +
+                    " pc=0x" + format_hex(cpu_.pc));
+            }
+            break;
+        }
+    }
     if (watch_writes_.empty()) return;
     // Match the whole containing word so a 32-bit store and the 16-bit half
     // stores that patch the same word are both captured.

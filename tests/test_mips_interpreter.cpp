@@ -123,6 +123,25 @@ void instruction_charges_two_cycles() {
              2ull * r6::kCyclesPerInstruction);
 }
 
+void range_watch_counts_stores_only_inside_the_range() {
+    Memory ram(2u * 1024u * 1024u);
+    TestServices services;
+    MipsInterpreter interpreter(ram, services);
+    auto& cpu = interpreter.cpu();
+    cpu.pc = 0x80010000u;
+
+    interpreter.watch_range(0x80020000u, 0x80020010u);
+    ram.write32(0x10000, 0x3C088002u);   // lui t0, 0x8002
+    ram.write32(0x10004, 0xA1000004u);   // sb zero, 4(t0): inside
+    ram.write32(0x10008, 0xA1000020u);   // sb zero, 32(t0): outside
+
+    interpreter.run(3);
+    R6_CHECK(interpreter.range_watches()[0].stores == 1);
+    R6_CHECK(interpreter.range_watches()[0].bytes == 1);
+    R6_CHECK(interpreter.range_hot().size() == 1);
+    R6_CHECK(interpreter.range_hot().begin()->first == 0x80010004u);
+}
+
 void single_step_preserves_branch_target() {
     Memory ram(2u * 1024u * 1024u);
     TestServices services;
@@ -734,6 +753,7 @@ void run_mips_interpreter_tests() {
     arithmetic_and_delay_slot();
     taken_branch_skips_following_instruction();
     instruction_charges_two_cycles();
+    range_watch_counts_stores_only_inside_the_range();
     single_step_preserves_branch_target();
     call_and_return();
     load_and_store();

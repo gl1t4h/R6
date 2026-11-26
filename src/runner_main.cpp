@@ -107,6 +107,7 @@ int main(int argc, char** argv) {
     std::filesystem::path dump_ram_path;
     std::filesystem::path dump_snapshot_path;
     std::vector<std::uint32_t> watch_writes;
+    std::vector<std::pair<std::uint32_t, std::uint32_t>> watch_ranges;
     std::string search_text;
 
     for (int index = 1; index < argc; ++index) {
@@ -177,6 +178,19 @@ int main(int argc, char** argv) {
         } else if (argument == "--watch-write" && index + 1 < argc) {
             watch_writes.push_back(static_cast<std::uint32_t>(
                 std::stoul(argv[++index], nullptr, 0)));
+        } else if (argument == "--watch-range" && index + 1 < argc) {
+            // START:LEN, both base 0, e.g. 0x801E09E0:0xA50.
+            const std::string spec = argv[++index];
+            const auto split = spec.find(':');
+            if (split == std::string::npos) {
+                std::cerr << "r6-run: --watch-range expects START:LEN\n";
+                return 2;
+            }
+            const auto begin = static_cast<std::uint32_t>(
+                std::stoul(spec.substr(0, split), nullptr, 0));
+            const auto length = static_cast<std::uint32_t>(
+                std::stoul(spec.substr(split + 1), nullptr, 0));
+            watch_ranges.emplace_back(begin, begin + length);
         } else if (argument == "--hot") {
             hot_enabled = true;
         } else if (argument == "--watch-args" && index + 1 < argc) {
@@ -359,6 +373,9 @@ int main(int argc, char** argv) {
 
     r6::MipsInterpreter interpreter(ram, services);
     for (auto address : watched_pcs) interpreter.watch_pc(address);
+    for (const auto& range : watch_ranges) {
+        interpreter.watch_range(range.first, range.second);
+    }
     for (auto address : watched_args) interpreter.watch_args(address);
     for (auto address : watch_writes) interpreter.watch_write(address);
     interpreter.set_hot_enabled(hot_enabled);
@@ -655,6 +672,28 @@ int main(int argc, char** argv) {
               << std::endl;
     for (const auto& entry : interpreter.watched_args()) {
         std::cout << entry << std::endl;
+    }
+    for (const auto& range : interpreter.range_watches()) {
+        std::cout << "Range 0x" << std::hex << range.begin << "..0x"
+                  << range.end << std::dec << ": "
+                  << range.stores << " stores, "
+                  << range.bytes << " bytes\n";
+    }
+    if (!watch_ranges.empty()) {
+        std::vector<std::pair<std::uint32_t, std::uint64_t>> hot(
+            interpreter.range_hot().begin(), interpreter.range_hot().end());
+        std::sort(hot.begin(), hot.end(),
+                  [](const auto& left, const auto& right) {
+                      return left.second > right.second;
+                  });
+        for (std::size_t index = 0; index < hot.size() && index < 8;
+             ++index) {
+            std::cout << "  pc=0x" << std::hex << hot[index].first
+                      << std::dec << " x" << hot[index].second << "\n";
+        }
+        for (const auto& sample : interpreter.range_samples()) {
+            std::cout << "  first " << sample << "\n";
+        }
     }
     std::cout << "CD poll pcs:";
     for (auto poll_pc : interpreter.cdrom_polls()) {

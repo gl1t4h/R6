@@ -83,6 +83,27 @@ public:
     // Logs every store that lands on one address, with the writing PC, so a
     // value that appears in guest memory can be traced back to its writer.
     void watch_write(std::uint32_t address) { watch_writes_.push_back(address); }
+    // One watched byte range and the stores that landed inside it. A buffer
+    // is filled at many offsets, so counting them per range and per writing PC
+    // shows whether any guest function ever feeds it.
+    struct RangeWatch {
+        std::uint32_t begin{0};
+        std::uint32_t end{0};
+        std::uint64_t stores{0};
+        std::uint64_t bytes{0};
+    };
+    void watch_range(std::uint32_t begin, std::uint32_t end) {
+        watch_ranges_.push_back(RangeWatch{begin, end, 0, 0});
+    }
+    const std::vector<RangeWatch>& range_watches() const {
+        return watch_ranges_;
+    }
+    const std::map<std::uint32_t, std::uint64_t>& range_hot() const {
+        return range_hot_;
+    }
+    const std::vector<std::string>& range_samples() const {
+        return range_samples_;
+    }
     const std::vector<std::string>& write_log() const { return write_log_; }
     // Stores into the first words of the exception vector, with the writing
     // PC, so a run shows whether the title installs a handler there.
@@ -259,6 +280,9 @@ private:
     std::uint32_t find_value_{0};
     std::vector<std::uint32_t> watch_writes_;
     std::vector<std::string> write_log_;
+    std::vector<RangeWatch> watch_ranges_;
+    std::map<std::uint32_t, std::uint64_t> range_hot_;
+    std::vector<std::string> range_samples_;
     std::vector<std::string> trace_log_;
     std::vector<std::string> dma3_log_;
     std::vector<std::uint32_t> watch_args_;
