@@ -648,6 +648,20 @@ window body shows those counters plus how many disc sectors have been read.
   them. The stepper still publishes the pair on the null path, so the
   caller at `0x8008F080` can post loads for 1618 (and `0x8008F048` for
   1602) through `0x80010F68`.
+- **Exact read command, traced:** `--trace-cd` with the new `cd=` field on
+  every DMA3 entry shows the whole chain. libcd pauses at LBA 141, issues
+  Setloc `00 04 57` (BCD MSF; absolute 357 becomes LBA 207 after the
+  150-sector lead-in) at event 95, then ReadN at LBA 207 at event 97. The
+  drive presents sectors 207..537 and the guest consumes 330 of them
+  (207..536). For each sector one 3-word DMA copies the 12-byte header to
+  `0x800224B0` and one 512-word DMA copies the 2,048-byte user area to
+  `0x8010A600 + n*0x800` (all from `pc=0x80015C88`); the last lands at
+  `0x801AEE00`. A Pause follows at LBA 538 (event 761), then
+  `0x80010AD0` decrypts `0xA4B00` bytes from `0x8010A600` to `0x80024B60`
+  at cycle 40,698,064 with `cdsectors=373` — 43 sectors read before the
+  pack plus these 330. The second call copies `0x801E2600` to `0x800C9578`
+  at cycle 44,410,196. The only earlier use of `0x8010A600` is a single
+  sector at `cd=103`, overwritten by the pack.
 - **New debug knob:** `R6_TRACE_DECRYPT=1` prints each `0x80010AD0` call as
   `dst`, `src`, `count` and `ra`. Interpreter-only, off by default.
 - **Test target repair:** `tests/test_unaligned.cpp` was added by `f694247`

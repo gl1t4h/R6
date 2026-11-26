@@ -527,11 +527,12 @@ void MipsInterpreter::run_dma3_transfer() {
     // back before storing. Dropping the segment is why every transfer used to
     // land outside RAM and vanish.
     const auto address = 0x80000000u | hardware_.dma_address(3);
-    if (dma3_log_.size() < 64) {
+    if (dma3_log_.size() < 4096) {
         dma3_log_.push_back("run madr=0x" + format_hex(address) +
                             " bcr=0x" + format_hex(hardware_.dma_counter(3)) +
-                            " words=" + std::to_string(words) + " pc=0x" +
-                            format_hex(cpu_.pc));
+                            " words=" + std::to_string(words) + " cd=" +
+                            std::to_string(hardware_.cdrom().sector()) +
+                            " pc=0x" + format_hex(cpu_.pc));
     }
     for (std::uint32_t index = 0; index < words; ++index) {
         write32(address + index * 4, hardware_.cdrom().read_word());
@@ -613,9 +614,11 @@ RunResult MipsInterpreter::run(std::uint64_t max_steps) {
         const auto current_pc = cpu_.pc;
         if (trace_decrypt && current_pc == 0x80010AD0u) {
             // The LCG XOR loader at 0x80010AD0: log its arguments and caller.
-            std::printf("DEC %llu dst=%08X src=%08X count=%08X ra=%08X\n",
+            std::printf("DEC %llu dst=%08X src=%08X count=%08X ra=%08X "
+                        "cdsectors=%u\n",
                         static_cast<unsigned long long>(hardware_.cycles()),
-                        cpu_.gpr[4], cpu_.gpr[5], cpu_.gpr[6], cpu_.gpr[31]);
+                        cpu_.gpr[4], cpu_.gpr[5], cpu_.gpr[6], cpu_.gpr[31],
+                        hardware_.cdrom().sectors_read());
         }
         if (trace_sync &&
             (current_pc == 0x8008A068u || current_pc == 0x80086ABCu ||
