@@ -105,12 +105,21 @@ None.
   is disabled. A 250M-instruction run reports `display on at 0,32`, but the
   displayed 320x240 area is still empty: the primitive count is frozen at
   217,138 from about 200M on, and the guest sits in main state
-  `0x800BCCBC=2` / substate `0x800BCCC0=1` at `0x800C9A84`, polling the pad
-  check at `0x800C9874`. The CD is idle after a Pause at LBA 17846. The
+  `0x800BCCBC=2` / substate `0x800BCCC0=1` at `0x800C9A84`, polling the
+  task dispatcher at `0x800C9874`. The CD is idle after a Pause at LBA
+  17846; its last reads are small chunks of `SILENT.` (3 to 45 sectors),
+  and each DMA3 payload lands in the game's own buffers (`0x801E3600`,
+  `0x801E4600`), so sector delivery itself works. The
   earlier claim that the fade rate (`0x800B8FEC`) was never written came
   from reading the wrong address: the store is sign-extended to
   `0x800A8FEC`, which holds `0x51`, and the fade machine at `0x800BCD0C`
   completes its `3->4->5` and `6->7->0` cycles.
+- **Movie path:** Silent Hill never reaches MDEC, so a decoder is not the
+  missing piece yet. A 250M-instruction run writes neither
+  `0x1F801820`/`0x1F801824` nor the MDEC DMA channels (`0x1F801080`,
+  `0x1F801090`), its MDEC status reads back zero, and a RAM scan finds no
+  code that loads those registers directly or through `lui`/`ori` pairs.
+  The scattered CD reads are resource chunks, not a movie feeder.
 - **Loaded image:** A 130M-instruction `--vblank` run with `--dump-snapshot`
   captured the resident image. The loader's call to `0x80032EE0` is the real
   entry; it calls the resource startup at `0x8002E630`, then the resident
@@ -128,12 +137,16 @@ None.
   watch read `0x8002AB60` exactly once. Native DMA2/3/4 channels now execute
   their transfers, and the per-block differential compares full hardware
   registers, GTE registers, scratchpad and BIOS bookkeeping, not just cycles.
-- **Next step:** Implement the movie path (MDEC) before chasing the frame
-  loop. The display is enabled and the guest waits at the title/pad check
-  with an empty displayed buffer, so the first visible frame depends on the
-  video data the CD has already loaded rather than on the GPU or the sound
-  driver. After that, follow `0x800C9874`'s pad result through the title
-  transition.
+- **Next step:** Follow the state-2 wait instead of the movie path. The
+  frame loop `0x80010ECC` runs (61 iterations by 250M), the sound fade
+  reaches state 1, but `0x800C9874` returns 1 every time because
+  `0x80033548` reports no active task: all eight slot states at
+  `0x800B5508` are zero. The task dispatcher `0x8002ED7C` runs 740 times
+  while the request entry points (`0x8002E94C`, `0x8002F640`,
+  `0x80030000`) are never called, so the guest never asks for the work it
+  is waiting on. Trace which handler should enqueue it; the two requests
+  queued from substate 0 through `0x80010F68` (IDs 460 and 1070) are the
+  next suspect.
 - **Playable native build:** No
 - **Distributed game assets:** No
 
