@@ -606,6 +606,20 @@ RunResult MipsInterpreter::run(std::uint64_t max_steps) {
             std::fputc(10, stdout);
             std::fputc(10, stdout);
         }
+        if (trace_sync && current_pc == 0x800899A0u) {
+            static int fn_hits = 0;
+            if (fn_hits < 16) {
+                ++fn_hits;
+                const auto sp = cpu_.gpr[29];
+                std::printf("FN %llu ra=%08X a0=%08X a1=%08X sp=%08X "
+                            "cd50=%08X cd60=%08X f0=%08X f1=%08X f2=%08X",
+                            static_cast<unsigned long long>(hardware_.cycles()),
+                            cpu_.gpr[31], cpu_.gpr[4], cpu_.gpr[5], sp,
+                            read32(0x800B1C50u), read32(0x800B1C60u),
+                            read32(sp), read32(sp + 4), read32(sp + 8));
+                std::fputc(10, stdout);
+            }
+        }
         if (trace_sync && current_pc == 0x80089AC8u) {
             static int drain_hits = 0;
             if (drain_hits < 12) {

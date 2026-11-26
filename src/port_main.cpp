@@ -616,7 +616,6 @@ int run_headless(Host& host, std::uint64_t frames,
                (max_cycles == 0 ||
                 host.bus->hardware().cycles() < max_cycles)) {
             const auto before = host.cpu.pc;
-            if (!step_once(host)) break;
             if (sync_trace) {
                 static std::uint32_t last_istat = 0;
                 const auto istat = host.bus->hardware().interrupt_status();
@@ -646,6 +645,25 @@ int run_headless(Host& host, std::uint64_t frames,
                           << " cd60=" << hex32(host.ram.read32(0x800B1C60u))
                           << " vs=" << hex32(host.ram.read32(0x800B397Cu))
                           << std::endl;
+            }
+            if (sync_trace && before == 0x800899A0u) {
+                static int fn_hits = 0;
+                if (fn_hits < 16) {
+                    ++fn_hits;
+                    std::cout << "FN " << host.bus->hardware().cycles()
+                              << " ra=" << hex32(host.cpu.gpr[31])
+                              << " a0=" << hex32(host.cpu.gpr[4])
+                              << " a1=" << hex32(host.cpu.gpr[5])
+                              << " sp=" << hex32(host.cpu.gpr[29])
+                              << " cd50=" << hex32(host.ram.read32(0x800B1C50u))
+                              << " cd60=" << hex32(host.ram.read32(0x800B1C60u))
+                              << " f0=" << hex32(host.ram.read32(host.cpu.gpr[29]))
+                              << " f1="
+                              << hex32(host.ram.read32(host.cpu.gpr[29] + 4))
+                              << " f2="
+                              << hex32(host.ram.read32(host.cpu.gpr[29] + 8))
+                              << std::endl;
+                }
             }
             if (sync_trace && before == 0x80089AC8u) {
                 static int drain_hits = 0;
@@ -692,6 +710,7 @@ int run_headless(Host& host, std::uint64_t frames,
                     sector_last = sectors;
                 }
             }
+            if (!step_once(host)) break;
             if (watch_change != 0) {
                 const auto value = host.ram.read32(watch_change);
                 if (value != watch_last) {
