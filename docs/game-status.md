@@ -195,8 +195,29 @@ None.
   registers, leaving SPUCNT at `0xC080` and the transfer address at
   `0x7F42` (`0x3FA10` in SPU RAM), so sample uploads do happen.
   The feeder has to arrive as data, not as an immediate: no code contains
-  `0x801E09E0` or `0x801E1430`. Follow the record passed to `0x80011630,
-  whose first word encodes an SPU address in bits 19 to 30.
+  `0x801E09E0` or `0x801E1430`. The record handed to `0x80011630` turns out
+  to be an SPU-RAM allocation request, not a hand-off: it converts the
+  record's first word into an SPU address and passes it to the allocator
+  `0x80011D04`, which stores the block at record offset `+0x1C`.
+  The countdown that would make the tick report work is never armed from
+  outside. `0x800B97DC` has six store sites in the whole image, all inside
+  the tick `0x80033548`: `0x800335D0` and `0x800335DC` arm 24 or 22,
+  `0x80033D70` and `0x80033D78` arm 1 or 24, and `0x80033DA0` decrements.
+  Every arming site sits inside the per-slot loop gated by the voice mask
+  `0x800BCD34`, and that mask is only written at `0x80033624` by the mask
+  builder `0x8002E898`. A range watch over `0x800B97D0`-`0x800B9810`
+  records 16 stores, all from the BSS clear at `0x80010B0C`: the voice
+  table pointer `0x800B97E4`, the stream index `0x800B97D6`, the active
+  byte `0x800B97E0` and the countdown all stay zero, so the tick leaves
+  through `0x80034070` with `sp+60 == 0`, returns 0, and `0x800C9AB0`
+  spins. The two calls that could start a voice, `0x8002E94C` at
+  `0x800C9B8C` and `0x8002E990` at `0x800C9BA4`, are in substate 3 of that
+  same state machine. The buffers it waits on are already loaded: both
+  payload buffers are written by the CD driver copy loop at `0x80015C88`
+  and hold 4,072 bytes of their 4,096. They hold identical bytes, which is
+  the next thing to check, since two different requests filling different
+  buffers with the same content suggests the driver copied the same sectors
+  twice.
 - **Playable native build:** No
 - **Distributed game assets:** No
 
