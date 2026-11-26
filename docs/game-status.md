@@ -423,6 +423,21 @@ window body shows those counters plus how many disc sectors have been read.
   handler/DMA and the sync's flag check, and it is what makes the game retry
   at 14:48:04 and overwrite `0x800C0CE0` before the walk.
 
+- **Ground truth from the disc closes the CD route.** A throw-away tool
+  (`dump-sector.cpp`, built against `chd_image.cpp`) prints the header and the
+  first 32 user bytes of any LBA straight from the image. The results:
+  16 = `01 43 44 30 30 31 ...` (PVD, `CD001`, volume `PLAYSTATION`);
+  18 = `01 00 16 00 00 00 01 00 00 00 07 00 2F F5 01 00 01 00 43 49 4E 45 4D
+  41 53` (`CINEMAS`, the game's 24-byte record); 19 = the same record;
+  22 = `30 00 16 00 ...` (an ISO9660 entry, length `0x30`, extent 22);
+  390 = `sfxv.vab`, not `CD.HED`. The port's `0x800C0CE0` after its second
+  transfer matches LBA 18 exactly, and the interpreter's buffer at its walk
+  matches LBA 22 exactly: the two runs never held the same sector at the same
+  time, because the interpreter reads 22 before walking while the port reads
+  66454. Every byte either runner received is correct for the LBA it asked
+  for, so there is no delivery divergence to fix -- the CD handshake is a dead
+  end.
+
 - **The one-ahead position fix that was tried and rejected:** the drain trace
   suggested the drive was reporting one sector past the one the guest held
   (`cd5C` 17/19/66455 against the interpreter's 16/18/22), so `present_sector`
