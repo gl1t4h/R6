@@ -48,6 +48,11 @@ public:
     // Count of non-zero VRAM pixels, to tell "nothing drawn" apart from
     // "drawn outside the display area" during bring-up.
     std::uint32_t filled_vram_pixels() const;
+    // Bounding box of the non-zero VRAM pixels. Tells "drawn outside the
+    // display window" apart from "nothing drawn at all". False when empty.
+    bool filled_vram_bounds(std::uint32_t& left, std::uint32_t& top,
+                            std::uint32_t& right,
+                            std::uint32_t& bottom) const;
 
     std::uint32_t rendered_primitives() const { return rendered_primitives_; }
     std::uint32_t unsupported_commands() const { return unsupported_commands_; }

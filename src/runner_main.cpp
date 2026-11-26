@@ -83,6 +83,7 @@ int main(int argc, char** argv) {
     std::filesystem::path input;
     std::uint64_t steps = 5000000;
     std::filesystem::path frame_path;
+    std::filesystem::path vram_path;
     std::uint32_t entry_override = 0;
     std::filesystem::path extract_exe_path;
     bool deliver_vblank = false;
@@ -116,6 +117,8 @@ int main(int argc, char** argv) {
             steps = std::stoull(argv[++index]);
         } else if (argument == "--dump-frame" && index + 1 < argc) {
             frame_path = argv[++index];
+        } else if (argument == "--dump-vram" && index + 1 < argc) {
+            vram_path = argv[++index];
         } else if (argument == "--entry" && index + 1 < argc) {
             entry_override = static_cast<std::uint32_t>(
                 std::stoul(argv[++index], nullptr, 0));
@@ -670,8 +673,15 @@ int main(int argc, char** argv) {
               << " with response=" << interpreter.hardware().cdrom().response_seen()
               << " response reads=" << interpreter.hardware().cdrom().response_reads()
               << std::endl;
-    for (const auto& entry : interpreter.watched_args()) {
-        std::cout << entry << std::endl;
+    std::uint32_t vram_left = 0;
+    std::uint32_t vram_top = 0;
+    std::uint32_t vram_right = 0;
+    std::uint32_t vram_bottom = 0;
+    if (gpu.filled_vram_bounds(vram_left, vram_top, vram_right, vram_bottom)) {
+        std::cout << "VRAM content box: " << vram_left << "," << vram_top
+                  << " to " << vram_right << "," << vram_bottom << "\n";
+    } else {
+        std::cout << "VRAM content box: empty\n";
     }
     for (const auto& range : interpreter.range_watches()) {
         std::cout << "Range 0x" << std::hex << range.begin << "..0x"
@@ -870,6 +880,17 @@ int main(int argc, char** argv) {
         }
     }
 
+    if (!vram_path.empty()) {
+        std::ofstream out(vram_path, std::ios::binary);
+        for (std::uint32_t y = 0; y < r6::SoftwareGpu::kVramHeight; ++y) {
+            for (std::uint32_t x = 0; x < r6::SoftwareGpu::kVramWidth; ++x) {
+                const auto pixel = gpu.read_vram(x, y);
+                out.put(static_cast<char>(pixel & 0xFFu));
+                out.put(static_cast<char>((pixel >> 8) & 0xFFu));
+            }
+        }
+        std::cout << "Wrote VRAM to " << vram_path.string() << "\n";
+    }
     if (!frame_path.empty()) {
         write_ppm(gpu.display_frame(), r6::SoftwareGpu::kDisplayWidth,
                   r6::SoftwareGpu::kDisplayHeight, frame_path);

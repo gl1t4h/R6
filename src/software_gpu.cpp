@@ -792,6 +792,30 @@ std::uint32_t SoftwareGpu::filled_vram_pixels() const {
     return filled;
 }
 
+bool SoftwareGpu::filled_vram_bounds(std::uint32_t& left, std::uint32_t& top,
+                                     std::uint32_t& right,
+                                     std::uint32_t& bottom) const {
+    bool found = false;
+    for (std::uint32_t y = 0; y < kVramHeight; ++y) {
+        for (std::uint32_t x = 0; x < kVramWidth; ++x) {
+            if (vram_[static_cast<std::size_t>(y) * kVramWidth + x] == 0) {
+                continue;
+            }
+            if (!found) {
+                left = right = x;
+                top = bottom = y;
+                found = true;
+                continue;
+            }
+            if (x < left) left = x;
+            if (x > right) right = x;
+            if (y < top) top = y;
+            if (y > bottom) bottom = y;
+        }
+    }
+    return found;
+}
+
 std::vector<std::uint32_t> SoftwareGpu::display_frame() const {
     std::vector<std::uint32_t> frame(
         static_cast<std::size_t>(kDisplayWidth) * kDisplayHeight, 0xFF000000u);

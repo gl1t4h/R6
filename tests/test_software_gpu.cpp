@@ -185,6 +185,24 @@ void display_frame_uses_display_area() {
              0xFFFF0000u);
 }
 
+void filled_vram_bounds_tracks_drawn_pixels() {
+    SoftwareGpu gpu;
+    std::uint32_t left = 0;
+    std::uint32_t top = 0;
+    std::uint32_t right = 0;
+    std::uint32_t bottom = 0;
+    R6_CHECK(!gpu.filled_vram_bounds(left, top, right, bottom));
+
+    gpu.submit_gp0(0x020000FFu);  // fill, red
+    gpu.submit_gp0(0x0014000Au);  // x=10, y=20
+    gpu.submit_gp0(0x00040004u);  // 4x4, rounded out to 16x4
+    R6_CHECK(gpu.filled_vram_bounds(left, top, right, bottom));
+    R6_CHECK(left == 0u);
+    R6_CHECK(top == 20u);
+    R6_CHECK(right == 15u);
+    R6_CHECK(bottom == 23u);
+}
+
 void gp1_reset_restores_drawing_area() {
     SoftwareGpu gpu;
     gpu.submit_gp0(0xE3000000u);
@@ -331,6 +349,7 @@ void run_software_gpu_tests() {
     vram_to_cpu_download();
     status_and_display_control();
     display_frame_uses_display_area();
+    filled_vram_bounds_tracks_drawn_pixels();
     gp1_reset_restores_drawing_area();
     textured_rectangle_4bit_clut();
     textured_rectangle_8bit_clut();
