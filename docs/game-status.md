@@ -438,6 +438,29 @@ window body shows those counters plus how many disc sectors have been read.
   for, so there is no delivery divergence to fix -- the CD handshake is a dead
   end.
 
+- **Translated execution does not diverge (differential harness).**
+  `r6-native` built from `native_main.cpp` + the generated translation; five
+  interpreter snapshots were compared against the translated run block by
+  block (registers, HI/LO, COP0, hardware, GTE, scratchpad, BIOS, event trace,
+  whole 2 MiB RAM): 300k blocks from 590k and 605k steps (which spans both CD
+  transfers) and 200k blocks from 644k, 648k and 652k steps -- all matched,
+  no divergence. The translated code is therefore not what makes the two runs
+  differ.
+- **The third `Setloc` operand, traced in both.** `PS` lines at `0x8008711C`
+  (`CdIntToPos`) and `0x80086CA8` (`CdControl`) plus `RC` lines at the read
+  entry `0x80086A6C` (call site, arguments, buffered record bytes). The first
+  two reads agree exactly (`a1=0x10`, `a1=0x12`, same site `0x800864A4` then
+  `0x80086540`). The third comes from the same site in both, `0x80086838`, but
+  the operand differs: interpreter `a1=0x00000016` (sector 22), port
+  `a1=0x000C0016`. Sector 22 is present in the low half; the high half carries
+  `0x000C`. The buffer at `0x800C0CE0` also differs: interpreter
+  `01 00 16 00 00 00 01 00` (byte-for-byte LBA 18) against port
+  `01 00 00 16 00 00 00 00`, and after the first transfer interpreter
+  `01 43 44 30 30 31 01 00` (the PVD) against port `00 01 00 43 00 44 00 30`
+  -- the port's delivered bytes sit in every other byte with the upper byte of
+  each pair zeroed, while the payload the controller hands out and the disc
+  itself are both already verified correct.
+
 - **The one-ahead position fix that was tried and rejected:** the drain trace
   suggested the drive was reporting one sector past the one the guest held
   (`cd5C` 17/19/66455 against the interpreter's 16/18/22), so `present_sector`

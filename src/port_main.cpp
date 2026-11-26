@@ -646,6 +646,35 @@ int run_headless(Host& host, std::uint64_t frames,
                           << " vs=" << hex32(host.ram.read32(0x800B397Cu))
                           << std::endl;
             }
+            if (sync_trace &&
+                (before == 0x8008711Cu || before == 0x80086CA8u)) {
+                static int pos_hits = 0;
+                if (pos_hits < 24) {
+                    ++pos_hits;
+                    std::cout << "PS " << host.bus->hardware().cycles()
+                              << " pc=" << hex32(before)
+                              << " a0=" << hex32(host.cpu.gpr[4])
+                              << " a1=" << hex32(host.cpu.gpr[5])
+                              << " ra=" << hex32(host.cpu.gpr[31])
+                              << std::endl;
+                }
+            }
+            if (sync_trace && before == 0x80086A6Cu) {
+                static int call_hits = 0;
+                if (call_hits < 12) {
+                    ++call_hits;
+                    std::cout << "RC " << host.bus->hardware().cycles()
+                              << " ra=" << hex32(host.cpu.gpr[31])
+                              << " a0=" << hex32(host.cpu.gpr[4])
+                              << " a1=" << hex32(host.cpu.gpr[5])
+                              << " a2=" << hex32(host.cpu.gpr[6]) << " buf=";
+                    const auto at = host.cpu.gpr[6];
+                    for (int k = 0; k < 8; ++k) {
+                        std::cout << hex32(host.ram.read8(at + k)).substr(6);
+                    }
+                    std::cout << std::endl;
+                }
+            }
             if (sync_trace && before == 0x800899A0u) {
                 static int fn_hits = 0;
                 if (fn_hits < 16) {
