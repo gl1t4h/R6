@@ -510,14 +510,37 @@ public:
             << "namespace r6_generated {\n\n";
 
         for (auto pc : leaders_) {
-            out << "std::uint32_t block_" << std::setw(8) << std::setfill('0')
+            const auto addresses = block_addresses(pc);
+            out << "static std::uint32_t body_" << std::setw(8) << std::setfill('0')
                 << std::hex << pc << std::dec
-                << "(r6::CpuState& cpu, r6::NativeBus& bus) {\n"
+                << "(r6::CpuState& cpu, r6::NativeBus& bus, int entry) {\n"
                 << "    (void)bus;\n"
                 << "    // Block at 0x" << std::setw(8) << std::setfill('0')
                 << std::hex << pc << std::dec << "\n";
+            if (addresses.size() > 1) {
+                out << "    switch (entry) {\n";
+                for (std::size_t index = 1; index < addresses.size(); ++index) {
+                    out << "        case " << index << ": goto resume_"
+                        << std::setw(8) << std::setfill('0') << std::hex
+                        << addresses[index] << std::dec << ";\n";
+                }
+                out << "        default: break;\n    }\n";
+            }
             instructions += emit_block(out, pc);
             out << "}\n\n";
+            out << "std::uint32_t block_" << std::setw(8) << std::setfill('0')
+                << std::hex << pc << std::dec
+                << "(r6::CpuState& cpu, r6::NativeBus& bus) {\n"
+                << "    return body_" << std::setw(8) << std::setfill('0')
+                << std::hex << pc << std::dec << "(cpu, bus, 0);\n}\n\n";
+            for (std::size_t index = 1; index < addresses.size(); ++index) {
+                out << "std::uint32_t enter_" << std::setw(8) << std::setfill('0')
+                    << std::hex << addresses[index] << std::dec
+                    << "(r6::CpuState& cpu, r6::NativeBus& bus) {\n"
+                    << "    return body_" << std::setw(8) << std::setfill('0')
+                    << std::hex << pc << std::dec << "(cpu, bus, " << index
+                    << ");\n}\n\n";
+            }
         }
 
         out << "std::size_t block_count() {\n"
@@ -528,6 +551,12 @@ public:
             out << "    dispatcher.register_function(" << hex32(pc)
                 << ", &block_" << std::setw(8) << std::setfill('0') << std::hex
                 << pc << std::dec << ");\n";
+            for (const auto address : block_addresses(pc)) {
+                if (address == pc) continue;
+                out << "    dispatcher.register_function(" << hex32(address)
+                    << ", &enter_" << std::setw(8) << std::setfill('0')
+                    << std::hex << address << std::dec << ");\n";
+            }
         }
         out << "}\n\n}  // namespace r6_generated\n";
 
@@ -576,6 +605,23 @@ private:
         }
     }
 
+    // Instruction addresses a block covers, in order. Every interior
+    // instruction gets its own dispatch entry so an interrupt taken mid-block
+    // can resume exactly where it left off.
+    std::vector<std::uint32_t> block_addresses(std::uint32_t start) const {
+        std::vector<std::uint32_t> addresses;
+        std::uint32_t pc = start;
+        for (;;) {
+            if (!in_image(pc)) break;
+            if (pc != start && leaders_.count(pc) != 0) break;
+            addresses.push_back(pc);
+            const auto decoded = decode_flow(word(pc), pc);
+            if (decoded.flow != Flow::none) break;
+            pc += 4;
+        }
+        return addresses;
+    }
+
     std::uint64_t emit_block(std::ostream& out, std::uint32_t start) {
         std::uint64_t count = 0;
         std::uint32_t pc = start;
@@ -593,6 +639,11 @@ private:
 
             const auto instruction = word(pc);
             const auto decoded = decode_flow(instruction, pc);
+            if (pc != start) {
+                out << "resume_" << std::setw(8) << std::setfill('0') << std::hex
+                    << pc << std::dec << ":\n";
+            }
+            out << "    {\n";
             out << "    if (bus.event_tick(cpu)) return cpu.pc;\n";
             out << "    // 0x" << std::setw(8) << std::setfill('0') << std::hex
                 << pc << std::dec << ": " << std::hex << std::setw(8)
@@ -600,12 +651,14 @@ private:
 
             if (decoded.flow != Flow::none) {
                 emit_control(out, instruction, pc, decoded);
+                out << "    }\n";
                 return count + 1;
             }
 
             emit_body(out, instruction, pc);
             out << "    cpu.pc += 4;\n"
-                << "    bus.advance_instruction();\n";
+                << "    bus.advance_instruction();\n"
+                << "    }\n";
             ++count;
             pc += 4;
         }

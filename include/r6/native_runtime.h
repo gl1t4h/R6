@@ -217,10 +217,11 @@ public:
             return false;
         }
         if (!allow_interrupt) return false;
-        // A generated block is a single native function: an interrupt taken
-        // halfway through it would set EPC to an instruction whose block does
-        // not exist, and the dispatcher cannot resume there. The port enables
-        // block-boundary delivery so every EPC is a translated block entry.
+        // Every instruction has its own dispatch entry (the translator emits
+        // one for each interior instruction of a block), so an interrupt taken
+        // mid-block can set EPC to the instruction that did not run and the
+        // dispatcher resumes exactly there. block_boundary_interrupts_ is the
+        // older coarse mode, kept for runs that need a single entry per block.
         if (block_boundary_interrupts_) return false;
         return deliver_interrupt(cpu);
     }

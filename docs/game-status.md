@@ -339,8 +339,9 @@ window body shows those counters plus how many disc sectors have been read.
   `r6-recomp` emitted the instruction as a no-op, so the native run never set
   IEp. `NativeBus::syscall` now mirrors the interpreter and the translator
   emits it.
-- **Runtime:** 120 fields (9.7M blocks, 67.7M cycles) with no recompilation
-  miss, 148 interrupts delivered and 0 handler overruns, but the guest reads
+- **Runtime:** 120 fields (4,883,925 blocks, 67.7M cycles) with no
+  recompilation miss, 145 interrupts delivered and 0 handler overruns, ending
+  at `0x8008BAA0` with a vblank still pending, but the guest reads
   only 6 disc sectors (LBA 16-19, then `COMPILED.XA` at 66454) and then issues
   `CdInit` (Init/Demute/GetStat) every frame. It submits 0 GP0 commands and
   0 DMA2 lists, so VRAM stays black. Fixing `syscall` did not change this,
@@ -348,16 +349,35 @@ window body shows those counters plus how many disc sectors have been read.
 - **Interpreter comparison:** the same disc on `r6-run --vblank --hot` reads
   141 sectors and parks at `0x8008CA8C` with hot PCs `0x8008CA7C`,
   `0x8008CA8C`, `0x8008CB4C` - the CD loader wait already recorded below. The
-  port still stalls earlier than that, at `0x800647A4`, with a different
-  sector sequence (16-19 then 66454 instead of 390-397). Translation is no
-  longer the suspect: the port's only remaining deviation from the reference
-  run is interrupt delivery granularity. The port takes interrupts at block
-  boundaries so EPC is always a translated entry; the interpreter checks every
-  1024 instructions. Delivering per instruction in the port reproduces the
-  interpreter but resumes at mid-block EPCs, which have no translated block
-  (`0x8008D0AC`).
+  port still stalls earlier, with a different sector sequence (16-19 then
+  66454 instead of 390-397).
+
+- **Resume entries:** every instruction now has a dispatch entry. A block is
+  emitted as `body_XXXXXXXX(cpu, bus, entry)` with a `switch` that jumps to a
+  `resume_XXXXXXXX` label at instruction N, each instruction in its own scope;
+  `block_XXXXXXXX` is a two-argument wrapper for entry 0 and `enter_XXXXXXXX`
+  wraps the interior entries, so an interrupt taken mid-block can set EPC to
+  the instruction that did not run and the dispatcher resumes exactly there.
+  The port now uses per-instruction interrupt delivery like the interpreter;
+  `no translated block at 0x8008D0AC` no longer occurs. Instruction bodies are
+  not duplicated, so the translation stays one copy of the code.
+
+- **Where the port and the reference part company:** with matching interrupt
+  policy, the port and `r6-run` produce identical BIOS call counts through
+  1,220,000 cycles (7 at 400,000, 43 at 900,000, 51 at 1,220,000). They first
+  differ at 1,240,000 cycles (55 calls against 54), and after that they
+  separate completely: at 2,000,000 cycles the port has 88 calls and the
+  interpreter 583, because the interpreter is in the CD driver reading sectors
+  390-397 while the port is waiting. The port spends its time in the loop at
+  `0x80084D80` (36,456 hits by 2,000,000 cycles): it decrements a stack
+  counter and re-reads `0x800B397C`, branching back while
+  `*(0x800B397C) < a0`, so it waits for a guest counter the vblank path should
+  advance. It also spins in the copy loop at `0x800653F0`. That first
+  divergent function is the next thing to fix; 3,600 fields still end at
+  `0x8008BAA0` with 145,658,377 blocks, 3,727 interrupts, six sectors and
+  `I_STAT` 1 left pending.
 - **Coverage rules learned:** code pointers stored in tables (the 13-entry mode
   table at `0x800B47C4`), `jalr` return continuations and ordinary function
   prologues all reach code that no call-site scan sees. They are seeded
-  automatically. Interrupts are delivered at block boundaries in the port so
-  EPC is always a translated entry.
+  automatically. Interrupts are delivered per instruction in the port, and
+  every instruction has its own dispatch entry, so EPC is always resumable.

@@ -337,8 +337,9 @@ bool step_once(Host& host) {
     }
     try {
         cpu.pc = host.dispatcher.step(cpu, bus);
-        // Deliver anything the block raised at this boundary, where EPC is a
-        // translated entry rather than an address inside the block.
+        // A no-op unless block-boundary delivery is enabled; in the default
+        // mode the generated blocks take interrupts per instruction and
+        // resume through their interior entry points.
         bus.service_interrupt(cpu);
     } catch (const std::exception& exception) {
         host.stop_reason = std::string("native fault at ") + hex32(cpu.pc) +
@@ -570,11 +571,16 @@ void load_shaders(const std::filesystem::path& directory, std::string& vertex,
 }
 
 int run_headless(Host& host, std::uint64_t frames,
-                 const std::filesystem::path& screenshot) {
+                 const std::filesystem::path& screenshot,
+                 std::uint64_t max_cycles) {
     std::uint64_t presented = 0;
-    while (!host.halted && presented < frames) {
+    while (!host.halted && presented < frames &&
+           (max_cycles == 0 ||
+            host.bus->hardware().cycles() < max_cycles)) {
         const auto target = host.bus->hardware().cycles() + kFieldCycles;
-        while (!host.halted && host.bus->hardware().cycles() < target) {
+        while (!host.halted && host.bus->hardware().cycles() < target &&
+               (max_cycles == 0 ||
+                host.bus->hardware().cycles() < max_cycles)) {
             if (!step_once(host)) break;
         }
         ++presented;
@@ -607,6 +613,16 @@ int run_headless(Host& host, std::uint64_t frames,
         std::cout << "Clock: " << bus.hardware().cycles() << " cycle(s), "
                   << bus.hardware().interrupt_status() << " I_STAT, "
                   << bus.hardware().interrupt_mask() << " I_MASK\n";
+        const auto& bios = host.services->bios();
+        std::cout << "BIOS calls: " << bios.total_calls() << "\n";
+        for (const auto& entry : bios.calls()) {
+            const auto table = static_cast<r6::BiosTable>(entry.first.first);
+            const char name = table == r6::BiosTable::a0
+                                  ? 'A'
+                                  : (table == r6::BiosTable::b0 ? 'B' : 'C');
+            std::cout << "  " << name << "(0x" << std::hex << entry.first.second
+                      << std::dec << ") x" << entry.second << "\n";
+        }
         if (host.trace) {
             std::vector<std::pair<std::uint64_t, std::uint32_t>> hot;
             hot.reserve(host.histogram.size());
@@ -631,6 +647,7 @@ int main(int argc, char** argv) {
     std::filesystem::path image;
     std::filesystem::path screenshot;
     std::uint64_t frames = 0;  // 0 = interactive
+    std::uint64_t max_cycles = 0;
     bool headless = false;
     bool scanlines = true;
     bool trace = false;
@@ -643,6 +660,9 @@ int main(int argc, char** argv) {
             screenshot = argv[++index];
         } else if (argument == "--frames" && index + 1 < argc) {
             frames = std::stoull(argv[++index]);
+            headless = true;
+        } else if (argument == "--cycles" && index + 1 < argc) {
+            max_cycles = std::stoull(argv[++index]);
             headless = true;
         } else if (argument == "--headless") {
             headless = true;
@@ -677,7 +697,7 @@ int main(int argc, char** argv) {
 #endif
     host.bus = std::make_unique<r6::NativeBus>(host.ram, *host.services);
     host.bus->set_vblank_enabled(true);
-    host.bus->set_block_boundary_interrupts(true);
+    host.bus->set_block_boundary_interrupts(false);
 
     std::cout << "R6 native port\n"
               << "Disc: " << image.filename().string() << "\n"
@@ -687,7 +707,8 @@ int main(int argc, char** argv) {
               << r6_generated::block_count() << "\n";
 
     if (headless) {
-        return run_headless(host, frames == 0 ? 600 : frames, screenshot);
+        return run_headless(host, frames == 0 ? 600 : frames, screenshot,
+                           max_cycles);
     }
 
     WNDCLASSEXW window_class{};
