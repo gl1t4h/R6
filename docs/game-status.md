@@ -341,6 +341,29 @@ None.
   discarded, nothing armed for the driver, and the driver's tick returning
   0 — the wait is asked to complete a start whose track handle was just
   cleared.
+- **Shortest path from the phase-0 restart to a frame:** phase 0
+  (`0x80032834`, clears `0x800B5C30`) -> phase 1 (`0x80032850`) -> handler 1
+  (`0x800C9A84`) -> the `task_wait` loop -> substates 2, 3, 4 -> handler 5
+  (`0x800C9B30`, whose sub-substate loop calls the tick at `0x800C9C10`) ->
+  handler 6 (`0x800C9C50`: phase = 3, track handle = `0x333`, substate 7) ->
+  handler 7 (`0x800C9CA0`: waits for `phase & 7 == 5`, then calls
+  `0x800333CC`, `0x80032428(320, 0)`, `0x8008EF20(0)` and `0x8008F048`, and
+  hands off with main state 3 at `0x800C9D60`). That handoff is the first
+  code in the boot that would put a scene on the display.
+- **Where that path dies:** handler 1 needs `task_wait() >= 2`, which needs
+  the tick to return nonzero, which the loaded image cannot do, so handlers
+  5-7 never run. Measured: at 60M steps main state is still 1 (written at
+  `0x80032EA4`) and the dumped display frame is **0 non-black pixels of
+  76,800**; by 150M main state 2 has been entered at `0x800C973C` and handler
+  1 `0x800C9A84` runs 78 times, all of them looping at `0x800C9ABC`.
+  The tick `0x80033548` is not in the 79,872-byte boot EXE (which covers
+  `0x80010000`-`0x80023800` exclusive), so it arrives in a disc overlay;
+  given a retail title must boot, the one change most likely to produce a
+  frame is to make the loaded sound overlay install a tick that can report
+  work. That overlay's bytes should be verified against the disc before any
+  further modelling, since a constant-0 tick is not plausible retail code.
+  The two queued reads are not code (460/1,070 bytes of high-entropy data
+  with a `0x00000944` header), so they do not install it.
 - **The smallest real gap is that handoff:** the phase-0 restart drops
   `0x800B5C30` and requests phase 1, and the only code that could arm a
   voice slot for it (the starters at substate 5) sits behind the same wait.
