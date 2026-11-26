@@ -1132,8 +1132,8 @@ The null table does explain the overlay pump's status read: the gate cannot
 see a response, so the tick takes the `0x80093650` path and returns through
 its `0x80014120` call without reaching the command setup at `0x80093700`.
 That setup is dormant; had it run, its stores through the null pointers
-would have left nonzero data at RAM address 0, and the dump is zero there. The command, parameter and
-DICR/DPCR stores in this copy are therefore not the traffic that reached the
+would have left nonzero data at RAM address 0, and the dump is zero there.
+The command, parameter and DICR/DPCR stores in this copy are therefore not the traffic that reached the
 drive.
 
 ### What is still hypothesis
