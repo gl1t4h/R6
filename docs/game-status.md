@@ -1076,3 +1076,48 @@ published, and the final counters are `produced = commit = 17`,
 the frame body count is still 254, so this removes the CD-stream deadlock but
 does not yet open the scene; the sound module that stores `0x20` there remains
 the blocker.
+
+## CD stream: why production stops at record 17
+
+A 600M-instruction run with `--trace-cd`, `--watch-write` on
+`0x800C4980`-`0x800C498C`, `0x800C49A8`-`0x800C49B0`, `0x800C499C` and
+`0x800BFF3C`-`0x800BFF84`, and `--watch-pc` on `0x80093604`/`0x80093650` shows
+where the new segment's producer stops.
+
+The ring is not full: `produced`, `commit` and `consume` are all 17, the
+capacity at `0x800C49BC` is 23, and slot 17's header sits at `0x801A8260`.
+The last read the drive ever receives is `ReadS` (command `1B`) at LBA 133147,
+issued after `Setmode E0`; it delivers sectors up to 133167. Sector 133166 is
+an XA payload the drive skips while decoding, so 133167 is the last one
+presented. It is loaded and acknowledged (`sector 133167 loaded`, `ack 7
+int=1`) but never drained, so the drive never presents another sector and the
+log contains no further `Setloc`/`ReadS`. No read for group 4 block 8 or
+group 5 block 0 is requested anywhere in the run.
+
+On the DMA side the last pair is the header and 504-word payload for sector
+133166 (payload into `0x801B0120`, the last ring slot). After it there is a
+single 8-word header transfer into `0x801A8260`, the slot-17 header, and the
+504-word payload that should follow it is never started.
+
+The pump tick `0x800935CC` is entered 37 times after that point and leaves at
+`0x80093650` every time. The gate at `0x800935F8`-`0x80093610` dereferences
+`[0x800BFF5C]` and tests bit `0x0100` of the word it points at; that pointer is
+zero for the whole run, so the gate reads address 0 and always reports "no
+data". The same is true of the rest of libcd's hardware table in this build:
+`0x800BFF3C` (CD command), `0x800BFF44`/`0x800BFF48` (CD parameter/index),
+`0x800BFF4C`/`0x800BFF50` (GP0/GP1), `0x800BFF54`/`0x800BFF58` (DPCR/DICR),
+`0x800BFF5C` (CD status word) and `0x800BFF6C` (DMA3 CHCR) are written only by
+the boot BSS clear at `0x80010B0C`. The table's setter `0x8009204C` and the
+init around `0x80092068`/`0x8009245C` never execute, and no `jal`, jump table
+or data word in the loaded image names them.
+
+So the command write at `0x80093740`/`0x80093758`, the DICR/DPCR updates at
+`0x80093F98`-`0x80094040` and the CHCR busy wait at `0x80093F4C`/`0x80093824`
+all land in RAM at address 0 instead of the registers: the pump cannot observe
+the data-ready event or re-program channel 3. Channel 3 still moves data
+because the emulator runs the transfer on the guest's CHCR store alone.
+
+The live table the init should be handed is still intact at `0x800AFE8C`:
+`0x1F801040`, `0x1F801070`, then the four CD ports `0x1F801800`-`0x1F801803`.
+Finding why the module's hardware-table init is never reached is the next step;
+the stream deadlock is a consequence of the null table, not of DMA ordering.
