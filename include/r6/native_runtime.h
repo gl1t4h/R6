@@ -233,7 +233,23 @@ public:
     bool in_interrupt() const { return in_interrupt_; }
     const EventTrace& events() const { return events_; }
     std::uint64_t interrupts() const { return interrupts_delivered_; }
+    std::uint64_t interrupt_overruns() const { return interrupt_overruns_; }
+    bool interrupts_enabled() const { return interrupts_enabled_; }
     std::uint64_t missing_vectors() const { return missing_vectors_; }
+
+    // Syscall is libetc's critical-section API, not a no-op: the retail
+    // kernel masks interrupts for Syscall(1) and restores them for
+    // Syscall(2), and the guest relies on both around driver sections that
+    // are not reentrant. The interpreter does the same, so the generated
+    // blocks must too or the two runs diverge on SR (IEp).
+    void syscall(CpuState& cpu, std::uint32_t code) {
+        if (code == 1) {
+            cpu.gpr[2] = (cpu.cop0[12] & 1u) != 0 ? 1u : 0u;
+            cpu.cop0[12] &= ~0x405u;
+        } else if (code == 2) {
+            cpu.cop0[12] |= 0x405u;
+        }
+    }
 
     // RFE: pop the SR mode stack. The generated block advances the PC itself.
     void rfe(CpuState& cpu) {

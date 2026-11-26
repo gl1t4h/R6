@@ -333,8 +333,8 @@ Decoded decode_flow(std::uint32_t instruction, std::uint32_t pc) {
                 decoded.flow = Flow::indirect;
                 decoded.link = function == 0x09;
             }
-            // The interpreter treats syscall as a no-op, so translated code
-            // does the same. break ends the program and is not translatable.
+            // syscall is libetc's critical-section entry/exit and is emitted
+            // as a bus call; break ends the program and is not translatable.
             if (function == 0x0D) decoded.flow = Flow::terminal;
             break;
         }
@@ -747,7 +747,9 @@ private:
                         store(rd, "static_cast<std::uint32_t>(static_cast<std::int32_t>(" +
                                       source(rt) + ") >> (" + source(rs) + " & 31u))");
                         break;
-                    case 0x0C: break;  // syscall: no-op, as in the interpreter
+                    case 0x0C:
+                        line("bus.syscall(cpu, cpu.gpr[4]);");
+                        break;
                     case 0x10: store(rd, "cpu.hi"); break;
                     case 0x11: line("cpu.hi = " + source(rs) + ";"); break;
                     case 0x12: store(rd, "cpu.lo"); break;

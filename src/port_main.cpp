@@ -597,6 +597,13 @@ int run_headless(Host& host, std::uint64_t frames,
     }
     if (host.bus) {
         auto& bus = *host.bus;
+        std::cout << "IRQ: " << bus.interrupts() << " delivered, "
+                  << bus.interrupt_overruns() << " overrun(s), "
+                  << (bus.interrupts_enabled() ? "enabled" : "DISABLED")
+                  << "\n";
+        std::cout << "CD: " << bus.hardware().cdrom().sectors_read()
+                  << " sector(s), last " << bus.hardware().cdrom().sector()
+                  << "\n";
         std::cout << "Clock: " << bus.hardware().cycles() << " cycle(s), "
                   << bus.hardware().interrupt_status() << " I_STAT, "
                   << bus.hardware().interrupt_mask() << " I_MASK\n";

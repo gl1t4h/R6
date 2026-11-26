@@ -236,20 +236,33 @@ window body shows those counters plus how many disc sectors have been read.
   5x7 bitmap overlay in the top-left of the presented frame; the overlay is
   drawn into a copy and never touches guest VRAM. Measured 40-60 FPS at 60 Hz
   frame pacing (1 ms timer resolution).
-- **Differential:** `r6-native --compare` matches the interpreter for 18,552
-  blocks, then reports a COP0 status mismatch (native `0x00000401`, oracle
-  `0x00000405`, IEp set on the oracle side) at PC `0x8008B9EC`, inside the
-  interrupt entry path. Earlier 4,000-block runs passed, so this is a
-  late-boot divergence in the exception stack, not in the translated code.
+- **Differential:** `r6-native --compare` now matches the interpreter for
+  3,000,000 blocks (registers, HI/LO, COP0, hardware, GTE, scratchpad, BIOS,
+  event trace, all 2 MiB of RAM). The run previously stopped at block 18,552
+  with SR `0x00000401` on the native side and `0x00000405` on the oracle. The
+  cause was `syscall`: the guest uses libetc's critical-section API, where
+  `syscall 1` masks interrupts and reports the previous state and `syscall 2`
+  restores them (`SR |= 0x405`). The interpreter implements that, but
+  `r6-recomp` emitted the instruction as a no-op, so the native run never set
+  IEp. `NativeBus::syscall` now mirrors the interpreter and the translator
+  emits it.
 - **Runtime:** 120 fields (9.7M blocks, 67.7M cycles) with no recompilation
-  miss, but the guest reads only 6 disc sectors (LBA 16-19, then `COMPILED.XA`
-  at 66454) and then issues `CdInit` (Init/Demute/GetStat) every frame. It
-  submits 0 GP0 commands and 0 DMA2 lists, so VRAM stays black.
+  miss, 148 interrupts delivered and 0 handler overruns, but the guest reads
+  only 6 disc sectors (LBA 16-19, then `COMPILED.XA` at 66454) and then issues
+  `CdInit` (Init/Demute/GetStat) every frame. It submits 0 GP0 commands and
+  0 DMA2 lists, so VRAM stays black. Fixing `syscall` did not change this,
+  which rules out the translated code as the cause.
 - **Interpreter comparison:** the same disc on `r6-run --vblank --hot` reads
   141 sectors and parks at `0x8008CA8C` with hot PCs `0x8008CA7C`,
   `0x8008CA8C`, `0x8008CB4C` - the CD loader wait already recorded below. The
-  port stalls earlier than that, at `0x80064744`, so the COP0 divergence is
-  the first thing to fix.
+  port still stalls earlier than that, at `0x800647A4`, with a different
+  sector sequence (16-19 then 66454 instead of 390-397). Translation is no
+  longer the suspect: the port's only remaining deviation from the reference
+  run is interrupt delivery granularity. The port takes interrupts at block
+  boundaries so EPC is always a translated entry; the interpreter checks every
+  1024 instructions. Delivering per instruction in the port reproduces the
+  interpreter but resumes at mid-block EPCs, which have no translated block
+  (`0x8008D0AC`).
 - **Coverage rules learned:** code pointers stored in tables (the 13-entry mode
   table at `0x800B47C4`), `jalr` return continuations and ordinary function
   prologues all reach code that no call-site scan sees. They are seeded
