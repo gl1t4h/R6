@@ -562,6 +562,17 @@ window body shows those counters plus how many disc sectors have been read.
   is a packed pair: the correct low half `0x0016` merged with a junk high half
   `0x000C` (the filler byte of the sector-66454 payload), not a mistimed read.
 
+- **Reference-emulator oracle: blocked on BIOS.** DuckStation 0.1-11894 is
+  installed on the test machine, but no retail PS1 BIOS exists there. With the
+  MIT-licensed OpenBIOS (from the libreboot mirror, signature `OpenBIOS` at
+  `0x78`) the disc is recognised -- `Game: Spider-Man | SLUS-00875 |
+  HASH-8604F3220A66CDB6`, `disc region: NTSC-U`, `Kernel initialized` -- but
+  the run stops in the OpenBIOS shell: DuckStation fast-boots by patching a
+  retail BIOS image and the OpenBIOS image reports `FastBootPatch::Unsupported`.
+  Booting the extracted PS-X EXE directly (`-exe`, via a new local extractor)
+  powers the machine off without kernel init. A retail BIOS dump is therefore
+  required before an emulator run can supply the CD command/INT reference.
+
 - **The one-ahead position fix that was tried and rejected:** the drain trace
   suggested the drive was reporting one sector past the one the guest held
   (`cd5C` 17/19/66455 against the interpreter's 16/18/22), so `present_sector`
