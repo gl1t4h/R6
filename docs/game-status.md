@@ -318,15 +318,38 @@ None.
   `0x800C9AD0` 18 times, substate `0x800BCCC0` still 1. So no record status
   can ever cause the transition here, and the two starters stay unreachable;
   status 3 is a symptom of the re-arm, not the gate.
-- **The smallest real gap is upstream of the wait:** handler 1 is only
-  entered when the sound module's phase word `0x800BCD0C` is 1, and that word
-  is driven by the module itself, cycling 0..7 through `0x80032850`,
-  `0x80032730`, `0x80032760`, `0x800326A4`, `0x80032804`, `0x800C9678` and
-  `0x800C970C`. The guest therefore parks in a loop with no exit while the
-  driver reports no work, which means the missing piece is not SPU voices, XA
-  or the stream records but whatever should keep the machine out of this
-  phase (or let the driver report an active voice there). The next probe is
-  that phase machine, not the sound path.
+- **The phase machine, traced:** `0x800BCD0C` is the sound module's phase
+  word (0..15). `0x8003260C` dispatches on it through the table at
+  `0x80024CA4` and is called once per frame from `0x800330C4`, `0x800C9780`
+  and the boot dispatcher `0x800C9D74`; the handlers advance 0 -> 1 -> 2 ->
+  ... -> 7 -> 0. Phase 0 is the restart handler at `0x80032834`: it clears
+  the track handle `0x800B5C30` and the fixed-point position
+  `0x800B8E94` (`0x80032838`, `0x80032844`) and then stores 1 with
+  `sw $v0, 0x800BCD0C` at **`0x80032850`** (the jump is at `0x8003284C`, so
+  the store is its delay slot). Phase 1 is the boot machine's handler
+  `0x800C9A84`, which tests that same word and then waits. Phases 2-7 are
+  the advance handlers `0x800326A4`/`0x80032730`/`0x80032760` (position
+  decrement and clamp) and the start/stop paths `0x800C9678` (sets the
+  handle to `0x333` and phase 6) and `0x800C970C` (sets phase 3).
+- **Which write enters the wait, measured:** `0x80032834` and therefore
+  `0x80032850` run 3 times over 150M steps, while handler 1 `0x800C9A84`
+  runs 78 times (once per frame while the phase stays 1) and the updater
+  `0x8003260C` 423 times. `0x800B5C30` cycles `0x333` <-> 0: the boot
+  machine sets `0x333` at `0x800C9A4C`, `0x800C9684` and `0x800C9710`, and
+  the phase-0 handler clears it at `0x80032838` immediately before asking
+  for phase 1. So the machine enters handler 1 with the track already
+  discarded, nothing armed for the driver, and the driver's tick returning
+  0 — the wait is asked to complete a start whose track handle was just
+  cleared.
+- **The smallest real gap is that handoff:** the phase-0 restart drops
+  `0x800B5C30` and requests phase 1, and the only code that could arm a
+  voice slot for it (the starters at substate 5) sits behind the same wait.
+  The gap is therefore the sound module's segment handoff — the phase-1
+  request needs to carry the stream it just discarded — not SPU voices or
+  the record status. The tick itself is not self-modified: the only writes
+  to `0x80033548`/`0x80033F00` in 150M steps are the boot clear at
+  `0x80010B0C`, so the constant-0 return is static code, not a patch we
+  missed.
 - **Kernel jump tables:** `GetB0Table` and `GetC0Table` used to return 0, so
   libcd's hook installer treated address 0 as the BIOS `CdRead` body: it wrote
   its five-word trampoline to `0x28` and stored `0x3C` in the `0xDFFC`
