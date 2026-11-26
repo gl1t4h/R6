@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cstdlib>
 
 #include <cstddef>
 #include <cstdint>
@@ -332,8 +333,26 @@ void MipsInterpreter::write32(std::uint32_t address, std::uint32_t value) {
 }
 
 bool MipsInterpreter::service_bios_call() {
-    return services_.bios_call(cpu_.pc, cpu_, ram_);
+    // Temporary diagnostic: R6_TRACE_BIOS=1 logs each BIOS entry with its
+    // arguments and return value so it can be diffed against the native port.
+    static const bool trace_bios = std::getenv("R6_TRACE_BIOS") != nullptr;
+    const bool traced =
+        trace_bios && cpu_.pc >= 0xA0u && cpu_.pc <= 0xC4u;
+    const auto pc = cpu_.pc;
+    const auto call_number = cpu_.gpr[9];
+    const auto a0 = cpu_.gpr[4];
+    const auto a1 = cpu_.gpr[5];
+    const auto a2 = cpu_.gpr[6];
+    const auto cycles = hardware_.cycles();
+    const bool called = services_.bios_call(cpu_.pc, cpu_, ram_);
+    if (traced) {
+        std::printf("BC %llu 0x%08X t1=0x%08X a0=0x%08X a1=0x%08X a2=0x%08X v0=0x%08X\n",
+                    static_cast<unsigned long long>(cycles), pc, call_number, a0,
+                    a1, a2, cpu_.gpr[2]);
+    }
+    return called;
 }
+
 
 void MipsInterpreter::record_call_site(std::uint32_t pc) {
     constexpr std::size_t kMaxCallSites = 16;

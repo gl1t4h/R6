@@ -242,6 +242,7 @@ struct Host {
     bool halted{false};
     bool trace{false};
     std::unordered_map<std::uint32_t, std::uint64_t> histogram;
+    bool bios_log{false};
     std::vector<std::uint32_t> watch;
     std::string stop_reason;
 };
@@ -323,12 +324,28 @@ bool step_once(Host& host) {
     auto& bus = *host.bus;
     if (is_bios_entry(cpu.pc)) {
         if (bus.event_tick(cpu, true)) return true;
-        if (!host.services->bios_call(cpu.pc, cpu, host.ram)) {
+        const auto bios_pc = cpu.pc;
+        const auto bios_call_number = cpu.gpr[9];
+        const auto bios_a0 = cpu.gpr[4];
+        const auto bios_a1 = cpu.gpr[5];
+        const auto bios_a2 = cpu.gpr[6];
+        const bool bios_handled =
+            host.services->bios_call(cpu.pc, cpu, host.ram);
+        const auto bios_v0 = cpu.gpr[2];
+        if (!bios_handled) {
             host.stop_reason = "unhandled BIOS entry " + hex32(cpu.pc);
             host.halted = true;
             return false;
         }
         if (!bus.take_bios_return(cpu)) cpu.pc = cpu.gpr[31];
+        if (host.bios_log) {
+            std::cout << "BC " << bus.hardware().cycles() << " "
+                      << hex32(bios_pc) << " t1=" << hex32(bios_call_number)
+                      << " a0=" << hex32(bios_a0)
+                      << " a1=" << hex32(bios_a1)
+                      << " a2=" << hex32(bios_a2)
+                      << " v0=" << hex32(bios_v0) << "\n";
+        }
         ++host.blocks;
         return true;
     }
@@ -577,8 +594,10 @@ int run_headless(Host& host, std::uint64_t frames,
                  std::uint64_t max_cycles, std::uint64_t pc_from,
                  std::uint64_t pc_to,
                  const std::filesystem::path& dump_state,
-                 std::uint32_t watch_change, bool cd_log) {
+                 std::uint32_t watch_change, bool cd_log,
+                 bool watch_cd) {
     std::uint64_t presented = 0;
+    std::uint64_t sector_last = 0;
     std::uint32_t watch_last =
         watch_change != 0 ? host.ram.read32(watch_change) : 0;
     while (!host.halted && presented < frames &&
@@ -590,6 +609,14 @@ int run_headless(Host& host, std::uint64_t frames,
                 host.bus->hardware().cycles() < max_cycles)) {
             const auto before = host.cpu.pc;
             if (!step_once(host)) break;
+            if (watch_cd) {
+                const auto sectors = host.bus->hardware().cdrom().sectors_read();
+                if (sectors != sector_last) {
+                    std::cout << "SC " << host.bus->hardware().cycles() << " "
+                              << hex32(before) << " " << sectors << "\n";
+                    sector_last = sectors;
+                }
+            }
             if (watch_change != 0) {
                 const auto value = host.ram.read32(watch_change);
                 if (value != watch_last) {
@@ -689,6 +716,8 @@ int main(int argc, char** argv) {
     std::filesystem::path dump_state;
     std::uint32_t watch_change = 0;
     bool cd_log = false;
+    bool watch_cd = false;
+    bool bios_log = false;
     std::uint64_t frames = 0;  // 0 = interactive
     std::uint64_t max_cycles = 0;
     std::uint64_t pc_from = 0;
@@ -707,6 +736,10 @@ int main(int argc, char** argv) {
         } else if (argument == "--frames" && index + 1 < argc) {
             frames = std::stoull(argv[++index]);
             headless = true;
+        } else if (argument == "--bios-log") {
+            bios_log = true;
+        } else if (argument == "--watch-cd") {
+            watch_cd = true;
         } else if (argument == "--cd-log") {
             cd_log = true;
         } else if (argument == "--watch-change" && index + 1 < argc) {
@@ -743,6 +776,7 @@ int main(int argc, char** argv) {
     Host host;
     host.trace = trace;
     host.watch = watch;
+    host.bios_log = bios_log;
     host.image = image;
     std::string error;
     if (!load_boot(host, error)) {
@@ -769,7 +803,7 @@ int main(int argc, char** argv) {
     if (headless) {
         return run_headless(host, frames == 0 ? 600 : frames, screenshot,
                            max_cycles, pc_from, pc_to, dump_state,
-                           watch_change, cd_log);
+                           watch_change, cd_log, watch_cd);
     }
 
     WNDCLASSEXW window_class{};
