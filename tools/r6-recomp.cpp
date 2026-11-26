@@ -605,7 +605,7 @@ private:
 
             emit_body(out, instruction, pc);
             out << "    cpu.pc += 4;\n"
-                << "    bus.advance_cycles(1);\n";
+                << "    bus.advance_instruction();\n";
             ++count;
             pc += 4;
         }
@@ -630,7 +630,7 @@ private:
         }
         emit_body(out, instruction, address);
         out << "    cpu.pc += 4;\n"
-            << "    bus.advance_cycles(1);\n";
+            << "    bus.advance_instruction();\n";
     }
 
     void emit_control(std::ostream& out, std::uint32_t instruction,
@@ -648,7 +648,7 @@ private:
 
         if (decoded.flow == Flow::call) {
             out << "    cpu.gpr[31] = " << hex32(pc + 8) << ";\n"
-                << "    bus.advance_cycles(1);\n";
+                << "    bus.advance_instruction();\n";
             emit_delay_slot(out, pc + 4);
             out << "    cpu.pc = " << hex32(decoded.target) << ";\n"
                 << "    return cpu.pc;\n";
@@ -656,7 +656,7 @@ private:
         }
 
         if (decoded.flow == Flow::jump) {
-            out << "    bus.advance_cycles(1);\n";
+            out << "    bus.advance_instruction();\n";
             emit_delay_slot(out, pc + 4);
             out << "    cpu.pc = " << hex32(decoded.target) << ";\n"
                 << "    return cpu.pc;\n";
@@ -692,7 +692,7 @@ private:
                     << " = static_cast<std::int32_t>(cpu.gpr[" << rs
                     << "]) > 0;\n";
             }
-            out << "    bus.advance_cycles(1);\n";
+            out << "    bus.advance_instruction();\n";
             emit_delay_slot(out, pc + 4);
             out << "    cpu.pc = " << name << " ? " << hex32(decoded.target)
                 << " : " << hex32(pc + 8) << ";\n"
@@ -708,7 +708,7 @@ private:
         const auto target = "target_" + address_suffix(pc);
         out << "    const std::uint32_t " << target << " = cpu.gpr[" << rs
             << "];\n"
-            << "    bus.advance_cycles(1);\n";
+            << "    bus.advance_instruction();\n";
         emit_delay_slot(out, pc + 4);
         out << "    cpu.pc = " << target << ";\n"
             << "    return cpu.pc;\n";

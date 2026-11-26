@@ -10,6 +10,17 @@
 
 namespace r6 {
 
+// Average cycles one guest instruction takes on the R3000A.
+//
+// Charging a single cycle made guest software timing loops expire too
+// early: libetc's VSync wait counts 32768 iterations of a fourteen
+// instruction loop, which at one cycle per instruction finished well
+// inside a 564480-cycle frame, so every frame reported "VSync: timeout"
+// and the title's frame-driven state machine never advanced. Compiled
+// MIPS code retires roughly one instruction per 1.5 to 2 clocks, so a
+// uniform cost keeps the guest's software delays longer than a frame
+// without pretending any device is slower than it is.
+inline constexpr std::uint64_t kCyclesPerInstruction = 2;
 namespace hardware {
 constexpr std::uint32_t kGpuStatus = 0x1F801814;
 constexpr std::uint32_t kGpuCommand = 0x1F801810;

@@ -105,8 +105,9 @@ None.
   is disabled. A 250M-instruction run reports `display on at 0,32`, but the
   displayed 320x240 area is still empty: the primitive count is frozen at
   217,138 from about 200M on, and the guest sits in main state
-  `0x800BCCBC=2` / substate `0x800BCCC0=1` at `0x800C9A84`, polling the
-  task dispatcher at `0x800C9874`. The CD is idle after a Pause at LBA
+  `0x800BCCBC=2` / substate `0x800BCCC0=1` at `0x800C9A84`, polling
+  `0x800C9874`, which reports the sound slot machine idle. The CD is
+  idle after a Pause at LBA
   17846; its last reads are small chunks of `SILENT.` (3 to 45 sectors),
   and each DMA3 payload lands in the game's own buffers (`0x801E3600`,
   `0x801E4600`), so sector delivery itself works. The
@@ -114,6 +115,20 @@ None.
   from reading the wrong address: the store is sign-extended to
   `0x800A8FEC`, which holds `0x51`, and the fade machine at `0x800BCD0C`
   completes its `3->4->5` and `6->7->0` cycles.
+- **Instruction timing:** The interpreter advanced the machine clock one
+  cycle per instruction, so a 564,480-cycle frame held 565k instructions
+  instead of the roughly 300k that compiled code fits. libetc's VSync
+  wait counts 32,768 iterations of a fourteen-instruction loop at
+  `0x800132AC`, which expired inside a frame on every call: the guest
+  printed `VSync: timeout` 439 times in a 250M-instruction run, once per
+  frame, and returned before the vblank arrived. The clock now charges
+  `kCyclesPerInstruction` (2) per instruction in both the interpreter and
+  the generated native blocks, so the per-block differential still
+  compares equal cycles. After the change a 250M run prints no timeout
+  and reaches 884 vblanks, and a 1.2B run reaches 4,245 vblanks (about 70
+  seconds of game time) with zero timeouts. The frame is still black: the
+  primitive count stays at 217,138 and the guest still waits in main
+  state 2 / substate 1.
 - **Movie path:** Silent Hill never reaches MDEC, so a decoder is not the
   missing piece yet. A 250M-instruction run writes neither
   `0x1F801820`/`0x1F801824` nor the MDEC DMA channels (`0x1F801080`,
@@ -137,16 +152,19 @@ None.
   watch read `0x8002AB60` exactly once. Native DMA2/3/4 channels now execute
   their transfers, and the per-block differential compares full hardware
   registers, GTE registers, scratchpad and BIOS bookkeeping, not just cycles.
-- **Next step:** Follow the state-2 wait instead of the movie path. The
-  handler at `0x800C9A84` runs 61 times by 250M, and the sound fade
-  reaches state 1 by 400M, but `0x800C9874` returns 1 every time because
-  `0x80033548` reports no active task: all eight slot states at
-  `0x800B5508` are zero. The task dispatcher `0x8002ED7C` runs 740 times
-  while the request entry points (`0x8002E94C`, `0x8002F640`,
-  `0x80030000`) are never called, so the guest never asks for the work it
-  is waiting on. Trace which handler should enqueue it; the two requests
-  queued from substate 0 through `0x80010F68` (IDs 460 and 1070) are the
-  next suspect.
+- **Next step:** The state-2/substate-1 wait is still the gate, and the
+  timing fix shows it is not frame pacing: it lasts for as long as the
+  game runs. `0x800C9874` returns 1 because `0x80033548` reports every
+  slot at `0x800B5508` idle, so `0x800C9A84` never leaves substate 1. The
+  request ring at `0x80022C98` is drained (write index `0x80023098` = 14,
+  read index `0x800230A8` = 15, so `0x80010E68` reports nothing pending),
+  the two requests substate 0 posted through `0x80010F68` (IDs 460 and
+  1070 into `0x801E3600`/`0x801E4600`) went through the consumer at
+  `0x80011260` and retired, and the sound system's own state is idle
+  (`0x800B5480` = 1 enabled, `0x800B5600` = 1). No CD read was requested
+  after the Pause at LBA 17846. Trace the callback each ring entry
+  carries (its first word is a code pointer such as `0x8001B128`) and
+  find why the job it starts never reaches a slot.
 - **Playable native build:** No
 - **Distributed game assets:** No
 

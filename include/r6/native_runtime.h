@@ -184,6 +184,12 @@ public:
     void advance_cycles(std::uint64_t count) {
         hardware_.advance_cycles(count);
     }
+    // One guest instruction's worth of clock. Generated blocks call this
+    // so the native path keeps the interpreter's timing, which is what
+    // makes the per-block differential compare equal cycles.
+    void advance_instruction() {
+        hardware_.advance_cycles(kCyclesPerInstruction);
+    }
 
     // Generated blocks call this at the start of every instruction. It mirrors
     // the interpreter's single-step event poll: pad/vblank ticks happen before

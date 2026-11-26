@@ -672,7 +672,7 @@ RunResult MipsInterpreter::run(std::uint64_t max_steps) {
         const auto instruction = read32(current_pc);
         const auto step = execute(instruction, current_pc);
         ++result.steps;
-        hardware_.advance_cycles(1);
+        hardware_.advance_cycles(kCyclesPerInstruction);
         if (step.returned_from_exception && in_interrupt_) {
             // RFE re-enabled interrupts, so the handler is finished even though
             // the guest has not reached its `jr $k0` yet.

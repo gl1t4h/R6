@@ -349,7 +349,7 @@ def translate_delay_slot(payload: bytes, load_address: int, address: int) -> lis
         "    bus.event_tick(cpu, false);",
     ]
     lines.extend(translate(instruction, address, decoded))
-    lines.append("    bus.advance_cycles(1);")
+    lines.append("    bus.advance_instruction();")
     return lines
 
 
@@ -369,21 +369,21 @@ def translate_control(
     if kind == "call":
         return [
             f"    cpu.gpr[31] = 0x{address + 8:08X}u;",
-            "    bus.advance_cycles(1);",
+            "    bus.advance_instruction();",
             *delay,
             f"    cpu.pc = 0x{decoded['target']:08X}u;",
             "    return cpu.pc;",
         ]
     if kind == "jump":
         return [
-            "    bus.advance_cycles(1);",
+            "    bus.advance_instruction();",
             *delay,
             f"    cpu.pc = 0x{decoded['target']:08X}u;",
             "    return cpu.pc;",
         ]
     if kind == "return":
         return [
-            "    bus.advance_cycles(1);",
+            "    bus.advance_instruction();",
             *delay,
             f"    cpu.pc = cpu.gpr[{rs}];",
             "    return cpu.pc;",
@@ -392,14 +392,14 @@ def translate_control(
         rd = (instruction >> 11) & 0x1F
         return [
             f"    cpu.gpr[{rd}] = 0x{address + 8:08X}u;",
-            "    bus.advance_cycles(1);",
+            "    bus.advance_instruction();",
             *delay,
             f"    cpu.pc = cpu.gpr[{rs}];",
             "    return cpu.pc;",
         ]
     if kind == "jump_register":
         return [
-            "    bus.advance_cycles(1);",
+            "    bus.advance_instruction();",
             *delay,
             f"    cpu.pc = cpu.gpr[{rs}];",
             "    return cpu.pc;",
@@ -428,7 +428,7 @@ def translate_control(
         return [
             *link,
             f"    const bool taken_0x{address:08X} = {condition};",
-            "    bus.advance_cycles(1);",
+            "    bus.advance_instruction();",
             *delay,
             f"    cpu.pc = taken_0x{address:08X} ? 0x{target:08X}u :"
             f" 0x{address + 8:08X}u;",
@@ -470,7 +470,7 @@ def emit_block(
             return lines, pc, True
         translated = translate(instruction, pc, decoded)
         lines.extend(translated)
-        lines.append("    bus.advance_cycles(1);")
+        lines.append("    bus.advance_instruction();")
         count += 1
         if any("unsupported_instruction" in line for line in translated):
             lines.extend(["}", ""])
