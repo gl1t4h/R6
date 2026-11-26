@@ -376,6 +376,22 @@ window body shows those counters plus how many disc sectors have been read.
   divergent function is the next thing to fix; 3,600 fields still end at
   `0x8008BAA0` with 145,658,377 blocks, 3,727 interrupts, six sectors and
   `I_STAT` 1 left pending.
+- **Where the CD loader leaves the reference:** the port and the interpreter
+  issue the same CD commands through the boot sequence: Init, Demute, GetStat,
+  Setloc 16, Setmode A0, ReadN (sectors 16-17), Setloc 18, ReadN (18-19).
+  They part company on the next seek. The interpreter sends `Setloc 00:02:22`
+  (sector 22, a subdirectory); the port sends `Setloc 14:48:04` (sector
+  66454, a file inside `COMPILED.XA`), so it never reads `CD.HED` at 390 and
+  stops at six sectors. Everything before that is identical: the same
+  commands, the same sector bytes in RAM, and the same vblank counter
+  (`0x800B397C` reaches 2 at 1.13M cycles in both). The state at 1.3M cycles
+  differs in 56 words, including a file-position value at `0x800B3754`
+  (0x1FF against 0x205, six bytes apart) and libcd state at `0x800B3DF0`, so
+  the guest parses the directory from a position six bytes behind the
+  reference and lands on the wrong entry. That six-byte skew is the bug to
+  fix next, not the interrupt path: interrupts delivered at 1.3M cycles are
+  16 in the port against 15 in the interpreter.
+
 - **Coverage rules learned:** code pointers stored in tables (the 13-entry mode
   table at `0x800B47C4`), `jalr` return continuations and ordinary function
   prologues all reach code that no call-site scan sees. They are seeded

@@ -36,6 +36,7 @@
 #include "r6/boot_image.h"
 #include "r6/memory.h"
 #include "r6/native_runtime.h"
+#include "r6/ram_snapshot.h"
 #include "r6/windows_platform_services.h"
 
 #ifdef R6_HAS_GENERATED_TRANSLATION
@@ -241,6 +242,7 @@ struct Host {
     bool halted{false};
     bool trace{false};
     std::unordered_map<std::uint32_t, std::uint64_t> histogram;
+    std::vector<std::uint32_t> watch;
     std::string stop_reason;
 };
 
@@ -572,8 +574,13 @@ void load_shaders(const std::filesystem::path& directory, std::string& vertex,
 
 int run_headless(Host& host, std::uint64_t frames,
                  const std::filesystem::path& screenshot,
-                 std::uint64_t max_cycles) {
+                 std::uint64_t max_cycles, std::uint64_t pc_from,
+                 std::uint64_t pc_to,
+                 const std::filesystem::path& dump_state,
+                 std::uint32_t watch_change, bool cd_log) {
     std::uint64_t presented = 0;
+    std::uint32_t watch_last =
+        watch_change != 0 ? host.ram.read32(watch_change) : 0;
     while (!host.halted && presented < frames &&
            (max_cycles == 0 ||
             host.bus->hardware().cycles() < max_cycles)) {
@@ -581,7 +588,25 @@ int run_headless(Host& host, std::uint64_t frames,
         while (!host.halted && host.bus->hardware().cycles() < target &&
                (max_cycles == 0 ||
                 host.bus->hardware().cycles() < max_cycles)) {
+            const auto before = host.cpu.pc;
             if (!step_once(host)) break;
+            if (watch_change != 0) {
+                const auto value = host.ram.read32(watch_change);
+                if (value != watch_last) {
+                    std::cout << "WC " << host.bus->hardware().cycles() << " "
+                              << hex32(before) << " " << hex32(value) << "\n";
+                    watch_last = value;
+                }
+            }
+            if (pc_from != 0) {
+                const auto now = host.bus->hardware().cycles();
+                if (now >= pc_from && now <= pc_to) {
+                    std::cout << now << " " << hex32(host.cpu.pc)
+                              << " v0=" << hex32(host.cpu.gpr[2])
+                              << " v1=" << hex32(host.cpu.gpr[3])
+                              << " a0=" << hex32(host.cpu.gpr[4]) << "\n";
+                }
+            }
         }
         ++presented;
     }
@@ -593,6 +618,12 @@ int run_headless(Host& host, std::uint64_t frames,
               << (gpu.display_enabled() ? "on" : "off") << "\n";
     if (!host.stop_reason.empty()) {
         std::cout << "Stop: " << host.stop_reason << "\n";
+    }
+    if (!dump_state.empty()) {
+        if (r6::write_snapshot(dump_state, host.cpu, host.ram)) {
+            std::cout << "Wrote state " << dump_state.string() << " (PC "
+                      << hex32(host.cpu.pc) << ")\n";
+        }
     }
     if (!screenshot.empty()) {
         auto frame = gpu.display_frame();
@@ -623,6 +654,15 @@ int run_headless(Host& host, std::uint64_t frames,
             std::cout << "  " << name << "(0x" << std::hex << entry.first.second
                       << std::dec << ") x" << entry.second << "\n";
         }
+        if (cd_log) {
+            for (const auto& entry : bus.hardware().cdrom().log()) {
+                std::cout << "  " << entry << "\n";
+            }
+        }
+        for (const auto address : host.watch) {
+            std::cout << "Watch " << hex32(address) << " = "
+                      << hex32(host.ram.read32(address)) << "\n";
+        }
         if (host.trace) {
             std::vector<std::pair<std::uint64_t, std::uint32_t>> hot;
             hot.reserve(host.histogram.size());
@@ -646,11 +686,17 @@ int run_headless(Host& host, std::uint64_t frames,
 int main(int argc, char** argv) {
     std::filesystem::path image;
     std::filesystem::path screenshot;
+    std::filesystem::path dump_state;
+    std::uint32_t watch_change = 0;
+    bool cd_log = false;
     std::uint64_t frames = 0;  // 0 = interactive
     std::uint64_t max_cycles = 0;
+    std::uint64_t pc_from = 0;
+    std::uint64_t pc_to = 0;
     bool headless = false;
     bool scanlines = true;
     bool trace = false;
+    std::vector<std::uint32_t> watch;
 
     for (int index = 1; index < argc; ++index) {
         const std::string argument = argv[index];
@@ -661,6 +707,19 @@ int main(int argc, char** argv) {
         } else if (argument == "--frames" && index + 1 < argc) {
             frames = std::stoull(argv[++index]);
             headless = true;
+        } else if (argument == "--cd-log") {
+            cd_log = true;
+        } else if (argument == "--watch-change" && index + 1 < argc) {
+            watch_change = static_cast<std::uint32_t>(
+                std::stoul(argv[++index], nullptr, 16));
+        } else if (argument == "--dump-state" && index + 1 < argc) {
+            dump_state = argv[++index];
+        } else if (argument == "--watch" && index + 1 < argc) {
+            watch.push_back(static_cast<std::uint32_t>(
+                std::stoul(argv[++index], nullptr, 16)));
+        } else if (argument == "--pc-from" && index + 2 < argc) {
+            pc_from = std::stoull(argv[++index]);
+            pc_to = std::stoull(argv[++index]);
         } else if (argument == "--cycles" && index + 1 < argc) {
             max_cycles = std::stoull(argv[++index]);
             headless = true;
@@ -683,6 +742,7 @@ int main(int argc, char** argv) {
 
     Host host;
     host.trace = trace;
+    host.watch = watch;
     host.image = image;
     std::string error;
     if (!load_boot(host, error)) {
@@ -708,7 +768,8 @@ int main(int argc, char** argv) {
 
     if (headless) {
         return run_headless(host, frames == 0 ? 600 : frames, screenshot,
-                           max_cycles);
+                           max_cycles, pc_from, pc_to, dump_state,
+                           watch_change, cd_log);
     }
 
     WNDCLASSEXW window_class{};
