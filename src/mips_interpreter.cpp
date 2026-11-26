@@ -607,8 +607,16 @@ RunResult MipsInterpreter::run(std::uint64_t max_steps) {
 
     static const bool trace_walk = std::getenv("R6_TRACE_WALK") != nullptr;
     static const bool trace_sync = std::getenv("R6_TRACE_SYNC") != nullptr;
+    static const bool trace_decrypt =
+        std::getenv("R6_TRACE_DECRYPT") != nullptr;
     while (result.steps < max_steps) {
         const auto current_pc = cpu_.pc;
+        if (trace_decrypt && current_pc == 0x80010AD0u) {
+            // The LCG XOR loader at 0x80010AD0: log its arguments and caller.
+            std::printf("DEC %llu dst=%08X src=%08X count=%08X ra=%08X\n",
+                        static_cast<unsigned long long>(hardware_.cycles()),
+                        cpu_.gpr[4], cpu_.gpr[5], cpu_.gpr[6], cpu_.gpr[31]);
+        }
         if (trace_sync &&
             (current_pc == 0x8008A068u || current_pc == 0x80086ABCu ||
              current_pc == 0x80086AB0u || current_pc == 0x80086AB4u)) {

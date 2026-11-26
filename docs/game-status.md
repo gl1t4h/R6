@@ -618,23 +618,38 @@ window body shows those counters plus how many disc sectors have been read.
   `0x8003ACD8`, `0x8003B114`, `0x8003B4A4`), never by a renderer, so state 6
   is a sound-side stage rather than a draw stage. Handler 7's scene call is
   `0x8008EF20`, a five-phase stepper: it adds its argument to the counter
-  `0x800BFDB8`, wraps it to 0..4, looks up an 8-byte entry in the table at
-  `0x800BFDC4` (`{s16, s16, function}`), calls the function when it is not
+  `0x800AFDB8`, wraps it to 0..4, looks up an 8-byte entry in the table at
+  `0x800AFDC4` (`{s16, s16, function}`), calls the function when it is not
   null, and publishes the entry's two halfwords to `0x800C4840`/
   `0x800C4844`. With a null entry it returns 1 immediately, so the caller
-  sees "done" without drawing anything.
-- **Why it still cannot draw:** the call passes `a0 = 0`
-  (`0x800C9D14`), so the counter never moves, and the table is empty. At
-  400M steps with `R6_FORCE_SOUND_TICK=1` the dump shows main state 6,
-  substate 0, phase 5, counter `0x800BFDB8 = 0` and all five table entries
-  zero; `0x800C4840`/`0x800C4844` hold `0x642`/`0x652`, stale values not
-  written by this call. A 150M-step `--watch-write` over the counter and the
-  table records no writes after the boot clear at `0x80010B0C`, and no code
-  computes `0x800BFDC4` as a store address, so nothing in the image ever
-  fills it. The table sits in BSS above the 79,872-byte EXE body (which ends
-  at `0x80023800`), so it has to arrive through a runtime block copy that
-  this run never issues. That missing scene-script load, not the tick, is
-  what keeps the frame black once sound init is forced through.
+  sees "done" without drawing anything. (An earlier note put this table at
+  `0x800BFDC4`; that is the render packet buffer, one 64 KiB bank too high.
+  `0x800B0000 - 0x23C` is `0x800AFDC4`.)
+- **What fills the table, traced:** exactly one boot pass, the LCG-XOR
+  loader at `0x80010AD0` (`acc = (acc + 0x01309125) * 0x03A452F7`, then
+  `word ^= acc`). `R6_TRACE_DECRYPT=1` shows its only two calls:
+  `0x80010A20` returns to `0x80010A28` with dst `0x80024B60`, src
+  `0x8010A600`, count `0x000A4B00` (674,560 bytes), and `0x80010A48` with
+  dst `0x800C9578`, src `0x801E2600`, count `0x1000`. The table sits at
+  offset `0x8B264` inside the big block, so it is part of the main data
+  pack, not a separately loaded file. A `--watch-range 0x800AFD00:0x100`
+  run over 400M steps counts 64 stores, all from the decrypt loop's store
+  PC `0x80010B0C`; after boot the only write in the struct is the engine's
+  state word `0x800AFDF0` from `0x8008F61C`. No code computes the table
+  address as a store target.
+- **Which disc file supplies it:** the pack is on disc at **LBA 207**,
+  inside `SILENT.` (ISO extent LBA 100, 80,476,160 bytes; block offset
+  219,136 in that file, 330 sectors). Decrypting the 2,048-byte user area
+  of sectors 207..536 reproduces RAM byte for byte at `0x80024B60`,
+  `0x800AFD00` and the table itself (`0x800AFDC4` = `0x0652_0642`). The
+  shipped entries are `{0642,0652,0}`, `{0643,0653,0}`, `{063C,064C,0}`,
+  `{0644,0654,0}`, `{063E,064E,0}`: the two halves are CD file IDs and the
+  function words are zero **in the disc data**, so nothing failed to fill
+  them. The stepper still publishes the pair on the null path, so the
+  caller at `0x8008F080` can post loads for 1618 (and `0x8008F048` for
+  1602) through `0x80010F68`.
+- **New debug knob:** `R6_TRACE_DECRYPT=1` prints each `0x80010AD0` call as
+  `dst`, `src`, `count` and `ra`. Interpreter-only, off by default.
 - **Test target repair:** `tests/test_unaligned.cpp` was added by `f694247`
   but never listed in the `r6-tests` sources, so the target stopped linking
   (`run_unaligned_tests` unresolved). It is now compiled in and the suite
