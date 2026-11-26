@@ -304,6 +304,33 @@ public:
         raise_interrupt(hardware::kDmaInterruptBit);
     }
 
+    // Delays a channel's completion by a transfer-time estimate. The channel
+    // reads back busy until then. `interrupt` selects whether the completion
+    // pulls I_STAT bit 3 as well as setting its DICR flag.
+    void schedule_dma_completion(std::size_t channel, std::uint64_t delay,
+                                 bool interrupt) {
+        dma_control_[channel] |= kDmaBusy;
+        for (auto& pending : pending_dma_) {
+            if (pending.channel == channel) {
+                pending.due = cycles_ + delay;
+                pending.interrupt = interrupt;
+                return;
+            }
+        }
+        pending_dma_.push_back(PendingDma{channel, cycles_ + delay, interrupt});
+    }
+
+    // A DMA interrupt must be taken at the instruction where the transfer
+    // finished, not at the next periodic poll: the CD stream's callback has
+    // to run in the same post-tick window that produced its record, before
+    // the next tick advances the produced count. Returns and clears the
+    // channels whose interrupt is ready.
+    std::uint32_t take_dma_completion() {
+        const auto ready = pending_dma_ready_;
+        pending_dma_ready_ = 0;
+        return ready;
+    }
+
     void raise_interrupt(std::uint32_t bit) {
         const bool raised = (interrupt_status_ & bit) != 0;
         interrupt_status_ |= bit;
@@ -316,6 +343,23 @@ public:
     // interpreter happened to be running.
     void advance_cycles(std::uint64_t count) {
         cycles_ += count;
+        // A DMA channel stays busy for the transfer's duration. Completing it
+        // here, rather than on the triggering store, lets a guest that polls
+        // CHCR see the transfer take time and keeps its completion interrupt
+        // ordered after the code that started it.
+        for (auto it = pending_dma_.begin(); it != pending_dma_.end();) {
+            if (cycles_ < it->due) {
+                ++it;
+                continue;
+            }
+            dma_control_[it->channel] &= ~kDmaBusy;
+            dma_interrupt_ |= 1u << (24 + it->channel);
+            if (it->interrupt) {
+                raise_interrupt(hardware::kDmaInterruptBit);
+                pending_dma_ready_ |= 1u << it->channel;
+            }
+            it = pending_dma_.erase(it);
+        }
         // Voices are advanced in batches; a per-instruction update would cost
         // more than the rest of the device model together.
         spu_tick_cycles_ += count;
@@ -671,6 +715,12 @@ private:
     // Vertical retrace and the upper/lower borders, about 20 scanlines.
     static constexpr std::uint64_t kGpuVblankCycles = kHBlankCycles * 20;
 
+    struct PendingDma {
+        std::size_t channel;
+        std::uint64_t due;
+        bool interrupt;
+    };
+
     struct Timer {
         std::uint32_t mode{0};
         std::uint32_t target{0};
@@ -752,6 +802,8 @@ private:
     std::array<std::uint32_t, 7> dma_address_{};
     std::array<std::uint32_t, 7> dma_counter_{};
     std::array<std::uint32_t, 7> dma_control_{};
+    std::vector<PendingDma> pending_dma_;
+    std::uint32_t pending_dma_ready_{0};
     std::uint32_t pad_data_{0x41};
     mutable std::uint32_t pad_irq_delay_{0};
     std::uint32_t pad_mode_{0};

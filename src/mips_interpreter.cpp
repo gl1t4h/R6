@@ -539,17 +539,37 @@ void MipsInterpreter::run_dma3_transfer() {
     }
     hardware_.refresh_cdrom_interrupt();
     // A finished CD transfer is a DMA completion too: the guest's DMA handler
-    // dispatches on the channel flag in DICR (0x1F8010F4) and, for channel 3,
-    // calls whatever callback the current subsystem installed in the channel
-    // table at 0x800B4388. libcd reads its own sectors by polling CHCR and
-    // installs no callback, so an interrupt there would only preempt its
-    // handshake; the cinema stream installs one (0x8008DB44) and needs the
-    // completion so it can publish the buffered record. Raise the interrupt
-    // only once a channel-3 handler actually exists.
-    if (read32(0x800B4394u) != 0) {
-        hardware_.complete_dma(3);
-        events_.record("dma3");
+    // dispatches on the channel flag in DICR (0x1F8010F4) and for channel 3
+    // calls the callback DMACallback(3, ...) installed in its table at
+    // 0x800225F0. The controller pulls the interrupt only while its master and
+    // channel-3 enables are set, which DMACallback does. libcd polls CHCR and
+    // installs no callback, so its transfers stay quiet. The older streaming
+    // table at 0x800B4394 is kept for the cinema path, which sets it directly.
+    const auto dicr = hardware_.read32(hardware::kDmaInterrupt);
+    // The stream driver reads each sector as an 8-word header followed by a
+    // 504-word payload, both on channel 3 and with the same CHCR value. Only
+    // the payload may publish: the header arrives before the tick has
+    // validated the block counter or written the record state, so a callback
+    // there hands the player a record whose data has not been read yet and
+    // the tick then rejects the next header it reads.
+    const bool completion_requested = words > 8;
+    const bool interrupt =
+        read32(0x800B4394u) != 0 ||
+        (completion_requested && (dicr & 0x00880000u) == 0x00880000u);
+    static const bool trace_stream = std::getenv("R6_TRACE_STREAM") != nullptr;
+    if (trace_stream && cpu_.pc >= 0x80093000u && cpu_.pc < 0x80095000u) {
+        std::printf("SD %llu pc=%08X madr=%08X words=%u dicr=%08X "
+                    "int=%u\n",
+                    static_cast<unsigned long long>(hardware_.cycles()),
+                    cpu_.pc, address, words, dicr, interrupt ? 1u : 0u);
     }
+    // Complete inside the tick that starts the transfer. The DMA interrupt is
+    // only taken once the tick re-enables interrupts after writing the record
+    // state, so the callback then publishes exactly the record just produced;
+    // finishing after the next tick lets produced run ahead and the callback
+    // publish the following record instead.
+    hardware_.schedule_dma_completion(3, 16u, interrupt);
+    events_.record("dma3");
 }
 
 void MipsInterpreter::run_dma4_transfer() {
@@ -759,6 +779,31 @@ RunResult MipsInterpreter::run(std::uint64_t max_steps) {
                 std::fputc(10, stdout);
             }
         }
+        static const bool trace_stream = std::getenv("R6_TRACE_STREAM") != nullptr;
+        static int stream_events = 0;
+        if (trace_stream &&
+            (current_pc == 0x800932A4u || current_pc == 0x80093E9Cu) &&
+            stream_events < 400) {
+            ++stream_events;
+            const auto pool = read32(0x800C49B8u);
+            const auto produced = read32(0x800C499Cu);
+            const auto commit = read32(0x800C49A0u);
+            const auto cur = read32(0x800C6DD8u);
+            const auto current_index =
+                pool != 0 ? (cur - pool) / 32u : 0u;
+            const auto commit_state =
+                pool != 0 ? read32(pool + commit * 32u) & 0xFFFFu : 0u;
+            std::printf("ST %llu %s prod=%u commit=%u cur=%08X idx=%u "
+                        "state=%u consume=%u flag94=%u sr=%08X mask=%08X "
+                        "dicr=%08X\n",
+                        static_cast<unsigned long long>(hardware_.cycles()),
+                        current_pc == 0x800932A4u ? "pub" : "req",
+                        produced, commit, cur, current_index,
+                        commit_state, read32(0x800C49A4u),
+                        read32(0x800C4994u), cop0_[12],
+                        read32(hardware::kInterruptMask),
+                        hardware_.read32(hardware::kDmaInterrupt));
+        }
         if (trace_walk && current_pc == 0x800868B4u) {
             static int walk_records = 0;
             if (walk_records < 200) {
@@ -900,6 +945,11 @@ RunResult MipsInterpreter::run(std::uint64_t max_steps) {
         }
         ++result.steps;
         hardware_.advance_cycles(kCyclesPerInstruction);
+        if (!in_interrupt_ && !was_delay_slot &&
+            hardware_.take_dma_completion() != 0) {
+            deliver_interrupt();
+            if (in_interrupt_) continue;
+        }
         if (step.returned_from_exception && in_interrupt_) {
             // RFE re-enabled interrupts, so the handler is finished even though
             // the guest has not reached its `jr $k0` yet.

@@ -542,12 +542,16 @@ private:
             ram_.write32(target, value);
         }
         hardware_.refresh_cdrom_interrupt();
-        // Match the interpreter: only raise the channel-3 completion when a
-        // handler is installed in the streaming table.
-        if (ram_.read32(0x800B4394u & kRamMask) != 0) {
-            hardware_.complete_dma(3);
-            events_.record("dma3");
-        }
+        // Match the interpreter: raise the channel-3 completion when DICR has
+        // the master and channel-3 enables that DMACallback installs, or when
+        // the older cinema streaming slot is set.
+        const auto dicr = hardware_.read32(hardware::kDmaInterrupt);
+        const bool completion_requested = words > 8;
+        const bool interrupt =
+            ram_.read32(0x800B4394u & kRamMask) != 0 ||
+            (completion_requested && (dicr & 0x00880000u) == 0x00880000u);
+        hardware_.schedule_dma_completion(3, 16u, interrupt);
+        events_.record("dma3");
     }
 
     // DMA4 feeds sound RAM, where the voice model reads its ADPCM headers.

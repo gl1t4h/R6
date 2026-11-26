@@ -1036,3 +1036,43 @@ An allocated but unfilled entry starts with a zero halfword and keeps the
 allocator fill from `+4`, which is how `work/diag/dsstate.py` tells unwritten
 entries from consumed ones. The earlier reading of `0x80010000` as a data
 pointer was wrong: that word is the state halfword followed by the constant.
+
+## CD stream: DMA3 completion order
+
+The stream's producer is the tick at `0x800935CC`. It reads each sector as an
+8-word header DMA followed by a 504-word payload DMA, both on channel 3, then
+writes state 3 and increments the produced count at `0x800C499C`. The publish
+callback `0x8009327C` is registered with `DMACallback(3, ...)`; it
+unconditionally stores state 2 at `record[commit]`, sets
+`commit = produced` (`0x800C49A0`), clears the group-end byte `0x800C4994` and
+calls the record's reader hook. There is no `commit < produced` guard in it.
+
+Two emulation errors kept the records in state 3:
+
+- `run_dma3_transfer` only completed the channel when the old streaming slot
+  `0x800B4394` was set. The CD stream instead enables channel 3 through
+  `DMACallback`, which sets DICR bits 23 and 19 (`0x00880000`), so the callback
+  never ran. The completion now also requires those DICR enables.
+- Both transfers use the same CHCR value, but only the 504-word payload may
+  raise the publish interrupt. The 8-word header completes before the tick has
+  checked the block counter and written state 3, so a header callback saw
+  `commit == produced`, published the next entry, and the player consumed a
+  record whose data had not been read. The tick then rejected the following
+  header (`group 3, block 1` against expected counter 9) and production stopped
+  at 18 records while the consumer index ran to 27 and read past the 23-entry
+  pool. Channel 3 now schedules its completion after the CHCR store and only
+  the payload-sized transfer raises the DMA interrupt.
+
+The completion is delivered at the instruction where it happens rather than at
+the 1024-instruction interrupt poll, and its 16-cycle delay places it inside
+the tick that started it: the callback is then taken in the same post-state-3
+window, with `produced == commit + 1`, and publishes exactly the new record.
+
+With both fixes a 400M-instruction run (`R6_FORCE_SOUND_TICK=1`) executes 35
+state-3 writes instead of 18. Groups 1 and 2 complete, a new segment starts at
+group 3, all nine group-3 records are consumed and eight of group 4 are
+published, and the final counters are `produced = commit = 17`,
+`consume = 9` in the new segment. The scene gate `0x800CC258` is still 0 and
+the frame body count is still 254, so this removes the CD-stream deadlock but
+does not yet open the scene; the sound module that stores `0x20` there remains
+the blocker.

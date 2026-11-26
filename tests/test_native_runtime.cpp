@@ -213,6 +213,9 @@ void run_scratchpad_and_dma_test() {
     bus.write32(r6::hardware::kDma3BaseAddress, 0x00100000u);
     bus.write32(r6::hardware::kDma3BaseAddress + 4u, 1u);
     bus.write32(r6::hardware::kDma3ChannelControl, 1u << 24);
+    // The transfer holds the channel busy for its duration; the completion
+    // flag appears once that time has passed.
+    bus.hardware().advance_cycles(0x1000u);
     R6_CHECK((bus.hardware().read32(r6::hardware::kDmaInterrupt) &
               (1u << 27)) != 0u);
     R6_CHECK((bus.hardware().interrupt_status() &
