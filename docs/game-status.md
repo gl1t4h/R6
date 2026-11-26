@@ -226,6 +226,28 @@ None.
   so they did land where the display looks and still wrote no colour: the
   guest is clearing to black rather than drawing a scene. A renderer
   change cannot produce a frame while that is true.
+
+- **The fills are the guest's own black clears** (`R6_TRACE_FILL=1` prints
+  each GP0(02h) fill with its position, size, colour and the current draw
+  area). The first fill clears `0,0` 640x511; after that the guest alternates
+  `pos=00200000 size=00E00140 color=000000` and
+  `pos=01000000 size=00E00140 color=000000`, i.e. 320x224 clears at `(0,32)`
+  and `(0,256)` — its two display pages — with a black colour every time. No
+  geometry is submitted into either page; the 91,379 non-zero pixels are
+  texture or palette data at `x >= 704`. So the black frame is what the guest
+  asked for, and neither the renderer nor the display-area registers are the
+  gate.
+
+- **Where the main thread actually waits:** the voice-mask builder
+  `0x8002E898` has exactly one call site in the resident image, `0x800335F0`,
+  inside the sound tick `0x80033548` itself, and the mask store at
+  `0x80033624` is that same tick's output. The tick builds the mask from the
+  active voices and arms its countdown only for masked slots, so with no
+  active voice the mask is zero, `0x80034070` returns 0 and `0x800C9AB0`
+  spins. The gate is therefore the audio voice path (nothing ever makes a
+  voice active, because SPU/XA playback is not modelled), not the ISO
+  directory parse: even a perfect parse only streams more files, and the CD
+  is idle after its Pause at LBA 17846.
 - **Kernel jump tables:** `GetB0Table` and `GetC0Table` used to return 0, so
   libcd's hook installer treated address 0 as the BIOS `CdRead` body: it wrote
   its five-word trampoline to `0x28` and stored `0x3C` in the `0xDFFC`

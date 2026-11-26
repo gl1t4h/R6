@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <initializer_list>
 
 namespace r6 {
@@ -402,6 +404,19 @@ void SoftwareGpu::fill_rectangle(std::uint32_t rgb,
                                  std::uint32_t size) {
     ++fill_rectangles_;
     const auto color = to_bgr555(rgb);
+    // Bring-up: show the first fills and a few later ones, so it is visible
+    // whether a rectangle lands where the guest asked for it.
+    if (std::getenv("R6_TRACE_FILL") != nullptr) {
+        static int shown = 0;
+        ++shown;
+        if (shown <= 24 || (shown % 4000) == 0) {
+            std::printf("FILL %d pos=%08X size=%08X color=%06X "
+                        "area=%d,%d-%d,%d\n",
+                        shown, position, size, rgb & 0xFFFFFFu,
+                        draw_area_left_, draw_area_top_, draw_area_right_,
+                        draw_area_bottom_);
+        }
+    }
     // Hardware rounds the start down and the width up to 16-pixel units, and
     // the fill is not affected by the drawing area or drawing offset.
     const auto start_x =
