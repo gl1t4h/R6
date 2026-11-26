@@ -245,24 +245,48 @@ None.
   eight slot flags at `0x800B5508` (28 bytes per slot, word 0), and the
   wait at `0x800C9AB0` goes `task_wait 0x800C9874` -> tick; a zero tick
   return makes `task_wait` return 1, so the caller loops after a VSync.
-- **Tracing the voice path (the gate is downstream of a task, not the
-  voices):** `--watch-pc` over 250M steps shows the tick runs 795 times and the
-  wait path `0x800C9AB0` 373 times, while the two calls that can start a
-  slot, `0x8002E94C` and `0x8002E990`, execute **zero** times. `--watch-write`
-  on three of the eight slot flags records only zeros, from the BSS clear at
-  `0x80010B0C` and the slot reset at `0x8002E674`/`0x8002E70C`, and all eight
-  flags read back zero at 250M steps; no slot is ever activated. The starters sit in substates 2/3 of the same state machine
-  that waits in substate 1, so the voice path cannot be what unblocks it.
-  What it is waiting for is a queued stream task: `0x800C9A50`/`0x800C9A60`
-  enqueue two reads (460 and 1,070 bytes) into `0x801E3600` and `0x801E4600`,
-  and at 250M steps both task records still carry status byte 3
-  (`0x801E09E0+4 = 3`, `0x801E1430+4 = 3`), a value `task_wait` does not
-  decode as complete (it branches on 0, 4 and 8). Both buffers are full
-  (4,072 non-zero bytes each) and share a head, so the copy happened and the
-  missing piece is the completion handshake, not the data. Modelling XA
-  voices now would not advance substate 1: nothing requests a voice until
-  these tasks report done. The gate is therefore the CD stream task status,
-  not the ISO directory parse and not the SPU.
+- **Tracing the voice path:** `--watch-pc` over 250M steps shows the tick
+  runs 795 times and the wait path `0x800C9AB0` 373 times, while the two calls
+  that can start a slot, `0x8002E94C` and `0x8002E990`, execute **zero**
+  times. `--watch-write` on three of the eight slot flags records only zeros,
+  from the BSS clear at `0x80010B0C` and the slot reset at
+  `0x8002E674`/`0x8002E70C`, and all eight flags read back zero at 250M
+  steps; no slot is ever activated. The starters sit in substates 2/3 of the
+  same state machine that waits in substate 1, so the voice path cannot be
+  what unblocks it.
+- **Who writes the stream task status byte (+4):** the sound tick, and only
+  the sound tick. A static scan finds every immediate reference to
+  `0x801E09E0`/`0x801E1430` inside `0x80033548`-`0x80034070`, and every
+  load/store of the
+  current-record pointer `0x800BCD2C` inside the tick or `task_wait`; no CD
+  handler or DMA path touches the status. `--watch-write` on
+  `0x801E09E4`/`0x801E1434` confirms it at runtime: bytes +5..+7 are cleared
+  and +4 is stamped 3 at `0x80033E20` (795 times) and `0x80033824` (1,590
+  times, once per record per tick). The two records are 2,640 bytes apart
+  (`slot*2640 + 0x801E09E0`), so they are slots 0 and 1.
+- **Where 4 and 8 would come from:** the same tick writes the completion
+  statuses, inside the per-slot branch: `0x80033898` (+4 = 4) after
+  `jal 0x8002EA78` returns 0 in a state other than 5; `0x80033878` (+4 = 5)
+  when state == 5; `0x800338B0` (+4 = 10) when that helper returns nonzero;
+  `0x80033A94` (+4 = 8) when the slot's stream word at `0($a0)` is > 0; and
+  `0x80033AD8` (+4 = 9) in state 2 when the play word is 0. All of them sit
+  after the mask test `srlv mask, slot; andi 3; beq 0`, and over 250M steps
+  `0x80033898`, `0x800338B0`, `0x80033A80` (entry to that block),
+  `0x80033A94` and `0x80033AD8` execute **zero** times while the two
+  "write 3" sites run 2,385 times. The byte is therefore not stuck because a
+  transfer failed: it is re-stamped 3 every frame before the branch that
+  would advance it.
+- **Why it stays 3:** the mask at `0x800BCD34` is built at `0x80033624` from
+  the eight slot flags at `0x800B5508` (28 bytes per slot, word 0). With no
+  flag set the mask is zero, so the tick takes the fast path at
+  `0x80033E20` that re-arms the current record to 3, then at `0x80033F00`
+  compares the status only against 8, 9 and 10 (`0x80033E88`-`0x80033EA4`);
+  3 falls through to `0x80034070` and the tick returns 0. `task_wait` then
+  gets a 0 tick return plus a record status it does not decode (it handles
+  0/4/8) and returns 1, so the caller loops after a VSync. Both stream
+  buffers do hold data (4,072 non-zero bytes each, shared head), so this is
+  not a lost transfer: the handshake is gated on the voice slot, and only
+  the starters `0x8002E94C`/`0x8002E990` set the flags that build the mask.
 - **Kernel jump tables:** `GetB0Table` and `GetC0Table` used to return 0, so
   libcd's hook installer treated address 0 as the BIOS `CdRead` body: it wrote
   its five-word trampoline to `0x28` and stored `0x3C` in the `0xDFFC`
