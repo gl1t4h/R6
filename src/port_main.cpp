@@ -867,6 +867,8 @@ int main(int argc, char** argv) {
     std::filesystem::path image;
     std::filesystem::path screenshot;
     std::filesystem::path dump_state;
+    std::filesystem::path resume_state;
+    std::uint32_t entry_override = 0;
     std::uint32_t watch_change = 0;
     bool cd_log = false;
     bool watch_cd = false;
@@ -906,6 +908,11 @@ int main(int argc, char** argv) {
                 std::stoul(argv[++index], nullptr, 16));
         } else if (argument == "--dump-state" && index + 1 < argc) {
             dump_state = argv[++index];
+        } else if (argument == "--state" && index + 1 < argc) {
+            resume_state = argv[++index];
+        } else if (argument == "--entry" && index + 1 < argc) {
+            entry_override = static_cast<std::uint32_t>(
+                std::stoul(argv[++index], nullptr, 0));
         } else if (argument == "--watch" && index + 1 < argc) {
             watch.push_back(static_cast<std::uint32_t>(
                 std::stoul(argv[++index], nullptr, 16)));
@@ -952,11 +959,27 @@ int main(int argc, char** argv) {
     host.bus->set_vblank_enabled(true);
     host.bus->set_block_boundary_interrupts(false);
 
+    // Resuming from a local snapshot lets a run start where the interpreter
+    // reached, so code the loader streamed into RAM can be traced without
+    // re-running the boot. The RAM and registers come from the snapshot; the
+    // disc still comes from the image, because sectors are read on demand.
+    if (!resume_state.empty()) {
+        if (!r6::read_snapshot(resume_state, host.cpu, host.ram)) {
+            std::cerr << "r6-port: could not read state "
+                      << resume_state.string() << "\n";
+            return 2;
+        }
+        if (entry_override != 0) host.cpu.pc = entry_override;
+    }
+
     std::cout << "R6 native port\n"
               << "Disc: " << image.filename().string() << "\n"
               << "EXE:  " << host.exe.payload.size() << " bytes at "
-              << hex32(host.exe.load_address) << "\n"
-              << "Entry " << hex32(host.exe.entry) << ", translated blocks "
+              << hex32(host.exe.load_address) << "\n";
+    if (!resume_state.empty()) {
+        std::cout << "State: " << resume_state.filename().string() << "\n";
+    }
+    std::cout << "Entry " << hex32(host.cpu.pc) << ", translated blocks "
               << r6_generated::block_count() << "\n";
 
     if (headless) {

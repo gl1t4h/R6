@@ -50,6 +50,16 @@ MipsInterpreter::MipsInterpreter(Memory& ram, PlatformServices& services)
     // The disc controller reports completion through I_STAT bit 2, which is
     // what libcd's command state machine waits for.
     hardware_.set_cdrom_interrupt_enabled(true);
+    // Bring-up knobs for the interrupt-ordering investigation: the step
+    // interval between polls and the controller's sector-delivery time.
+    if (const char* poll = std::getenv("R6_IRQ_POLL")) {
+        const auto value = std::strtoul(poll, nullptr, 0);
+        irq_poll_ = value != 0 ? value : 1;
+    }
+    if (const char* delay = std::getenv("R6_CD_SECTOR_DELAY")) {
+        hardware_.cdrom().set_sector_delay(
+            std::strtoull(delay, nullptr, 0));
+    }
 }
 
 void MipsInterpreter::note_cdrom_poll(std::uint32_t physical) {
@@ -724,7 +734,7 @@ RunResult MipsInterpreter::run(std::uint64_t max_steps) {
         const auto target = delay_target_;
         in_delay_slot_ = false;
 
-        if ((result.steps & 0x3FFu) == 0) {
+        if (result.steps % irq_poll_ == 0) {
             // Poll even in a delay slot: a wait loop whose length divides the
             // poll interval would otherwise never see the field counter move.
             // Polling does not touch the PC, so it is safe here.
@@ -779,7 +789,7 @@ RunResult MipsInterpreter::run(std::uint64_t max_steps) {
                 continue;
             }
         }
-        if (!in_interrupt_ && !was_delay_slot && (result.steps & 0x3FFu) == 0) {
+        if (!in_interrupt_ && !was_delay_slot && result.steps % irq_poll_ == 0) {
             // Never interrupt a delay slot: the pending branch target lives in
             // the run loop, not in guest state, so resuming mid-pair would
             // lose it.

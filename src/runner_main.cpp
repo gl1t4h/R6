@@ -107,6 +107,7 @@ int main(int argc, char** argv) {
     std::string extract_file_spec;
     std::filesystem::path dump_ram_path;
     std::filesystem::path dump_snapshot_path;
+    std::filesystem::path resume_state_path;
     std::vector<std::uint32_t> watch_writes;
     std::vector<std::pair<std::uint32_t, std::uint32_t>> watch_ranges;
     std::string search_text;
@@ -178,6 +179,8 @@ int main(int argc, char** argv) {
             dump_ram_path = argv[++index];
         } else if (argument == "--dump-snapshot" && index + 1 < argc) {
             dump_snapshot_path = argv[++index];
+        } else if (argument == "--state" && index + 1 < argc) {
+            resume_state_path = argv[++index];
         } else if (argument == "--watch-write" && index + 1 < argc) {
             watch_writes.push_back(static_cast<std::uint32_t>(
                 std::stoul(argv[++index], nullptr, 0)));
@@ -227,7 +230,7 @@ int main(int argc, char** argv) {
                      " [--dump-frame frame.ppm] [--dump-range 0xADDR:COUNT]"
                      " [--list-files] [--extract-file NAME=PATH]"
                      " [--dump-ram file] [--dump-snapshot file]"
-                     " [--chd-info]\n"
+                     " [--state file] [--chd-info]\n"
                   << "Runs your own local copy. No game data is copied or"
                      " uploaded.\n";
         return 2;
@@ -436,6 +439,16 @@ int main(int argc, char** argv) {
                       ? image.stack_base
                       : (cr_stack_in_ram ? cr_stack : kDefaultStack);
     cpu.gpr[31] = 0;
+    // A local snapshot resumes a captured state so a run can start where the
+    // interpreter reached, without replaying the whole boot.
+    if (!resume_state_path.empty()) {
+        if (!r6::read_snapshot(resume_state_path, interpreter.cpu(), ram)) {
+            std::cerr << "r6-run: could not read state "
+                      << resume_state_path.string() << "\n";
+            return 2;
+        }
+        if (entry_override != 0) interpreter.cpu().pc = entry_override;
+    }
     interpreter.set_vblank_enabled(deliver_vblank);
 
     std::cout << "R6 development runner\n"

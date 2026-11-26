@@ -423,6 +423,39 @@ window body shows those counters plus how many disc sectors have been read.
   handler/DMA and the sync's flag check, and it is what makes the game retry
   at 14:48:04 and overwrite `0x800C0CE0` before the walk.
 
+- **The ordering race does not reproduce in the current build (re-measured):**
+  the addresses above cannot be the set and the clear. A 250M-step
+  `r6-run --vblank` boot executes `0x8008A068`, `0x800899A0`, `0x80089AC8` and
+  `0x800868B4` zero times (`R6_TRACE_SYNC=1` and `R6_TRACE_WALK=1` print
+  nothing), and the same is true of the native port. Disassembling the resident
+  image at those places shows a function prologue (`0x80089BD0`: `addu s2,a2`)
+  and the iteration step of a callback walker (`0x8008998C`:
+  `addu s0,s1`), not a store to `0x800B1C60`; a block-entry trace cannot say
+  which instruction inside a block wrote the flag. The one ordering variable
+  that really differs between the two runtimes is interrupt latency, so it was
+  varied directly: `R6_IRQ_POLL=1` makes the interpreter deliver an interrupt
+  after every instruction (the native port's policy) instead of every 1,024
+  steps. At 250M steps the CD path is unchanged — 682 sectors and
+  `status reads=3335 with response=603 response reads=534`, identical to the
+  default poll — while a 5M-step run shows the knob working (418 BIOS calls
+  against 416). The controller's sector rate was varied too:
+  `R6_CD_SECTOR_DELAY=564480` (the real 1/75 s) reads 648 sectors, again with
+  no `CdReadSync` failure. Neither runner seeks 14:48:04 any more: the port and
+  the interpreter both issue `Setloc 00:03:27` (LBA 102) and then `ReadN`, and
+  the port now stops at `0x800314EC` only because the streamed overlay is not
+  in its translation, not on a CD error. So the retry that led here is gone;
+  the remaining port stop on this path is block coverage, and the remaining
+  interpreter stall is the audio deadlock at `0x800C9AB0`.
+
+- **Resuming a captured state:** `r6-run` and `r6-port` accept
+  `--state FILE` (an `R6S1` snapshot) plus `--entry ADDR`, matching
+  `r6-native --snapshot`. Registers and RAM come from the snapshot and the
+  disc still comes from the image, so a captured state can be traced without
+  replaying the boot. A snapshot taken mid-transfer resumes into the guest's
+  wait loop instead of continuing the read, because the controller's own
+  state (sector position, armed transfer) is not part of the `R6S1` file;
+  capture a state before a read is issued, not during one.
+
 - **Ground truth from the disc closes the CD route.** A throw-away tool
   (`dump-sector.cpp`, built against `chd_image.cpp`) prints the header and the
   first 32 user bytes of any LBA straight from the image. The results:
