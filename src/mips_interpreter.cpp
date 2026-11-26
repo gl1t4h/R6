@@ -779,9 +779,22 @@ MipsInterpreter::StepResult MipsInterpreter::execute(
                     // a VBlank land in the middle of a driver section that is
                     // not reentrant, which corrupts the interrupt stack.
                     if (gpr[4] == 1) {
+                        if (critical_section_depth_ == 0) {
+                            critical_section_ie_ = (cop0_[12] & 1u) != 0;
+                        }
+                        ++critical_section_depth_;
                         cop0_[12] &= ~1u;
                     } else if (gpr[4] == 2) {
-                        cop0_[12] |= 1u;
+                        if (critical_section_depth_ > 0) {
+                            --critical_section_depth_;
+                            if (critical_section_depth_ == 0) {
+                                if (critical_section_ie_) {
+                                    cop0_[12] |= 1u;
+                                } else {
+                                    cop0_[12] &= ~1u;
+                                }
+                            }
+                        }
                     }
                     break;
                 case 0x0D:  // break

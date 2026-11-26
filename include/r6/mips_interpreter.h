@@ -288,6 +288,10 @@ private:
     std::uint32_t delay_target_{0};
     bool stop_after_event_{false};
     bool in_interrupt_{false};
+    // Libetc critical sections nest. Keep the interrupt-enable bit from the
+    // outermost entry so an inner exit does not restore interrupts early.
+    std::uint32_t critical_section_depth_{0};
+    bool critical_section_ie_{false};
     std::uint64_t interrupt_steps_{0};
     // Long enough for the CD streaming dispatcher, short enough to catch a
     // handler that never returns.

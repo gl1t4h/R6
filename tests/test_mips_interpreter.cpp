@@ -684,6 +684,34 @@ void syscall_critical_section_toggles_interrupts() {
     R6_CHECK((interpreter.cop0_status() & 1u) != 0);
 }
 
+void nested_critical_section_keeps_interrupts_disabled() {
+    Memory ram(2u * 1024u * 1024u);
+    TestServices services;
+    MipsInterpreter interpreter(ram, services);
+    auto& cpu = interpreter.cpu();
+    cpu.pc = 0x80010000u;
+
+    // Start with IEc clear, as an interrupt handler or a nested driver section
+    // would find it. Neither exit may turn interrupts back on.
+    std::uint32_t cop0[32]{};
+    cop0[12] = 0x00000400u;
+    interpreter.set_cop0(cop0);
+
+    ram.write32(0x10000, 0x24040001u);  // addiu a0, zero, 1
+    ram.write32(0x10004, 0x0000000Cu);  // syscall 1: outer enter
+    ram.write32(0x10008, 0x24040001u);  // addiu a0, zero, 1
+    ram.write32(0x1000C, 0x0000000Cu);  // syscall 1: nested enter
+    ram.write32(0x10010, 0x24040002u);  // addiu a0, zero, 2
+    ram.write32(0x10014, 0x0000000Cu);  // syscall 2: nested exit
+    ram.write32(0x10018, 0x24040002u);  // addiu a0, zero, 2
+    ram.write32(0x1001C, 0x0000000Cu);  // syscall 2: outer exit
+
+    interpreter.run(6);
+    R6_CHECK((interpreter.cop0_status() & 1u) == 0);
+    interpreter.run(2);
+    R6_CHECK((interpreter.cop0_status() & 1u) == 0);
+}
+
 }  // namespace
 
 void run_mips_interpreter_tests() {
@@ -713,4 +741,5 @@ void run_mips_interpreter_tests() {
     interrupt_overrun_returns_to_epc();
     exception_vector_writes_are_traced();
     syscall_critical_section_toggles_interrupts();
+    nested_critical_section_keeps_interrupts_disabled();
 }
