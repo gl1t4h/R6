@@ -1138,13 +1138,37 @@ the traffic that reached the drive.
 
 ### What is still hypothesis
 
-Why the overlay's table is never populated is unknown. The untouched table at
-`0x800AFE80` holds `0x1F801040` and `0x1F801070` at +0x10/+0x14 and
-`0x1F801800`-`0x1F801803` at +0x1C..+0x28; `0x800AFE8C` itself is zero.
-Copying those words into `0x800BFF3C`-`0x800BFF6C` is the obvious missing
-step, but nothing observed yet shows which load path should perform it.
+The resident image is loaded in one encrypted block at about 40.7 million
+cycles. `0x80010AD0(dst=0x80024B60, src=0x8010A600, count=0x000A4B00)`
+decrypts 673,536 bytes from the CD buffer into `0x80024B60`-`0x800C9660`,
+which covers the overlay at `0x80090000` and the table at `0x800AFE80`.
+The watch log shows 18 stores into `0x800BFF3C`-`0x800BFF84`, all from the
+decrypt loop at `0x80010B0C`; the stored values are zero. `0x800BFF3C` is
+BSS in the source image, so the loader does not skip a populated table: it
+zero-fills the slot once and no later writer exists.
+
+The earlier copy hypothesis is not supported. No instruction computes
+`0x800AFE80`; the only reads of that data are `[0x800AFE90]` at
+`0x800922A4` and `[0x800AFE94]` at `0x8009230C`. The table is a static
+descriptor with signature `0x0043529B`, not a `0x0043539B` module table,
+and it is used directly, not copied to `0x800BFF3C`.
+
+The module's own init candidates are dead. `0x80092020`, `0x80092068` and
+`0x8009204C` have no callers and no data or jump-table pointers.
+`0x80092068` initializes BIOS kernel callbacks, registers the pad hooks,
+and sets `0x800AFE8C`, but never touches `0x800AFE80` or
+`0x800BFF3C`-`0x800BFF6C`. Calling it would not populate the table, so it
+cannot be the copy init. The pump is instead reached through the callback
+slot `0x800226BC` (observed as `0x80093170`), which calls `0x800935CC`;
+the game also calls `0x800935CC` directly from `0x801E3098`.
+
+The real missing piece is therefore the resident CD driver's own table
+builder, not a copy from `0x800AFE80`. The only valid CD table observed is
+the boot EXE's `0x8002297C`, built before the resident image is loaded.
+Which routine should build `0x800BFF3C` from that table (or from the BIOS
+CD state) is still unidentified; the null table remains a hypothesis for
+the deadlock, not an established cause.
 
 The observed fact is that the status gate cannot see a response and the
 504-word payload after the slot-17 header never starts. Whether populating
-the overlay table would restart production is untested; the null table is
-still a hypothesis for the deadlock, not an established cause.
+the overlay table would restart production is untested.
