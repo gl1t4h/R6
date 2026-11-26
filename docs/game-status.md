@@ -408,6 +408,21 @@ window body shows those counters plus how many disc sectors have been read.
   fix next, not the interrupt path: interrupts delivered at 1.3M cycles are
   16 in the port against 15 in the interpreter.
 
+- **CdReadSync returns failure in the port only** (`--sync-trace`,
+  `R6_TRACE_SYNC=1`; both log `0x8008A068` entry and the value of `v0` at
+  `0x80086ABC`, where the guest runs `sltiu v0,v0,1` to turn a zero return
+  into success). Every directory read in the port returns `v0=1`; every read
+  in the interpreter returns `v0=0`. The variable behind it is libcd's
+  read-complete flag at `0x800B1C60`: the port's CD handler sets it at
+  1,245,478 cycles from block `0x80089BD0`, block `0x8008998C` clears it again
+  at 1,254,668, and the sync samples it at 1,255,322 and finds zero, so it
+  times out and reports failure; the interpreter still has `0x800B1C60 = 1`
+  at the same cycle. This is not a missing interrupt: the port's `I_STAT` bit 2
+  toggles throughout the read (`0x4` at 1,189,694, 1,199,154, 1,209,014, ...)
+  and the handler runs. The failure is an ordering race between the sector
+  handler/DMA and the sync's flag check, and it is what makes the game retry
+  at 14:48:04 and overwrite `0x800C0CE0` before the walk.
+
 - **The walk, captured in both runners** (`--walk-trace` on the port,
   `R6_TRACE_WALK=1` on the interpreter; both print `s0`, the record counter
   and the 24 bytes at `s0` for each iteration of `0x800868B4`):

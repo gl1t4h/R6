@@ -603,7 +603,7 @@ int run_headless(Host& host, std::uint64_t frames,
                  std::uint64_t pc_to,
                  const std::filesystem::path& dump_state,
                  std::uint32_t watch_change, bool cd_log,
-                 bool watch_cd, bool walk_trace) {
+                 bool watch_cd, bool walk_trace, bool sync_trace) {
     std::uint64_t presented = 0;
     std::uint64_t sector_last = 0;
     std::uint32_t watch_last =
@@ -617,6 +617,29 @@ int run_headless(Host& host, std::uint64_t frames,
                 host.bus->hardware().cycles() < max_cycles)) {
             const auto before = host.cpu.pc;
             if (!step_once(host)) break;
+            if (sync_trace) {
+                static std::uint32_t last_istat = 0;
+                const auto istat = host.bus->hardware().interrupt_status();
+                if (istat != last_istat) {
+                    std::cout << "IS " << host.bus->hardware().cycles()
+                              << " stat=" << hex32(istat)
+                              << " mask="
+                              << hex32(host.bus->hardware().interrupt_mask())
+                              << std::endl;
+                    last_istat = istat;
+                }
+            }
+            if (sync_trace &&
+                (before == 0x8008A068u || before == 0x80086ABCu ||
+                 before == 0x80086AB0u || before == 0x80086AB4u)) {
+                std::cout << "SY " << host.bus->hardware().cycles() << " pc="
+                          << hex32(before) << " a0=" << hex32(host.cpu.gpr[4])
+                          << " a1=" << hex32(host.cpu.gpr[5])
+                          << " ra=" << hex32(host.cpu.gpr[31])
+                          << " v0=" << hex32(host.cpu.gpr[2])
+                          << " s0=" << hex32(host.cpu.gpr[16])
+                          << " s1=" << hex32(host.cpu.gpr[17]) << std::endl;
+            }
             if (walk_trace && before == 0x800868B4u) {
                 static int walk_records = 0;
                 if (walk_records < 200) {
@@ -740,6 +763,7 @@ int main(int argc, char** argv) {
     bool cd_log = false;
     bool watch_cd = false;
     bool walk_trace = false;
+    bool sync_trace = false;
     bool bios_log = false;
     std::uint64_t frames = 0;  // 0 = interactive
     std::uint64_t max_cycles = 0;
@@ -763,6 +787,8 @@ int main(int argc, char** argv) {
             bios_log = true;
         } else if (argument == "--watch-cd") {
             watch_cd = true;
+        } else if (argument == "--sync-trace") {
+            sync_trace = true;
         } else if (argument == "--walk-trace") {
             walk_trace = true;
         } else if (argument == "--cd-log") {
@@ -828,7 +854,8 @@ int main(int argc, char** argv) {
     if (headless) {
         return run_headless(host, frames == 0 ? 600 : frames, screenshot,
                            max_cycles, pc_from, pc_to, dump_state,
-                           watch_change, cd_log, watch_cd, walk_trace);
+                           watch_change, cd_log, watch_cd, walk_trace,
+                           sync_trace);
     }
 
     WNDCLASSEXW window_class{};
