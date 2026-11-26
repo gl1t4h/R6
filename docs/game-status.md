@@ -286,3 +286,7 @@ window body shows those counters plus how many disc sectors have been read.
   prologues all reach code that no call-site scan sees. They are seeded
   automatically. Interrupts are delivered at block boundaries in the port so
   EPC is always a translated entry.
+
+---
+
+(last commit for me tonight :p - U9Z)
