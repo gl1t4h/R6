@@ -238,6 +238,45 @@ void SoftwareGpu::execute_gp0() {
         return;
     }
 
+    if (opcode >= 0x30 && opcode <= 0x33) {
+        // Gouraud three-point polygon: colour0,xy0,xy1,colour1,xy2,colour2.
+        draw_gouraud_triangle(
+            coordinate_x(packet_[1]) + draw_offset_x_,
+            coordinate_y(packet_[1]) + draw_offset_y_, to_bgr555(color),
+            coordinate_x(packet_[2]) + draw_offset_x_,
+            coordinate_y(packet_[2]) + draw_offset_y_,
+            to_bgr555(packet_[3]),
+            coordinate_x(packet_[4]) + draw_offset_x_,
+            coordinate_y(packet_[4]) + draw_offset_y_,
+            to_bgr555(packet_[5]));
+        ++rendered_primitives_;
+        return;
+    }
+
+    if (opcode >= 0x38 && opcode <= 0x3B) {
+        // Gouraud four-point polygon, drawn as two shaded triangles.
+        const auto c0 = to_bgr555(color);
+        const auto c1 = to_bgr555(packet_[3]);
+        const auto c2 = to_bgr555(packet_[5]);
+        const auto c3 = to_bgr555(packet_[7]);
+        draw_gouraud_triangle(
+            coordinate_x(packet_[1]) + draw_offset_x_,
+            coordinate_y(packet_[1]) + draw_offset_y_, c0,
+            coordinate_x(packet_[2]) + draw_offset_x_,
+            coordinate_y(packet_[2]) + draw_offset_y_, c1,
+            coordinate_x(packet_[4]) + draw_offset_x_,
+            coordinate_y(packet_[4]) + draw_offset_y_, c2);
+        draw_gouraud_triangle(
+            coordinate_x(packet_[2]) + draw_offset_x_,
+            coordinate_y(packet_[2]) + draw_offset_y_, c1,
+            coordinate_x(packet_[4]) + draw_offset_x_,
+            coordinate_y(packet_[4]) + draw_offset_y_, c2,
+            coordinate_x(packet_[6]) + draw_offset_x_,
+            coordinate_y(packet_[6]) + draw_offset_y_, c3);
+        ++rendered_primitives_;
+        return;
+    }
+
     if (opcode >= 0x24 && opcode <= 0x27) {
         const bool semi_transparent = (opcode & 0x02u) != 0;
         const bool raw = (opcode & 0x01u) != 0;
@@ -487,6 +526,72 @@ void SoftwareGpu::draw_triangle(std::int32_t x0,
                     ? (w0 >= 0 && w1 >= 0 && w2 >= 0)
                     : (w0 <= 0 && w1 <= 0 && w2 <= 0);
             if (inside) store_pixel(x, y, color);
+        }
+    }
+}
+
+void SoftwareGpu::draw_gouraud_triangle(std::int32_t x0,
+                                        std::int32_t y0,
+                                        std::uint16_t color0,
+                                        std::int32_t x1,
+                                        std::int32_t y1,
+                                        std::uint16_t color1,
+                                        std::int32_t x2,
+                                        std::int32_t y2,
+                                        std::uint16_t color2) {
+    const auto edge = [](std::int32_t ax, std::int32_t ay, std::int32_t bx,
+                         std::int32_t by, std::int32_t cx, std::int32_t cy) {
+        return static_cast<std::int64_t>(bx - ax) *
+                   static_cast<std::int64_t>(cy - ay) -
+               static_cast<std::int64_t>(by - ay) *
+                   static_cast<std::int64_t>(cx - ax);
+    };
+
+    const auto area = edge(x0, y0, x1, y1, x2, y2);
+    if (area == 0) return;
+
+    const auto min_x = std::max<std::int32_t>(
+        draw_area_left_, std::min({x0, x1, x2}));
+    const auto max_x = std::min<std::int32_t>(
+        draw_area_right_, std::max({x0, x1, x2}));
+    const auto min_y = std::max<std::int32_t>(
+        draw_area_top_, std::min({y0, y1, y2}));
+    const auto max_y = std::min<std::int32_t>(
+        draw_area_bottom_, std::max({y0, y1, y2}));
+    if (min_x > max_x || min_y > max_y) return;
+
+    const auto channel = [](std::uint16_t color, int shift) {
+        return static_cast<std::int64_t>((color >> shift) & 0x1Fu);
+    };
+    const std::int64_t red[3] = {channel(color0, 0), channel(color1, 0),
+                                 channel(color2, 0)};
+    const std::int64_t green[3] = {channel(color0, 5), channel(color1, 5),
+                                   channel(color2, 5)};
+    const std::int64_t blue[3] = {channel(color0, 10), channel(color1, 10),
+                                  channel(color2, 10)};
+
+    const bool counter_clockwise = area > 0;
+    for (std::int32_t y = min_y; y <= max_y; ++y) {
+        for (std::int32_t x = min_x; x <= max_x; ++x) {
+            const auto w0 = edge(x1, y1, x2, y2, x, y);
+            const auto w1 = edge(x2, y2, x0, y0, x, y);
+            const auto w2 = edge(x0, y0, x1, y1, x, y);
+            const bool inside =
+                counter_clockwise
+                    ? (w0 >= 0 && w1 >= 0 && w2 >= 0)
+                    : (w0 <= 0 && w1 <= 0 && w2 <= 0);
+            if (!inside) continue;
+            // The barycentric weights sum to the signed area, so the same
+            // division interpolates both winding orders.
+            const auto mix = [&](const std::int64_t (&values)[3]) {
+                const auto total = w0 * values[0] + w1 * values[1] +
+                                   w2 * values[2];
+                return static_cast<std::uint16_t>(
+                    std::clamp<std::int64_t>(total / area, 0, 31));
+            };
+            const auto pixel = static_cast<std::uint16_t>(
+                mix(red) | (mix(green) << 5) | (mix(blue) << 10));
+            store_pixel(x, y, pixel);
         }
     }
 }

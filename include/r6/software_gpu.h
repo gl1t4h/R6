@@ -20,9 +20,9 @@ struct TexturedVertex {
 // layout. The decoder tracks how many parameter words each GP0 command needs,
 // so an unsupported command cannot desynchronise the following command stream.
 //
-// Textured and gouraud primitives are decoded and counted but not rendered yet;
-// they are reported through unsupported_commands() instead of being drawn with
-// a guessed appearance.
+// Textured primitives are decoded and counted but not rendered yet; gouraud
+// shading is interpolated per pixel so shaded geometry is drawn instead of being
+// reported as unsupported.
 class SoftwareGpu {
 public:
     static constexpr std::uint32_t kVramWidth = 1024;
@@ -104,6 +104,15 @@ private:
                        std::int32_t x2,
                        std::int32_t y2,
                        std::uint16_t color);
+    void draw_gouraud_triangle(std::int32_t x0,
+                                std::int32_t y0,
+                                std::uint16_t color0,
+                                std::int32_t x1,
+                                std::int32_t y1,
+                                std::uint16_t color1,
+                                std::int32_t x2,
+                                std::int32_t y2,
+                                std::uint16_t color2);
     void draw_textured_triangle(const TexturedVertex& first,
                                 const TexturedVertex& second,
                                 const TexturedVertex& third,

@@ -99,17 +99,40 @@ void monochrome_triangle() {
     R6_CHECK(gpu.read_vram(9, 9) == 0x0000u);
 }
 
+void gouraud_triangle_shades() {
+    SoftwareGpu gpu;
+    // Red at the top, green at the right, black at the origin corner; the
+    // interior has to land between the vertex colours rather than take one.
+    gpu.submit_gp0(0x300000FFu);  // red
+    gpu.submit_gp0(0x00000000u);  // (0,0)
+    gpu.submit_gp0(0x000A0000u);  // (0,10)
+    gpu.submit_gp0(0x3000FF00u);  // green
+    gpu.submit_gp0(0x0000000Au);  // (10,0)
+    gpu.submit_gp0(0x30000000u);  // black
+    R6_CHECK(gpu.unsupported_commands() == 0);
+    R6_CHECK(gpu.rendered_primitives() == 1);
+
+    // v0=(0,0) red, v1=(0,10) green, v2=(10,0) black.
+    const auto near_red = gpu.read_vram(0, 1);
+    const auto near_green = gpu.read_vram(0, 9);
+    R6_CHECK((near_red & 0x1Fu) > ((near_red >> 5) & 0x1Fu));
+    R6_CHECK(((near_green >> 5) & 0x1Fu) > (near_green & 0x1Fu));
+    const auto near_black = gpu.read_vram(9, 1);
+    R6_CHECK((near_black & 0x1Fu) < 4u &&
+             ((near_black >> 5) & 0x1Fu) < 4u);
+
+    const auto middle = gpu.read_vram(3, 3);
+    R6_CHECK((middle & 0x1Fu) != 0);
+    R6_CHECK(((middle >> 5) & 0x1Fu) != 0);
+}
+
 void unsupported_packet_keeps_stream_in_sync() {
     SoftwareGpu gpu;
-    gpu.submit_gp0(0x30FF0000u);  // gouraud triangle, not rendered yet
-    gpu.submit_gp0(0x00000000u);
-    gpu.submit_gp0(0x00000000u);
-    gpu.submit_gp0(0x00000000u);
-    gpu.submit_gp0(0x00000000u);
-    gpu.submit_gp0(0x00000000u);
+    gpu.submit_gp0(0x34FF0000u);  // gouraud textured triangle, not rendered yet
+    for (int word = 0; word < 8; ++word) gpu.submit_gp0(0x00000000u);
     R6_CHECK(gpu.unsupported_commands() == 1);
-    R6_CHECK(gpu.unsupported_commands(0x30) == 1);
-    R6_CHECK(gpu.last_unsupported_opcode() == 0x30);
+    R6_CHECK(gpu.unsupported_commands(0x34) == 1);
+    R6_CHECK(gpu.last_unsupported_opcode() == 0x34);
 
     gpu.submit_gp0(0x6000FF00u);  // green rectangle follows
     gpu.submit_gp0(0x00000020u);  // x=32, y=0
@@ -343,6 +366,7 @@ void run_software_gpu_tests() {
     drawing_area_clips_primitives();
     drawing_offset_shifts_vertices();
     monochrome_triangle();
+    gouraud_triangle_shades();
     unsupported_packet_keeps_stream_in_sync();
     vram_copy();
     cpu_to_vram_upload();

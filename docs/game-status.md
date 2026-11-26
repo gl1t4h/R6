@@ -854,3 +854,31 @@ window body shows those counters plus how many disc sectors have been read.
   prologues all reach code that no call-site scan sees. They are seeded
   automatically. Interrupts are delivered per instruction in the port, and
   every instruction has its own dispatch entry, so EPC is always resumable.
+
+## Gouraud geometry and the loading screen
+
+The software GPU now rasterises gouraud-shaded polygons (`0x30`-`0x33` and the
+four-point `0x38`-`0x3B` form), interpolating each of the three colours across
+the span with barycentric weights. Before this the game's nine shaded draws per
+run were decoded, counted and dropped; the run now reports `unsupported=0` and
+`primitives=13` instead of `primitives=4` with nine unsupported commands.
+
+That is not yet a picture, and the measurements say why:
+
+- `R6_TRACE_FILL=1` shows the only fills the guest issues are black
+  (`FILL pos=00000000 size=01FF0200 color=000000` and two 2-pixel bars). Black
+  fills write zero-valued pixels, so `filled_vram_pixels()` stays at 0 even
+  though the writes happen.
+- The drawing area is still `(0,0)-(0,0)`, one pixel: the guest never issued a
+  `0xE3`/`0xE4` pair, so any polygon is clipped to a single point.
+- The guest is parked in its stage consumer: the retry loop at `0x8002AD30`
+  calls `0x8002B430` (pop a ready stage) and decrements an 8M-iteration budget,
+  with a `GetStat` health check at `0x8002AF60` that tests status bit `0x10`.
+  All 48 stage entries stay at state 0 and the read stream stops after 128
+  sectors (LBA 128342), so nothing refills the queue.
+
+So the loading screen is what a real console would show at this point: the
+pipeline that would deliver level data is waiting for a read that is never
+requested. Changing the drive's `GetStat` "reading" bit to mean "a transfer is
+in flight" was tried and left the trace byte-identical, so it was reverted
+rather than kept as an unproven hardware change.

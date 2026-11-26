@@ -854,6 +854,13 @@ int run_headless(Host& host, std::uint64_t frames,
             }
         {
             const auto& gpu = host.services->gpu();
+            std::cout << "GPU fill=" << gpu.fill_rectangles()
+                      << " area=(" << gpu.draw_area_left() << ","
+                      << gpu.draw_area_top() << ")(" << gpu.draw_area_right()
+                      << "," << gpu.draw_area_bottom() << ")" << std::endl;
+        }
+        {
+            const auto& gpu = host.services->gpu();
             for (int opcode = 0; opcode < 256; ++opcode) {
                 const auto count = gpu.unsupported_commands(
                     static_cast<std::uint8_t>(opcode));
