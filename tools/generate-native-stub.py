@@ -246,6 +246,12 @@ def translate(instruction: int, address: int, decoded: dict) -> list[str]:
             "    cpu.pc += 4;",
         ]
     if opcode == 0x10:
+        if (instruction & 0x3F) == 0x10:
+            # RFE pops the SR mode stack and ends the handler.
+            return [
+                "    bus.rfe(cpu);",
+                "    cpu.pc += 4;",
+            ]
         if rs == 0:
             return [
                 f"    {cpp_reg(rt)} = cpu.cop0[{rd}];",
@@ -338,7 +344,11 @@ def translate_delay_slot(payload: bytes, load_address: int, address: int) -> lis
     if decoded["kind"] in CONTROL_KINDS:
         return [f"    r6::unsupported_instruction(cpu, 0x{address:08X}u,"
                 f" 0x{instruction:08X}u);"]
-    lines = translate(instruction, address, decoded)
+    lines = [
+        f"    cpu.pc = 0x{address:08X}u;",
+        "    bus.event_tick(cpu, false);",
+    ]
+    lines.extend(translate(instruction, address, decoded))
     lines.append("    bus.advance_cycles(1);")
     return lines
 
@@ -447,6 +457,9 @@ def emit_block(
             break
         instruction = word(payload, pc - load_address)
         decoded = decode_word(instruction, pc)
+        # Event polling is instruction-granular. A delivered interrupt returns
+        # from the block before the instruction it interrupted executes.
+        lines.append("    if (bus.event_tick(cpu)) return cpu.pc;")
         lines.append(f"    // 0x{pc:08X}: {decoded['text']}")
         if decoded["kind"] in CONTROL_KINDS:
             control = translate_control(

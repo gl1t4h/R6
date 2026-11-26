@@ -297,9 +297,13 @@ public:
     // The kernel acknowledges a serviced interrupt by clearing its I_STAT bit.
     // Called from the interpreter's periodic poll: delivers the pad transfer
     // interrupt once the modelled shift-out delay has elapsed.
-    void pad_tick() {
-        if (pad_irq_delay_ == 0) return;
-        if (--pad_irq_delay_ == 0) raise_interrupt(kInterruptPad);
+    bool pad_tick() {
+        if (pad_irq_delay_ == 0) return false;
+        if (--pad_irq_delay_ == 0) {
+            raise_interrupt(kInterruptPad);
+            return true;
+        }
+        return false;
     }
 
     // A byte shifted in from the controller raises the same interrupt as one

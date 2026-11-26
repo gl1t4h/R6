@@ -640,3 +640,38 @@ bookkeeping persist. Native DMA2/3/4 transfers now execute with the same
 differential compares every hardware register, GTE register, scratchpad byte
 and BIOS bookkeeping field after every block. The snapshot still omits COP0
 and hardware registers; only RAM and the integer CPU state are captured.
+
+## 2026-11-26 — Native interrupt and exception parity
+
+The native runner previously compared CPU and device state after each block,
+which could not catch a different interrupt sequence that converged on the same
+state. Generated blocks now poll before every instruction, and both engines
+record an ordered event trace. The trace retains a bounded prefix, but a count
+and FNV-1a fingerprint cover the full stream, so two capped traces cannot match
+merely because both overflowed.
+
+- `NativeBus` now models VBlank and pad timing, pending I_STAT/I_MASK delivery,
+  COP0 EPC/Cause/SR entry, HookEntryInt context restoration, RFE, the
+  handler-step budget, and B(17h) ReturnFromException. The BIOS service object
+  is shared with the oracle, so both see the same HookEntryInt state.
+- `MipsInterpreter::run_event_step()` stops immediately after interrupt entry.
+  Without it, `run(1)` executes the first handler instruction and the two
+  engines cannot meet at the vector. The normal `run` path keeps its existing
+  behavior.
+- Generated code emits `bus.event_tick(cpu)` before each instruction; a delay
+  slot uses `event_tick(cpu, false)` so a branch and its delay slot remain
+  atomic for interrupt entry. RFE lowers to `bus.rfe(cpu)`.
+- The native runner calls `event_tick` before BIOS service as well, and handles
+  `take_bios_return` before the ordinary RA return.
+
+Tests in `tests/test_native_runtime.cpp` compare the native and oracle PCs,
+EPC/SR and exact ordered traces for vector interrupts on VBlank, CD and DMA
+bits; pad delivery; HookEntryInt; and B(17h) ReturnFromException. They also
+check that DMA3/DMA4 completion records its event.
+
+The event-aware Silent Hill loaded translation emitted 4,384 blocks and 21,892
+event-tick call sites. It matched 200,000 blocks with `--vblank`, with 326,004
+recorded events in each engine and an equal full-stream fingerprint, in
+addition to the existing GPR, HI/LO, COP0, hardware, GTE, scratchpad, BIOS and
+2 MiB RAM comparisons. The run still stops on the block budget at
+`0x800154CC`. Generated translations remain local and are not committed.

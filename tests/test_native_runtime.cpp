@@ -10,6 +10,7 @@
 #include "r6/function_dispatch.h"
 #include "r6/gte.h"
 #include "r6/hardware_map.h"
+#include "r6/mips_interpreter.h"
 #include "r6/native_runtime.h"
 #include "r6/ram_snapshot.h"
 
@@ -19,6 +20,37 @@ using r6::CpuState;
 using r6::FunctionDispatcher;
 using r6::Memory;
 using r6::NullPlatformServices;
+
+bool has_event(const r6::EventTrace& trace, const std::string& name);
+void seed_pending_interrupt(r6::HardwareMap& hardware,
+                            std::uint32_t bit);
+
+class EventTestServices final : public r6::PlatformServices {
+public:
+    std::uint16_t read_controller(std::size_t) override { return 0xFFFF; }
+    void submit_audio_samples(const std::int16_t*, std::size_t) override {}
+    void present_frame(const std::uint32_t*, std::size_t) override {}
+    std::uint32_t read_timer(std::size_t) override { return 0; }
+    void write_gpu_register(std::uint32_t, std::uint32_t) override {}
+    std::uint32_t read_gpu_status() override { return 0; }
+    std::uint32_t read_gpu_data() override { return 0; }
+    bool read_disc_sector(std::uint32_t, std::uint8_t*,
+                          std::size_t) override {
+        return false;
+    }
+    bool bios_call(std::uint32_t pc, CpuState& cpu, Memory& memory) override {
+        r6::BiosTable table{};
+        if (!r6::BiosServices::trap_table(pc, table)) return false;
+        bios.dispatch(table, cpu, memory);
+        return true;
+    }
+    std::uint32_t entry_int() override { return bios.entry_int(); }
+    bool take_return_from_exception() override {
+        return bios.take_return_from_exception();
+    }
+
+    r6::BiosServices bios;
+};
 
 std::uint32_t add_block(
     CpuState& cpu,
@@ -185,11 +217,203 @@ void run_scratchpad_and_dma_test() {
               (1u << 27)) != 0u);
     R6_CHECK((bus.hardware().interrupt_status() &
               r6::hardware::kDmaInterruptBit) != 0u);
+    R6_CHECK(has_event(bus.events(), "dma3"));
 
     r6::NativeBus dma4_bus(memory, services);
     dma4_bus.write32(r6::hardware::kDma4ChannelControl, (1u << 24) | 1u);
     R6_CHECK((dma4_bus.hardware().read32(r6::hardware::kDmaInterrupt) &
               (1u << 28)) != 0u);
+    R6_CHECK(has_event(dma4_bus.events(), "dma4"));
+}
+
+void run_vblank_and_pad_event_trace_test() {
+    Memory native_ram(2u * 1024u * 1024u, true);
+    Memory oracle_ram(2u * 1024u * 1024u, true);
+    EventTestServices native_services;
+    EventTestServices oracle_services;
+    r6::NativeBus native(native_ram, native_services);
+    r6::MipsInterpreter oracle(oracle_ram, oracle_services);
+    CpuState native_cpu{};
+    native_cpu.pc = 0x80010000u;
+    native_cpu.cop0[12] = 0x00000401u;
+    oracle.cpu() = native_cpu;
+    oracle.set_cop0(native_cpu.cop0);
+    native_ram.write32(0x10000u, 0u);
+    oracle_ram.write32(0x10000u, 0u);
+    native.set_vblank_enabled(true);
+    oracle.set_vblank_enabled(true);
+
+    // Initialize both vblank schedules at cycle zero. The oracle executes the
+    // nop, so its cycle counter advances one ahead of the event-only native
+    // tick; align the counters before the field boundary.
+    native.event_tick(native_cpu);
+    oracle.run_event_step();
+    native.advance_cycles(564480u);
+    oracle.hardware().advance_cycles(564479u);
+    native.event_tick(native_cpu);
+    oracle.run_event_step();
+    R6_CHECK((native.hardware().interrupt_status() & 1u) != 0u);
+    R6_CHECK((oracle.hardware().interrupt_status() & 1u) != 0u);
+    R6_CHECK(has_event(native.events(), "vblank"));
+    R6_CHECK(has_event(oracle.events(), "vblank"));
+    R6_CHECK(native.events().same_as(oracle.events()));
+
+    // A pad transfer uses the same pending-interrupt path. Install a vector
+    // and unmask only the pad bit, then let the fourth tick raise and deliver.
+    native_ram.write32(0x80u, 0x401A7000u);
+    oracle_ram.write32(0x80u, 0x401A7000u);
+    native.hardware().write32(0x1F801074u, 0x80u);
+    oracle.hardware().write32(0x1F801074u, 0x80u);
+    native.hardware().pad_byte_received();
+    oracle.hardware().pad_byte_received();
+    for (int index = 0; index < 4; ++index) {
+        // The event-only native tick does not execute the oracle's nop, so keep
+        // the two PCs aligned for the exception's EPC.
+        native_cpu.pc = oracle.cpu().pc;
+        native.event_tick(native_cpu);
+        oracle.run_event_step();
+    }
+    R6_CHECK(has_event(native.events(), "pad"));
+    R6_CHECK(has_event(oracle.events(), "pad"));
+    R6_CHECK(native_cpu.pc == 0x80000080u);
+    R6_CHECK(oracle.cpu().pc == 0x80000080u);
+    R6_CHECK(native.events().same_as(oracle.events()));
+}
+
+void run_cd_dma_interrupt_event_trace_test() {
+    for (const auto bit : {1u << 2, 1u << 3}) {
+        Memory native_ram(2u * 1024u * 1024u, true);
+        Memory oracle_ram(2u * 1024u * 1024u, true);
+        EventTestServices native_services;
+        EventTestServices oracle_services;
+        r6::NativeBus native(native_ram, native_services);
+        r6::MipsInterpreter oracle(oracle_ram, oracle_services);
+        CpuState native_cpu{};
+        native_cpu.pc = 0x80010000u;
+        native_cpu.cop0[12] = 0x00000401u;
+        oracle.cpu() = native_cpu;
+        oracle.set_cop0(native_cpu.cop0);
+        native_ram.write32(0x80u, 0x401A7000u);
+        oracle_ram.write32(0x80u, 0x401A7000u);
+        seed_pending_interrupt(native.hardware(), bit);
+        seed_pending_interrupt(oracle.hardware(), bit);
+        R6_CHECK(native.event_tick(native_cpu));
+        const auto result = oracle.run_event_step();
+        R6_CHECK(result.reason == r6::StopReason::step_budget);
+        R6_CHECK(native_cpu.pc == 0x80000080u);
+        R6_CHECK(oracle.cpu().pc == 0x80000080u);
+        R6_CHECK(native.events().same_as(oracle.events()));
+    }
+}
+
+bool has_event(const r6::EventTrace& trace, const std::string& name) {
+    for (const auto& event : trace.events()) {
+        if (event == name) return true;
+    }
+    return false;
+}
+
+void seed_pending_interrupt(r6::HardwareMap& hardware,
+                            std::uint32_t bit = 1u << 0) {
+    hardware.write32(0x1F801074u, 0x7FFu);  // I_MASK
+    hardware.raise_interrupt(bit);
+}
+
+void run_interrupt_event_trace_test() {
+    Memory native_ram(2u * 1024u * 1024u, true);
+    Memory oracle_ram(2u * 1024u * 1024u, true);
+    EventTestServices native_services;
+    EventTestServices oracle_services;
+    r6::NativeBus native(native_ram, native_services);
+    r6::MipsInterpreter oracle(oracle_ram, oracle_services);
+
+    CpuState native_cpu{};
+    native_cpu.pc = 0x80010000u;
+    native_cpu.cop0[12] = 0x00000401u;
+    native_cpu.gpr[4] = 0x1234u;
+    auto& oracle_cpu = oracle.cpu();
+    oracle_cpu = native_cpu;
+    oracle.set_cop0(native_cpu.cop0);
+
+    native_ram.write32(0x80u, 0x401A7000u);  // mfc0 k0, EPC
+    oracle_ram.write32(0x80u, 0x401A7000u);
+    seed_pending_interrupt(native.hardware());
+    seed_pending_interrupt(oracle.hardware());
+
+    R6_CHECK(native.event_tick(native_cpu));
+    const auto result = oracle.run_event_step();
+    R6_CHECK(result.reason == r6::StopReason::step_budget);
+    R6_CHECK(native_cpu.pc == 0x80000080u);
+    R6_CHECK(oracle_cpu.pc == 0x80000080u);
+    R6_CHECK(native_cpu.cop0[14] == 0x80010000u);
+    R6_CHECK(oracle.cop0(14) == 0x80010000u);
+    R6_CHECK(native_cpu.cop0[12] == 0x00000404u);
+    R6_CHECK(oracle.cop0(12) == 0x00000404u);
+    R6_CHECK(native.events().same_as(oracle.events()));
+
+    // B(17h) from the handler resumes at EPC and restores the saved context.
+    native_cpu.gpr[9] = 0x17u;
+    native_services.bios.dispatch(r6::BiosTable::b0, native_cpu, native_ram);
+    R6_CHECK(native.take_bios_return(native_cpu));
+    R6_CHECK(native_cpu.pc == 0x80010000u);
+    R6_CHECK(native_cpu.cop0[12] == 0x00000401u);
+    R6_CHECK(native_cpu.gpr[4] == 0x1234u);
+
+    oracle_cpu.pc = 0xB0u;
+    oracle_cpu.gpr[9] = 0x17u;
+    const auto returned = oracle.run_event_step();
+    R6_CHECK(returned.reason == r6::StopReason::step_budget);
+    R6_CHECK(oracle_cpu.pc == 0x80010000u);
+    R6_CHECK(oracle.cop0(12) == 0x00000401u);
+    R6_CHECK(oracle_cpu.gpr[4] == 0x1234u);
+    R6_CHECK(native.events().same_as(oracle.events()));
+}
+
+void run_hook_entry_int_event_trace_test() {
+    Memory native_ram(2u * 1024u * 1024u, true);
+    Memory oracle_ram(2u * 1024u * 1024u, true);
+    EventTestServices native_services;
+    EventTestServices oracle_services;
+    r6::NativeBus native(native_ram, native_services);
+    r6::MipsInterpreter oracle(oracle_ram, oracle_services);
+
+    CpuState native_cpu{};
+    native_cpu.pc = 0x80010000u;
+    native_cpu.cop0[12] = 0x00000401u;
+    auto& oracle_cpu = oracle.cpu();
+    oracle_cpu = native_cpu;
+    oracle.set_cop0(native_cpu.cop0);
+
+    for (auto* ram : {&native_ram, &oracle_ram}) {
+        ram->write32(0x20000u, 0x80002000u);  // EntryInt pc
+        ram->write32(0x20004u, 0x80030000u);  // SP
+        for (std::uint32_t index = 0; index < 10; ++index) {
+            ram->write32(0x20008u + index * 4u, 0x80000000u + index);
+        }
+    }
+    native_cpu.gpr[9] = 0x19u;
+    native_cpu.gpr[4] = 0x20000u;
+    oracle_cpu.gpr[9] = 0x19u;
+    oracle_cpu.gpr[4] = 0x20000u;
+    native_services.bios.dispatch(r6::BiosTable::b0, native_cpu, native_ram);
+    oracle_services.bios.dispatch(r6::BiosTable::b0, oracle_cpu, oracle_ram);
+    R6_CHECK(native_services.bios.entry_int() == 0x20000u);
+    R6_CHECK(oracle_services.bios.entry_int() == 0x20000u);
+    native_cpu.pc = 0x80010000u;
+    oracle_cpu.pc = 0x80010000u;
+    seed_pending_interrupt(native.hardware());
+    seed_pending_interrupt(oracle.hardware());
+
+    R6_CHECK(native.event_tick(native_cpu));
+    const auto result = oracle.run_event_step();
+    R6_CHECK(result.reason == r6::StopReason::step_budget);
+    R6_CHECK(native_cpu.pc == 0x80002000u);
+    R6_CHECK(oracle_cpu.pc == 0x80002000u);
+    R6_CHECK(native_cpu.gpr[2] == 1u);
+    R6_CHECK(oracle_cpu.gpr[2] == 1u);
+    R6_CHECK(native_cpu.gpr[29] == 0x80030000u);
+    R6_CHECK(oracle_cpu.gpr[29] == 0x80030000u);
+    R6_CHECK(native.events().same_as(oracle.events()));
 }
 
 void run_ram_snapshot_round_trip() {
@@ -229,5 +453,9 @@ void run_native_runtime_tests() {
     run_memory_snapshot_test();
     run_device_state_test();
     run_scratchpad_and_dma_test();
+    run_interrupt_event_trace_test();
+    run_hook_entry_int_event_trace_test();
+    run_vblank_and_pad_event_trace_test();
+    run_cd_dma_interrupt_event_trace_test();
     run_ram_snapshot_round_trip();
 }

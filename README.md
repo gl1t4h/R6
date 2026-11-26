@@ -23,7 +23,7 @@ images that are never included in this repository.
 | CD-ROM / DMA | In progress | DMA3 disc reads, CD command responses, and sector delivery are implemented enough for early file streaming; timing-sensitive loader behavior is still being debugged. |
 | GPU / display | In progress | Software GPU handles common GP0/GP1 commands and presents a VRAM display window; guest scene submission depends on further CPU/GTE/timing coverage. |
 | GTE / COP2 | In progress | RTPS/RTPT, NCLIP, AVSZ3/4, MVMVA and SQR compute with the documented saturation and FLAG behaviour, as do the lighting commands NCS, NCCS, NCDS and their triple forms NCT, NCCT and NCDT; the colour commands that work from existing IR (CC, CDP, DPCS, DPCT, INTPL, DCPL) are counted per opcode and named in the `r6-run` report. See `docs/gte-scope.md`. |
-| Native translation | Boot and loaded-image slices | `tools/generate-native-stub.py` emits one native function per basic block, and `r6-native` executes them through the dispatcher. The bootstrap runs 1,975 blocks while matching the interpreter's registers, HI/LO and 2 MiB RAM, then stops at `InitHeap`. A 130M-instruction RAM snapshot starts the resident main at `0x80032EE0`; the 4,361-block loaded slice matched 200,000 blocks with GPRs, HI/LO, COP0, hardware registers, GTE, scratchpad, BIOS bookkeeping and all RAM compared after every block. Native DMA2/3/4 transfers complete like the interpreter's. One native bus and one interpreter persist COP0, hardware, GTE/scratchpad and BIOS state across block boundaries, so the run advances to `0x800154CC` instead of resetting into the `0x80013130` wait. The startup trace does not reach the mode dispatcher at `0x80087360`; a targeted mode-3 checkpoint does, reading `0x8002AB60` and executing `0x80087448`. Generated code stays outside the repository. |
+| Native translation | Boot and loaded-image slices | `tools/generate-native-stub.py` emits one native function per basic block, and `r6-native` executes them through the dispatcher. The bootstrap runs 1,975 blocks while matching the interpreter's registers, HI/LO and 2 MiB RAM, then stops at `InitHeap`. A 130M-instruction RAM snapshot starts the resident main at `0x80032EE0`; the 4,384-block event-aware loaded slice matched 200,000 blocks with GPRs, HI/LO, COP0, hardware registers, GTE, scratchpad, BIOS bookkeeping, an ordered VBlank/pad/DMA/interrupt event trace (326,004 events in the 200k VBlank run) and all RAM compared after every block. Native VBlank, pad and CD/DMA delivery share the interpreter's COP0 exception path, including HookEntryInt and ReturnFromException; DMA2/3/4 transfers complete like the interpreter's. One native bus and one interpreter persist COP0, hardware, GTE/scratchpad and BIOS state across block boundaries, so the run advances to `0x800154CC` instead of resetting into the `0x80013130` wait. The startup trace does not reach the mode dispatcher at `0x80087360`; a targeted mode-3 checkpoint does, reading `0x8002AB60` and executing `0x80087448`. Generated code stays outside the repository. |
 | Native player | In progress | `r6-player` is the development interpreter front end; it presents the reference display, not a recompiled build. |
 
 Progress is measured by bring-up milestones, not playable game content. On-screen
@@ -179,14 +179,16 @@ python .\tools\generate-native-stub.py `
 
 .\build-native\Release\r6-native.exe `
   --snapshot "$env:USERPROFILE\R6-local\game.snap" `
-  --entry 0x80032EE0 --blocks 200000
+  --entry 0x80032EE0 --blocks 200000 --vblank
 ```
 
 The snapshot is `R6S1` (GPRs, HI/LO, PC and 2 MiB RAM) and stays outside the
-repository. Indirect entries such as BIOS stubs are added with
-`--extra-entry ADDRESS`; the Silent Hill loaded slice emits 4,361 blocks and
-matched 200,000 executed blocks. The runner keeps one native bus and one
-oracle interpreter alive, so COP0, hardware, GTE/scratchpad and BIOS state
+repository. Generated blocks poll VBlank, pad and interrupt events before every
+instruction, and the oracle uses the matching event-step mode so the ordered
+traces must agree. Indirect entries such as BIOS stubs are added with
+`--extra-entry ADDRESS`; the Silent Hill loaded slice emits 4,384 event-aware blocks and
+matched 200,000 executed blocks, including a 326,004-event ordered trace and its full-stream fingerprint. The runner
+keeps one native bus and one oracle interpreter alive, so COP0, hardware, GTE/scratchpad and BIOS state
 persist across block boundaries instead of resetting at each checkpoint. The
 run advances to `0x800154CC`; the earlier per-block-reset 3,316-block slice
 parked at `0x80013130`. The startup trace still does not reach the resident

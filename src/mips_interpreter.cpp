@@ -347,6 +347,11 @@ void MipsInterpreter::deliver_interrupt() {
     const auto entry_pc = entry_int != 0 ? read32(entry_int) : 0;
     if (vector == 0 && entry_pc == 0) {
         ++missing_vectors_;
+        char event[96];
+        std::snprintf(event, sizeof(event),
+                      "missing_vector pending=0x%08X pc=0x%08X", pending,
+                      cpu_.pc);
+        events_.record(event);
         if (interrupt_log_.size() < 6) {
             interrupt_log_.push_back(
                 "no handler at 0x" + format_hex(kExceptionVector) +
@@ -399,6 +404,12 @@ void MipsInterpreter::deliver_interrupt() {
             format_hex(cop0_[14]));
     }
     ++interrupts_delivered_;
+    char event[128];
+    std::snprintf(event, sizeof(event),
+                  "%s pending=0x%08X epc=0x%08X target=0x%08X",
+                  vector != 0 ? "interrupt" : "entryint", pending,
+                  cop0_[14], cpu_.pc);
+    events_.record(event);
 }
 
 void MipsInterpreter::return_from_exception() {
@@ -441,6 +452,7 @@ void MipsInterpreter::poll_vblank() {
     ++vblank_count_;
     hardware_.toggle_gpu_field();
     hardware_.raise_interrupt(kVblankBit);
+    events_.record("vblank");
 }
 
 void MipsInterpreter::run_dma3_transfer() {
@@ -479,6 +491,7 @@ void MipsInterpreter::run_dma3_transfer() {
     // only once a channel-3 handler actually exists.
     if (read32(0x800B4394u) != 0) {
         hardware_.complete_dma(3);
+        events_.record("dma3");
     }
 }
 
@@ -489,6 +502,7 @@ void MipsInterpreter::run_dma4_transfer() {
     // its EvSpu event before it will finish initialising.
     ++dma_words_;
     hardware_.complete_dma(4);
+    events_.record("dma4");
 }
 
 void MipsInterpreter::run_dma2_list() {
@@ -525,6 +539,13 @@ std::string MipsInterpreter::format_hex(std::uint32_t value) {
     return buffer;
 }
 
+RunResult MipsInterpreter::run_event_step() {
+    stop_after_event_ = true;
+    auto result = run(1);
+    stop_after_event_ = false;
+    return result;
+}
+
 RunResult MipsInterpreter::run(std::uint64_t max_steps) {
     RunResult result;
 
@@ -556,7 +577,7 @@ RunResult MipsInterpreter::run(std::uint64_t max_steps) {
             // poll interval would otherwise never see the field counter move.
             // Polling does not touch the PC, so it is safe here.
             if (vblank_enabled_) poll_vblank();
-            hardware_.pad_tick();
+            if (hardware_.pad_tick()) events_.record("pad");
         }
 
         if (in_interrupt_) {
@@ -614,7 +635,14 @@ RunResult MipsInterpreter::run(std::uint64_t max_steps) {
             // The handler jump replaced cpu_.pc, so current_pc is stale: restart
             // the iteration and execute the handler instead of the instruction
             // that was interrupted.
-            if (in_interrupt_) continue;
+            if (in_interrupt_) {
+                if (stop_after_event_) {
+                    result.reason = StopReason::step_budget;
+                    result.pc = cpu_.pc;
+                    return result;
+                }
+                continue;
+            }
         }
 
         if (current_pc == 0) {
@@ -632,6 +660,7 @@ RunResult MipsInterpreter::run(std::uint64_t max_steps) {
                 cpu_.pc = cop0_[14];
                 restore_interrupt_context();
                 in_interrupt_ = false;
+                events_.record("bios_return");
             } else {
                 cpu_.pc = cpu_.gpr[31];
             }
@@ -940,6 +969,7 @@ MipsInterpreter::StepResult MipsInterpreter::execute(
                 cop0_[rd] = gpr[rt];
             } else if ((instruction & 0x3Fu) == 0x10) {  // rfe
                 return_from_exception();
+                events_.record("rfe");
                 result.returned_from_exception = true;
             } else {
                 result.unsupported = true;

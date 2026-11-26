@@ -7,6 +7,7 @@
 #include <unordered_map>
 
 #include "r6/cpu_state.h"
+#include "r6/event_trace.h"
 #include "r6/gte.h"
 #include "r6/hardware_map.h"
 #include "r6/memory.h"
@@ -20,7 +21,7 @@ namespace r6 {
 class NativeBus {
 public:
     NativeBus(Memory& ram, PlatformServices& services)
-        : ram_(ram), hardware_(services) {
+        : ram_(ram), services_(services), hardware_(services) {
         // Match the interpreter's kernel hand-off: the disc controller asserts
         // its interrupt line once its enable bit has been programmed.
         hardware_.set_cdrom_interrupt_enabled(true);
@@ -184,6 +185,57 @@ public:
         hardware_.advance_cycles(count);
     }
 
+    // Generated blocks call this at the start of every instruction. It mirrors
+    // the interpreter's single-step event poll: pad/vblank ticks happen before
+    // the instruction, and a pending unmasked interrupt replaces the PC. A
+    // delay slot calls with allow_interrupt=false, matching the interpreter's
+    // rule that a branch and its delay slot are atomic for interrupt entry.
+    bool event_tick(CpuState& cpu, bool allow_interrupt = true) {
+        if (vblank_enabled_) poll_vblank();
+        if (hardware_.pad_tick()) events_.record("pad");
+        if (in_interrupt_) {
+            // Match the interpreter's handler-budget unwind: a handler that
+            // never returns is dropped back to EPC instead of blocking the
+            // interrupted stream forever.
+            if (++interrupt_steps_ > kInterruptStepBudget) {
+                cpu.pc = cpu.cop0[14];
+                cpu.cop0[12] = interrupt_saved_sr_;
+                restore_interrupt_context(cpu);
+                in_interrupt_ = false;
+                if (++interrupt_overruns_ >= kMaxInterruptOverruns) {
+                    interrupts_enabled_ = false;
+                }
+                // Abort the current block so the next dispatch starts at EPC.
+                return true;
+            }
+            return false;
+        }
+        if (!allow_interrupt) return false;
+        return deliver_interrupt(cpu);
+    }
+
+    void set_vblank_enabled(bool enabled) { vblank_enabled_ = enabled; }
+    bool in_interrupt() const { return in_interrupt_; }
+    const EventTrace& events() const { return events_; }
+    std::uint64_t interrupts() const { return interrupts_delivered_; }
+    std::uint64_t missing_vectors() const { return missing_vectors_; }
+
+    // RFE: pop the SR mode stack. The generated block advances the PC itself.
+    void rfe(CpuState& cpu) {
+        const auto status = cpu.cop0[12];
+        cpu.cop0[12] = (status & ~0x3Fu) | ((status >> 2) & 0xFu);
+        in_interrupt_ = false;
+        events_.record("rfe");
+    }
+
+    // B(17h) ReturnFromException ends the exception and resumes at EPC.
+    bool take_bios_return(CpuState& cpu) {
+        if (!services_.take_return_from_exception()) return false;
+        if (!in_interrupt_) return false;
+        finish_exception(cpu);
+        return true;
+    }
+
     HardwareMap& hardware() { return hardware_; }
     const HardwareMap& hardware() const { return hardware_; }
     Gte& gte() { return gte_; }
@@ -240,6 +292,108 @@ public:
     }
 
 private:
+    void poll_vblank() {
+        constexpr std::uint32_t kVblankBit = 1u << 0;
+        constexpr std::uint64_t kVblankPeriodCycles = 564480u;
+
+        ++vblank_polls_;
+        const auto now = hardware_.cycles();
+        if (vblank_next_ == 0) {
+            vblank_next_ = now + kVblankPeriodCycles;
+            return;
+        }
+        if (now < vblank_next_) return;
+        vblank_next_ = now + kVblankPeriodCycles;
+        ++vblank_count_;
+        hardware_.toggle_gpu_field();
+        hardware_.raise_interrupt(kVblankBit);
+        events_.record("vblank");
+    }
+
+    bool deliver_interrupt(CpuState& cpu) {
+        if (!interrupts_enabled_) return false;
+        const auto status = cpu.cop0[12];
+        if ((status & 0x1u) == 0 || (status & 0x400u) == 0) return false;
+        const auto pending = hardware_.interrupt_status() &
+                             hardware_.interrupt_mask();
+        if (pending == 0) return false;
+
+        static constexpr std::uint32_t kExceptionVector = 0x80000080u;
+        const auto vector = ram_.read32(kExceptionVector & kRamMask);
+        const auto entry_int = services_.entry_int();
+        const auto entry_pc = entry_int != 0
+                                  ? ram_.read32(entry_int & kRamMask)
+                                  : 0;
+        if (vector == 0 && entry_pc == 0) {
+            ++missing_vectors_;
+            char event[96];
+            std::snprintf(event, sizeof(event),
+                          "missing_vector pending=0x%08X pc=0x%08X", pending,
+                          cpu.pc);
+            events_.record(event);
+            return false;
+        }
+
+        interrupt_saved_sr_ = status;
+        cpu.cop0[14] = cpu.pc;
+        cpu.cop0[13] = (cpu.cop0[13] & ~0x0000FF7Cu) | 0x00000400u;
+        cpu.cop0[12] = (status & ~0x3Fu) | ((status & 0x0Fu) << 2);
+        save_interrupt_context(cpu);
+        if (vector != 0) {
+            cpu.pc = kExceptionVector;
+        } else {
+            cpu.gpr[31] = ram_.read32(entry_int & kRamMask);
+            cpu.gpr[29] = ram_.read32((entry_int + 4) & kRamMask);
+            cpu.gpr[30] = ram_.read32((entry_int + 8) & kRamMask);
+            for (std::uint32_t index = 0; index < 8; ++index) {
+                cpu.gpr[16 + index] =
+                    ram_.read32((entry_int + 12 + index * 4) & kRamMask);
+            }
+            cpu.gpr[28] = ram_.read32((entry_int + 0x2C) & kRamMask);
+            cpu.gpr[2] = 1;
+            cpu.pc = entry_pc;
+        }
+        in_interrupt_ = true;
+        interrupt_steps_ = 0;
+        ++interrupts_delivered_;
+
+        char event[128];
+        std::snprintf(event, sizeof(event),
+                      "%s pending=0x%08X epc=0x%08X target=0x%08X",
+                      vector != 0 ? "interrupt" : "entryint", pending,
+                      cpu.cop0[14], cpu.pc);
+        events_.record(event);
+        return true;
+    }
+
+    void finish_exception(CpuState& cpu) {
+        const auto status = cpu.cop0[12];
+        cpu.cop0[12] = (status & ~0x3Fu) | ((status >> 2) & 0xFu);
+        cpu.pc = cpu.cop0[14];
+        restore_interrupt_context(cpu);
+        in_interrupt_ = false;
+        events_.record("bios_return");
+    }
+
+    void save_interrupt_context(CpuState& cpu) {
+        for (std::size_t index = 0; index < 32; ++index) {
+            interrupt_gpr_[index] = cpu.gpr[index];
+        }
+        interrupt_lo_ = cpu.lo;
+        interrupt_hi_ = cpu.hi;
+        interrupt_context_valid_ = true;
+    }
+
+    void restore_interrupt_context(CpuState& cpu) {
+        if (!interrupt_context_valid_) return;
+        for (std::size_t index = 0; index < 32; ++index) {
+            cpu.gpr[index] = interrupt_gpr_[index];
+        }
+        cpu.lo = interrupt_lo_;
+        cpu.hi = interrupt_hi_;
+        interrupt_context_valid_ = false;
+    }
+
     // DMA2 walks a packet list in main RAM and forwards its payload to GP0.
     void run_dma2_list() {
         constexpr std::uint32_t kEndMarker = 0x00FFFFFFu;
@@ -286,11 +440,15 @@ private:
         // handler is installed in the streaming table.
         if (ram_.read32(0x800B4394u & kRamMask) != 0) {
             hardware_.complete_dma(3);
+            events_.record("dma3");
         }
     }
 
     // DMA4's SPU data is not consumed yet, but its completion flag is.
-    void run_dma4_transfer() { hardware_.complete_dma(4); }
+    void run_dma4_transfer() {
+        hardware_.complete_dma(4);
+        events_.record("dma4");
+    }
 
     static void note_watch(std::uint32_t address, const char* kind) {
         if (watch_address_ == 0) return;
@@ -312,11 +470,30 @@ private:
     static constexpr std::uint32_t kScratchpadMask = 0x3FFu;
     static constexpr std::uint32_t kHardwareBase = 0x1F801000u;
     static constexpr std::uint32_t kHardwareEnd = 0x1F803000u;
+    static constexpr std::uint64_t kInterruptStepBudget = 2000000u;
+    static constexpr std::uint64_t kMaxInterruptOverruns = 1000u;
 
     Memory& ram_;
+    PlatformServices& services_;
     HardwareMap hardware_;
     Gte gte_;
     std::array<std::uint8_t, 0x400> scratchpad_{};
+    EventTrace events_;
+    bool vblank_enabled_{false};
+    std::uint64_t vblank_next_{0};
+    std::uint64_t vblank_polls_{0};
+    std::uint64_t vblank_count_{0};
+    bool interrupts_enabled_{true};
+    bool in_interrupt_{false};
+    std::uint32_t interrupt_saved_sr_{0};
+    std::array<std::uint32_t, 32> interrupt_gpr_{};
+    std::uint32_t interrupt_lo_{0};
+    std::uint32_t interrupt_hi_{0};
+    bool interrupt_context_valid_{false};
+    std::uint64_t interrupt_steps_{0};
+    std::uint64_t interrupt_overruns_{0};
+    std::uint64_t interrupts_delivered_{0};
+    std::uint64_t missing_vectors_{0};
 };
 
 using NativeBlock = std::uint32_t (*)(CpuState&, NativeBus&);

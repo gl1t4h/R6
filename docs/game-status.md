@@ -99,9 +99,11 @@ None.
 - **Loaded image:** A 130M-instruction `--vblank` run with `--dump-snapshot`
   captured the resident image. The loader's call to `0x80032EE0` is the real
   entry; it calls the resource startup at `0x8002E630`, then the resident
-  runtime. The persistent 4,361-block translation matched 200,000 executed
-  blocks on GPRs, HI/LO, COP0, hardware registers, GTE, scratchpad, BIOS
-  bookkeeping and all 2 MiB of RAM. One native bus and one oracle interpreter
+  runtime. The persistent 4,384-block event-aware translation matched 200,000
+  executed blocks on GPRs, HI/LO, COP0, hardware registers, GTE, scratchpad,
+  BIOS bookkeeping, an ordered 326,004-event VBlank/pad/DMA/interrupt trace
+  and all 2 MiB of RAM. The native bus takes the same COP0 exception path, including
+  HookEntryInt and ReturnFromException. One native bus and one oracle interpreter
   keep COP0, hardware, GTE/scratchpad and BIOS state across block boundaries. The run advances to `0x800154CC`;
   the earlier reset-per-block 3,316-block slice parked at `0x80013130`.
   The startup trace still does not execute the dispatcher at `0x80087360`.

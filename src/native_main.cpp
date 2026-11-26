@@ -63,8 +63,13 @@ public:
         bios_.dispatch(table, cpu, memory);
         return true;
     }
+    std::uint32_t entry_int() override { return bios_.entry_int(); }
+    bool take_return_from_exception() override {
+        return bios_.take_return_from_exception();
+    }
 
     const r6::BiosServices& bios() const { return bios_; }
+    r6::BiosServices& bios() { return bios_; }
 
 private:
     r6::BiosServices bios_;
@@ -246,6 +251,7 @@ int run_native(
     std::uint64_t oracle_steps,
     bool compare,
     bool verbose,
+    bool vblank,
     std::uint32_t watch_address) {
 #ifdef R6_HAS_GENERATED_TRANSLATION
     Boot boot;
@@ -306,6 +312,7 @@ int run_native(
     // across block boundaries instead of resetting at each checkpoint.
     NativePlatformServices native_services;
     r6::NativeBus native_bus(native_ram, native_services);
+    native_bus.set_vblank_enabled(vblank);
     r6::NativeBus::set_watch_address(watch_address);
 
     r6::Memory oracle_ram = boot.ram;
@@ -315,6 +322,7 @@ int run_native(
     oracle = boot.initial;
     oracle.pc = start_pc;
     reference.set_cop0(boot.initial.cop0);
+    reference.set_vblank_enabled(vblank);
 
     std::uint64_t matched = 0;
     bool failed = false;
@@ -331,12 +339,20 @@ int run_native(
         const auto before_cpu = native;
         try {
             if (bios) {
-                if (!native_services.bios_call(native.pc, native, native_ram)) {
+                // BIOS service is a step like any other: poll events first. If
+                // an interrupt is taken, the service is not entered.
+                if (native_bus.event_tick(native, true)) {
+                    // The interrupt handler replaced the PC.
+                } else if (!native_services.bios_call(native.pc, native,
+                                                       native_ram)) {
                     report_stop(native);
                     reached_stop = true;
                     break;
+                } else if (native_bus.take_bios_return(native)) {
+                    // B(17h): ReturnFromException resumes at EPC.
+                } else {
+                    native.pc = native.gpr[31];
                 }
-                native.pc = native.gpr[31];
             } else {
                 native.pc = dispatcher.step(native, native_bus);
             }
@@ -361,7 +377,7 @@ int run_native(
 
             bool reached = false;
             for (std::uint64_t step = 0; step < oracle_steps; ++step) {
-                const auto result = reference.run(1);
+                const auto result = reference.run_event_step();
                 if (result.reason != r6::StopReason::step_budget) {
                     std::cout << "Oracle stopped at " << hex32(result.pc)
                               << " with reason "
@@ -436,6 +452,15 @@ int run_native(
                 failed = true;
                 break;
             }
+            const auto event_difference =
+                native_bus.events().difference(reference.events());
+            if (!event_difference.empty()) {
+                std::cout << "Event trace mismatch after block " << block
+                          << " (native PC " << hex32(native.pc) << "): "
+                          << event_difference << "\n";
+                failed = true;
+                break;
+            }
             if (!native_ram.same_data(oracle_ram)) {
                 print_ram_difference(native_ram.snapshot(), oracle_ram.snapshot());
                 std::cout << "RAM mismatch after block " << block << " (native PC "
@@ -460,7 +485,11 @@ int run_native(
         std::cout << "Differential check: " << matched << " block(s) matched"
                   << (failed ? " before the first mismatch" : "")
                   << " (registers, HI/LO, COP0, hardware, GTE,"
-                     " scratchpad, BIOS, 2 MiB RAM)\n";
+                     " scratchpad, BIOS, event trace, 2 MiB RAM)\n";
+        std::cout << "Event trace: " << native_bus.events().total_events()
+                  << " native event(s), "
+                  << reference.events().total_events()
+                  << " oracle event(s)\n";
     }
     if (watch_address != 0) {
         std::cout << "Watch hits: " << r6::NativeBus::watch_hits() << "\n";
@@ -492,6 +521,7 @@ int main(int argc, char** argv) {
     std::uint64_t oracle_steps = 100000;
     bool compare = true;
     bool verbose = false;
+    bool vblank = false;
     std::uint32_t watch_address = 0;
 
     for (int index = 1; index < argc; ++index) {
@@ -509,6 +539,8 @@ int main(int argc, char** argv) {
             compare = false;
         } else if (argument == "--verbose") {
             verbose = true;
+        } else if (argument == "--vblank") {
+            vblank = true;
         } else if (argument == "--watch-address" && index + 1 < argc) {
             watch_address = static_cast<std::uint32_t>(
                 std::stoul(argv[++index], nullptr, 0));
@@ -521,7 +553,7 @@ int main(int argc, char** argv) {
         std::cerr
             << "usage: r6-native <game.cue|game.bin|game.chd> [--entry 0xADDR]"
                " [--blocks N] [--oracle-steps N] [--no-compare] [--verbose]"
-               " [--watch-address 0xADDR]\n"
+               " [--vblank] [--watch-address 0xADDR]\n"
                "       r6-native --snapshot RAM.snap [--entry 0xADDR]"
                " [--blocks N]\n"
             << "Runs the locally generated native translation and compares it"
@@ -529,5 +561,5 @@ int main(int argc, char** argv) {
         return 2;
     }
     return run_native(input, snapshot_path, entry_override, blocks,
-                      oracle_steps, compare, verbose, watch_address);
+                      oracle_steps, compare, verbose, vblank, watch_address);
 }

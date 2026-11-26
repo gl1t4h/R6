@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "r6/cpu_state.h"
+#include "r6/event_trace.h"
 #include "r6/gte.h"
 #include "r6/hardware_map.h"
 #include "r6/memory.h"
@@ -52,6 +53,10 @@ public:
     const CpuState& cpu() const { return cpu_; }
 
     RunResult run(std::uint64_t max_steps);
+    // One differential step: unlike run(1), stop immediately after taking an
+    // interrupt instead of executing the first handler instruction. This lets
+    // an event-aware native block and the oracle meet at the same PC.
+    RunResult run_event_step();
 
     std::uint64_t gte_commands() const { return gte_commands_; }
     std::uint64_t gte_unsupported_commands() const {
@@ -101,6 +106,7 @@ public:
     const std::vector<std::string>& interrupt_log() const {
         return interrupt_log_;
     }
+    const EventTrace& events() const { return events_; }
     const std::vector<std::vector<std::uint32_t>>& irq_traces() const {
         return irq_traces_;
     }
@@ -260,6 +266,7 @@ private:
     bool bad_heap_logged_ = false;
     std::vector<std::uint32_t> cdrom_polls_;
     std::vector<std::string> interrupt_log_;
+    EventTrace events_;
 
     std::vector<std::uint32_t> recent_pcs_;
     std::vector<std::uint32_t> recent_calls_;
@@ -279,6 +286,7 @@ private:
     // interpreter can be single-stepped for differential checks.
     bool in_delay_slot_{false};
     std::uint32_t delay_target_{0};
+    bool stop_after_event_{false};
     bool in_interrupt_{false};
     std::uint64_t interrupt_steps_{0};
     // Long enough for the CD streaming dispatcher, short enough to catch a
