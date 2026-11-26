@@ -617,6 +617,33 @@ RunResult MipsInterpreter::run(std::uint64_t max_steps) {
                 std::fputc(10, stdout);
             }
         }
+        if (trace_sync && current_pc == 0x80086824u) {
+            static int lk_hits = 0;
+            if (lk_hits < 8) {
+                ++lk_hits;
+                const auto base = cpu_.gpr[5];
+                const auto index = cpu_.gpr[2];
+                const auto ea = (base + index - 2372u) & 0x1FFFFFu;
+                std::printf("LK %llu base=%08X idx=%08X ea=%08X val=%08X a0=%08X",
+                            static_cast<unsigned long long>(hardware_.cycles()),
+                            base, index, ea, ram_.read32(ea), cpu_.gpr[4]);
+                std::fputc(10, stdout);
+            }
+        }
+        if (trace_sync && current_pc == 0x80086838u) {
+            static int rec_hits = 0;
+            if (rec_hits < 6) {
+                ++rec_hits;
+                const auto s0 = cpu_.gpr[16];
+                std::printf("WR %llu s0=%08X rec=",
+                            static_cast<unsigned long long>(hardware_.cycles()), s0);
+                for (int k = 0; k < 8; ++k) {
+                    std::printf("%02X", ram_.read8(s0 + k));
+                }
+                std::printf(" pos=%08X", cpu_.gpr[5]);
+                std::fputc(10, stdout);
+            }
+        }
         if (trace_sync && current_pc == 0x80086A6Cu) {
             static int call_hits = 0;
             if (call_hits < 12) {

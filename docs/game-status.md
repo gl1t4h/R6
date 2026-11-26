@@ -461,6 +461,27 @@ window body shows those counters plus how many disc sectors have been read.
   each pair zeroed, while the payload the controller hands out and the disc
   itself are both already verified correct.
 
+- **DMA3 lands correctly; the earlier lane claim is retracted.** `W3` lines
+  (behind `R6_TRACE_DMA3`) print every destination word the channel-3 transfer
+  writes. For sector 16: `000C0CE0 <- 30444301` (`01 43 44 30`, `CD001`),
+  `000C0CE4 <- 00013130`; for sector 18: `000C0CE0 <- 00160001` (`01 00 16 00`),
+  `000C0CE4 <- 00010000`, `000C0CEC <- 0001F52F`, `000C0CF0 <- 49430001`
+  (`01 00 43 49`). Destination address and byte order both match the disc, so
+  there is no halfword-lane defect -- the buffer state seen at the read entry
+  earlier was a different moment in the transfer.
+- **The buffer is byte-exact where it matters.** RAM taken straight from
+  `--dump-state` snapshots at 1.26M, 1.28M and 1.29M cycles reads
+  `01 43 44 30 30 31 01 00 ...` (the PVD), then `01 00 16 00 00 00 01 00 ...`
+  (LBA 18) -- identical to the interpreter. The `0C 0C ...` content appears
+  only after the third read, which fetches sector 66454, so `0x0C` is that
+  junk sector's payload and a symptom, not a cause.
+- **The bad extent comes from a table, not the buffer.** The read is issued at
+  `0x80086830` after `0x80086820 addu a1,a1,v0` / `0x80086824 lw a1,-2372(a1)`,
+  i.e. a lookup in the parsed directory table (`LK` trace). The interpreter's
+  lookup resolves to `0x800BF714` holding `2, 1, 0x0001F52F, "CINEMAS"`; by
+  1.40-1.50M cycles both runners hold that same four-field record, so the
+  parse itself agrees -- the port reads the entry while it is still unset.
+
 - **The one-ahead position fix that was tried and rejected:** the drain trace
   suggested the drive was reporting one sector past the one the guest held
   (`cd5C` 17/19/66455 against the interpreter's 16/18/22), so `present_sector`

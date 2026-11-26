@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstdint>
+#include <cstdlib>
 #include <cstdio>
 #include <stdexcept>
 #include <unordered_map>
@@ -469,9 +470,14 @@ private:
         if (blocks > 1) words *= blocks;
         if (words > kMaxWords) words = kMaxWords;
         const auto address = 0x80000000u | hardware_.dma_address(3);
+        const bool trace_dma3 = std::getenv("R6_TRACE_DMA3") != nullptr;
         for (std::uint32_t index = 0; index < words; ++index) {
-            ram_.write32((address + index * 4) & kRamMask,
-                         hardware_.cdrom().read_word());
+            const auto value = hardware_.cdrom().read_word();
+            const auto target = (address + index * 4) & kRamMask;
+            if (trace_dma3 && index < 12) {
+                std::fprintf(stderr, "W3 %08X <- %08X\n", target, value);
+            }
+            ram_.write32(target, value);
         }
         hardware_.refresh_cdrom_interrupt();
         // Match the interpreter: only raise the channel-3 completion when a

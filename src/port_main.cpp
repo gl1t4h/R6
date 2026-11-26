@@ -659,6 +659,36 @@ int run_headless(Host& host, std::uint64_t frames,
                               << std::endl;
                 }
             }
+            if (sync_trace && before == 0x80086824u) {
+                static int lk_hits = 0;
+                if (lk_hits < 8) {
+                    ++lk_hits;
+                    const auto base = host.cpu.gpr[5];
+                    const auto index = host.cpu.gpr[2];
+                    const auto ea = (base + index - 2372u) & 0x1FFFFFu;
+                    std::cout << "LK " << host.bus->hardware().cycles()
+                              << " base=" << hex32(base)
+                              << " idx=" << hex32(index)
+                              << " ea=" << hex32(ea) << " val="
+                              << hex32(host.ram.read32(ea)) << " a0="
+                              << hex32(host.cpu.gpr[4]) << std::endl;
+                }
+            }
+            if (sync_trace && before == 0x80086838u) {
+                static int rec_hits = 0;
+                if (rec_hits < 6) {
+                    ++rec_hits;
+                    const auto s0 = host.cpu.gpr[16];
+                    std::cout << "WR " << host.bus->hardware().cycles()
+                              << " s0=" << hex32(s0)
+                              << " rec=";
+                    for (int k = 0; k < 8; ++k) {
+                        std::cout << hex32(host.ram.read8(s0 + k)).substr(6);
+                    }
+                    std::cout << " pos=" << hex32(host.cpu.gpr[5])
+                              << std::endl;
+                }
+            }
             if (sync_trace && before == 0x80086A6Cu) {
                 static int call_hits = 0;
                 if (call_hits < 12) {
