@@ -91,11 +91,26 @@ None.
   (2,000,000 instructions by default; its test pins a small value). A
   130M-instruction run reads 1,402 sectors (LBA 102 through 1402) without
   loader retries, draws 217,138 GPU primitives (31,250 fills) and 91,379
-  VRAM pixels, and stops with the loader paused at LBA 1403 and the display
-  still disabled. The boot executable's startup is also translated one basic
-  block at a time: `r6-native` executed 1,975 generated blocks, matching the
+  VRAM pixels, and stops with the loader paused at LBA 1403. That run's
+  "display off" was the polarity bug described below, not the guest. The
+  boot executable's startup is also translated one basic block at a time:
+  `r6-native` executed 1,975 generated blocks, matching the
   interpreter's registers, HI/LO and all 2 MiB of RAM after every block, and
   stopped at the `InitHeap` BIOS entry `A(0x39)`.
+- **Display path:** GP1(03h) bit 0 is DMSK, where 0 enables the display and
+  1 disables it. The software GPU had this inverted, so Silent Hill's
+  per-frame `0x03000000` write (743 calls from `0x80095014`, plus the boot
+  call at `0x80010878`) was recorded as "display off". The model now honors
+  the documented polarity, and GPUSTAT bit 23 is set only while the display
+  is disabled. A 250M-instruction run reports `display on at 0,32`, but the
+  displayed 320x240 area is still empty: the primitive count is frozen at
+  217,138 from about 200M on, and the guest sits in main state
+  `0x800BCCBC=2` / substate `0x800BCCC0=1` at `0x800C9A84`, polling the pad
+  check at `0x800C9874`. The CD is idle after a Pause at LBA 17846. The
+  earlier claim that the fade rate (`0x800B8FEC`) was never written came
+  from reading the wrong address: the store is sign-extended to
+  `0x800A8FEC`, which holds `0x51`, and the fade machine at `0x800BCD0C`
+  completes its `3->4->5` and `6->7->0` cycles.
 - **Loaded image:** A 130M-instruction `--vblank` run with `--dump-snapshot`
   captured the resident image. The loader's call to `0x80032EE0` is the real
   entry; it calls the resource startup at `0x8002E630`, then the resident
@@ -113,9 +128,12 @@ None.
   watch read `0x8002AB60` exactly once. Native DMA2/3/4 channels now execute
   their transfers, and the per-block differential compares full hardware
   registers, GTE registers, scratchpad and BIOS bookkeeping, not just cycles.
-- **Next step:** Add the remaining device seams, starting with the movie path,
-  before chasing the frame loop. MDEC only becomes relevant if the captured
-  native path reaches it.
+- **Next step:** Implement the movie path (MDEC) before chasing the frame
+  loop. The display is enabled and the guest waits at the title/pad check
+  with an empty displayed buffer, so the first visible frame depends on the
+  video data the CD has already loaded rather than on the GPU or the sound
+  driver. After that, follow `0x800C9874`'s pad result through the title
+  transition.
 - **Playable native build:** No
 - **Distributed game assets:** No
 
