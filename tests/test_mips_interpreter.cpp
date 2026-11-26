@@ -667,6 +667,24 @@ void exception_vector_writes_are_traced() {
     }
 }
 
+void dma_interrupt_flags_are_write_one_to_clear() {
+    TestServices services;
+    r6::HardwareMap hardware(services);
+
+    hardware.complete_dma(3);
+    hardware.complete_dma(4);
+    auto dicr = hardware.read32(0x1F8010F4u);
+    R6_CHECK((dicr & (1u << 27)) != 0);
+    R6_CHECK((dicr & (1u << 28)) != 0);
+
+    // Acknowledge only channel 4.  Channel 3 must remain pending.
+    hardware.write32(0x1F8010F4u, (1u << 28) | 0x00900000u);
+    dicr = hardware.read32(0x1F8010F4u);
+    R6_CHECK((dicr & (1u << 28)) == 0);
+    R6_CHECK((dicr & (1u << 27)) != 0);
+    R6_CHECK((dicr & 0x00FFFFFFu) == 0x00900000u);
+}
+
 void syscall_critical_section_toggles_interrupts() {
     Memory ram(2u * 1024u * 1024u);
     TestServices services;
@@ -678,38 +696,18 @@ void syscall_critical_section_toggles_interrupts() {
     ram.write32(0x10004, 0x0000000Cu);  // syscall 1: enter critical section
     ram.write32(0x10008, 0x24040002u);  // addiu a0, zero, 2
     ram.write32(0x1000C, 0x0000000Cu);  // syscall 2: exit critical section
-
-    const auto result = interpreter.run(4);
-    R6_CHECK(result.reason == StopReason::step_budget);
-    R6_CHECK((interpreter.cop0_status() & 1u) != 0);
-}
-
-void nested_critical_section_keeps_interrupts_disabled() {
-    Memory ram(2u * 1024u * 1024u);
-    TestServices services;
-    MipsInterpreter interpreter(ram, services);
-    auto& cpu = interpreter.cpu();
-    cpu.pc = 0x80010000u;
-
-    // Start with IEc clear, as an interrupt handler or a nested driver section
-    // would find it. Neither exit may turn interrupts back on.
-    std::uint32_t cop0[32]{};
-    cop0[12] = 0x00000400u;
-    interpreter.set_cop0(cop0);
-
-    ram.write32(0x10000, 0x24040001u);  // addiu a0, zero, 1
-    ram.write32(0x10004, 0x0000000Cu);  // syscall 1: outer enter
-    ram.write32(0x10008, 0x24040001u);  // addiu a0, zero, 1
-    ram.write32(0x1000C, 0x0000000Cu);  // syscall 1: nested enter
     ram.write32(0x10010, 0x24040002u);  // addiu a0, zero, 2
-    ram.write32(0x10014, 0x0000000Cu);  // syscall 2: nested exit
-    ram.write32(0x10018, 0x24040002u);  // addiu a0, zero, 2
-    ram.write32(0x1001C, 0x0000000Cu);  // syscall 2: outer exit
+    ram.write32(0x10014, 0x0000000Cu);  // syscall 2 again
 
-    interpreter.run(6);
-    R6_CHECK((interpreter.cop0_status() & 1u) == 0);
     interpreter.run(2);
     R6_CHECK((interpreter.cop0_status() & 1u) == 0);
+    R6_CHECK(cpu.gpr[2] == 1u);
+    interpreter.run(2);
+    R6_CHECK((interpreter.cop0_status() & 1u) != 0);
+
+    // SYS(02h) is not a nesting counter: the retail BIOS always re-enables.
+    interpreter.run(2);
+    R6_CHECK((interpreter.cop0_status() & 1u) != 0);
 }
 
 }  // namespace
@@ -740,6 +738,6 @@ void run_mips_interpreter_tests() {
     interrupt_falls_back_to_entry_int();
     interrupt_overrun_returns_to_epc();
     exception_vector_writes_are_traced();
+    dma_interrupt_flags_are_write_one_to_clear();
     syscall_critical_section_toggles_interrupts();
-    nested_critical_section_keeps_interrupts_disabled();
 }

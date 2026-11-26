@@ -56,6 +56,13 @@ public:
         return last_unsupported_opcode_;
     }
     std::uint8_t last_gp1_command() const { return last_gp1_command_; }
+    std::uint32_t gp1_writes() const { return gp1_writes_; }
+    std::uint32_t display_enable_writes() const {
+        return display_enable_writes_;
+    }
+    std::uint32_t last_display_enable_word() const {
+        return last_display_enable_word_;
+    }
     bool display_enabled() const { return display_enabled_; }
     std::uint32_t fill_rectangles() const { return fill_rectangles_; }
     std::int32_t draw_area_left() const { return draw_area_left_; }
@@ -156,6 +163,9 @@ private:
     std::map<std::uint8_t, std::uint32_t> unsupported_by_opcode_;
     std::uint8_t last_unsupported_opcode_{0};
     std::uint8_t last_gp1_command_{0};
+    std::uint32_t gp1_writes_{0};
+    std::uint32_t display_enable_writes_{0};
+    std::uint32_t last_display_enable_word_{0};
 };
 
 }  // namespace r6

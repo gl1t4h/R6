@@ -233,8 +233,13 @@ public:
             }
         }
         if (address == hardware::kDmaInterrupt) {
-            // Channel flags are acknowledged by writing a zero, like I_STAT.
-            dma_interrupt_ &= value | ~0x7F000000u;
+            // DICR channel flags (bits 24-30) are acknowledged by writing a
+            // one, unlike I_STAT where a zero clears.  Lower bits are the
+            // writable channel-control fields; bit 31 is derived.
+            constexpr std::uint32_t kFlagMask = 0x7F000000u;
+            dma_interrupt_ &= ~(value & kFlagMask);
+            dma_interrupt_ =
+                (dma_interrupt_ & kFlagMask) | (value & 0x00FFFFFFu);
             return;
         }
         if (address == hardware::kSpuTransferAddress) {

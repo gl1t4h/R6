@@ -779,22 +779,13 @@ MipsInterpreter::StepResult MipsInterpreter::execute(
                     // a VBlank land in the middle of a driver section that is
                     // not reentrant, which corrupts the interrupt stack.
                     if (gpr[4] == 1) {
-                        if (critical_section_depth_ == 0) {
-                            critical_section_ie_ = (cop0_[12] & 1u) != 0;
-                        }
-                        ++critical_section_depth_;
-                        cop0_[12] &= ~1u;
+                        // BIOS SYS(01h): clear SR bits 2/10 and report whether
+                        // interrupts were enabled.  It is deliberately not a
+                        // nesting counter; SYS(02h) always re-enables.
+                        cpu_.gpr[2] = (cop0_[12] & 1u) != 0 ? 1u : 0u;
+                        cop0_[12] &= ~0x405u;
                     } else if (gpr[4] == 2) {
-                        if (critical_section_depth_ > 0) {
-                            --critical_section_depth_;
-                            if (critical_section_depth_ == 0) {
-                                if (critical_section_ie_) {
-                                    cop0_[12] |= 1u;
-                                } else {
-                                    cop0_[12] &= ~1u;
-                                }
-                            }
-                        }
+                        cop0_[12] |= 0x405u;
                     }
                     break;
                 case 0x0D:  // break

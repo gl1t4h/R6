@@ -636,7 +636,10 @@ int main(int argc, char** argv) {
               << gpu.display_area_x() << "," << gpu.display_area_y()
               << ", draw area " << gpu.draw_area_left() << ","
               << gpu.draw_area_top() << " to " << gpu.draw_area_right() << ","
-              << gpu.draw_area_bottom() << "\n"
+              << gpu.draw_area_bottom() << " (GP1 " << gpu.gp1_writes()
+              << " writes, display-enable " << gpu.display_enable_writes()
+              << " writes, last=0x" << std::hex
+              << gpu.last_display_enable_word() << std::dec << ")\n"
               << "GTE: " << interpreter.gte_commands() << " commands, "
               << interpreter.gte_unsupported_commands() << " unsupported"
               << interpreter.gte().unsupported_summary() << "\n"

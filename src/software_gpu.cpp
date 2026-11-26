@@ -743,6 +743,7 @@ std::uint32_t SoftwareGpu::status() const {
 void SoftwareGpu::submit_gp1(std::uint32_t word) {
     const auto command = static_cast<std::uint8_t>(word >> 24);
     last_gp1_command_ = command;
+    ++gp1_writes_;
     switch (command) {
         case 0x00:  // reset
             reset_registers();
@@ -761,6 +762,8 @@ void SoftwareGpu::submit_gp1(std::uint32_t word) {
             break;
         case 0x03:  // display enable
             display_enabled_ = (word & 1u) != 0;
+            ++display_enable_writes_;
+            last_display_enable_word_ = word;
             break;
         case 0x04:  // DMA direction
             dma_direction_ = word & 0x3u;
