@@ -423,8 +423,8 @@ window body shows those counters plus how many disc sectors have been read.
   handler/DMA and the sync's flag check, and it is what makes the game retry
   at 14:48:04 and overwrite `0x800C0CE0` before the walk.
 
-- **The ordering race does not reproduce in the current build (re-measured):**
-  the addresses above cannot be the set and the clear. A 250M-step
+- **The named ordering race cannot be verified (re-measured):** the
+  addresses above cannot be the set and the clear. A 250M-step
   `r6-run --vblank` boot executes `0x8008A068`, `0x800899A0`, `0x80089AC8` and
   `0x800868B4` zero times (`R6_TRACE_SYNC=1` and `R6_TRACE_WALK=1` print
   nothing), and the same is true of the native port. Disassembling the resident
@@ -440,12 +440,15 @@ window body shows those counters plus how many disc sectors have been read.
   default poll — while a 5M-step run shows the knob working (418 BIOS calls
   against 416). The controller's sector rate was varied too:
   `R6_CD_SECTOR_DELAY=564480` (the real 1/75 s) reads 648 sectors, again with
-  no `CdReadSync` failure. Neither runner seeks 14:48:04 any more: the port and
-  the interpreter both issue `Setloc 00:03:27` (LBA 102) and then `ReadN`, and
-  the port now stops at `0x800314EC` only because the streamed overlay is not
-  in its translation, not on a CD error. So the retry that led here is gone;
-  the remaining port stop on this path is block coverage, and the remaining
-  interpreter stall is the audio deadlock at `0x800C9AB0`.
+  no `CdReadSync` failure. Those measurements cover the loader path the two
+  runners share, where the port booted from the disc's EXE issues the same
+  `Setloc 00:03:27` (LBA 102) as the interpreter and then stops at
+  `0x800314EC` because the streamed overlay is not in its translation; that
+  build never reaches the volume-descriptor or directory reads, so it says
+  nothing about them. On the directory path the ordering problem is real but
+  different from the one described above: the port reads the parsed table
+  entry before it is set (see the lookup note earlier), and the bad extent
+  follows from that, not from a lost `0x800B1C60` flag.
 
 - **Resuming a captured state:** `r6-run` and `r6-port` accept
   `--state FILE` (an `R6S1` snapshot) plus `--entry ADDR`, matching
