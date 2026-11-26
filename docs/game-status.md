@@ -242,12 +242,27 @@ None.
   `0x8002E898` has exactly one call site in the resident image, `0x800335F0`,
   inside the sound tick `0x80033548` itself, and the mask store at
   `0x80033624` is that same tick's output. The tick builds the mask from the
-  active voices and arms its countdown only for masked slots, so with no
-  active voice the mask is zero, `0x80034070` returns 0 and `0x800C9AB0`
-  spins. The gate is therefore the audio voice path (nothing ever makes a
-  voice active, because SPU/XA playback is not modelled), not the ISO
-  directory parse: even a perfect parse only streams more files, and the CD
-  is idle after its Pause at LBA 17846.
+  eight slot flags at `0x800B5508` (28 bytes per slot, word 0), and the
+  wait at `0x800C9AB0` goes `task_wait 0x800C9874` -> tick; a zero tick
+  return makes `task_wait` return 1, so the caller loops after a VSync.
+- **Tracing the voice path (the gate is downstream of a task, not the
+  voices):** `--watch-pc` over 250M steps shows the tick runs 795 times and the
+  wait path `0x800C9AB0` 373 times, while the two calls that can start a
+  slot, `0x8002E94C` and `0x8002E990`, execute **zero** times. `--watch-write`
+  on three of the eight slot flags records only zeros, from the BSS clear at
+  `0x80010B0C` and the slot reset at `0x8002E674`/`0x8002E70C`, and all eight
+  flags read back zero at 250M steps; no slot is ever activated. The starters sit in substates 2/3 of the same state machine
+  that waits in substate 1, so the voice path cannot be what unblocks it.
+  What it is waiting for is a queued stream task: `0x800C9A50`/`0x800C9A60`
+  enqueue two reads (460 and 1,070 bytes) into `0x801E3600` and `0x801E4600`,
+  and at 250M steps both task records still carry status byte 3
+  (`0x801E09E0+4 = 3`, `0x801E1430+4 = 3`), a value `task_wait` does not
+  decode as complete (it branches on 0, 4 and 8). Both buffers are full
+  (4,072 non-zero bytes each) and share a head, so the copy happened and the
+  missing piece is the completion handshake, not the data. Modelling XA
+  voices now would not advance substate 1: nothing requests a voice until
+  these tasks report done. The gate is therefore the CD stream task status,
+  not the ISO directory parse and not the SPU.
 - **Kernel jump tables:** `GetB0Table` and `GetC0Table` used to return 0, so
   libcd's hook installer treated address 0 as the BIOS `CdRead` body: it wrote
   its five-word trampoline to `0x28` and stored `0x3C` in the `0xDFFC`
