@@ -1073,51 +1073,78 @@ state-3 writes instead of 18. Groups 1 and 2 complete, a new segment starts at
 group 3, all nine group-3 records are consumed and eight of group 4 are
 published, and the final counters are `produced = commit = 17`,
 `consume = 9` in the new segment. The scene gate `0x800CC258` is still 0 and
-the frame body count is still 254, so this removes the CD-stream deadlock but
-does not yet open the scene; the sound module that stores `0x20` there remains
-the blocker.
+the frame body count is still 254. This removes the first CD-stream deadlock,
+but the new segment then stalls at record 17 (next section), and the scene is
+still closed; the sound module that stores `0x20` there remains the blocker.
 
-## CD stream: why production stops at record 17
+## CD stream: record 17 and the null libcd table
 
 A 600M-instruction run with `--trace-cd`, `--watch-write` on
 `0x800C4980`-`0x800C498C`, `0x800C49A8`-`0x800C49B0`, `0x800C499C` and
-`0x800BFF3C`-`0x800BFF84`, and `--watch-pc` on `0x80093604`/`0x80093650` shows
-where the new segment's producer stops.
+`0x800BFF3C`-`0x800BFF84`, and `--watch-pc` on `0x80093604`/`0x80093650`
+shows where the new segment's producer stops. The same trace contains 1624
+channel-3 DMA transfers and 92 CD commands, so the null table cannot be the
+whole explanation.
 
-The ring is not full: `produced`, `commit` and `consume` are all 17, the
-capacity at `0x800C49BC` is 23, and slot 17's header sits at `0x801A8260`.
-The last read the drive ever receives is `ReadS` (command `1B`) at LBA 133147,
-issued after `Setmode E0`; it delivers sectors up to 133167. Sector 133166 is
-an XA payload the drive skips while decoding, so 133167 is the last one
-presented. It is loaded and acknowledged (`sector 133167 loaded`, `ack 7
-int=1`) but never drained, so the drive never presents another sector and the
-log contains no further `Setloc`/`ReadS`. No read for group 4 block 8 or
-group 5 block 0 is requested anywhere in the run.
+### What the run shows
 
-On the DMA side the last pair is the header and 504-word payload for sector
-133166 (payload into `0x801B0120`, the last ring slot). After it there is a
-single 8-word header transfer into `0x801A8260`, the slot-17 header, and the
-504-word payload that should follow it is never started.
+- The ring is not full: `produced`, `commit` and `consume` are all 17, the
+  capacity at `0x800C49BC` is 23, and slot 17's header sits at `0x801A8260`.
+- The last read the drive receives is `ReadS` (command `1B`) at LBA 133147,
+  issued after `Setmode E0`; it delivers sectors up to 133167. Sector 133166
+  is an XA payload the drive skips while decoding, so 133167 is the last one
+  presented. It is loaded and acknowledged (`sector 133167 loaded`, `ack 7
+  int=1`) but never drained, and the log has no further `Setloc`/`ReadS`. No
+  read for group 4 block 8 or group 5 block 0 is requested in the run.
+- On the DMA side the last pair is the header and 504-word payload for sector
+  133166 (payload into `0x801B0120`, the last ring slot). After it there is a
+  single 8-word header transfer into `0x801A8260`, slot 17's header, and the
+  504-word payload that should follow it is never started.
+- The pump tick `0x800935CC` reaches the status gate at
+  `0x800935F8`-`0x80093610` 37 times after that point. The gate dereferences
+  `[0x800BFF5C]` and tests bit `0x0100`; the pointer is zero for the whole
+  run, so the test reads address 0 and always takes the `0x80093650` branch.
+- In the 600M dump `0x800BFF3C`-`0x800BFF6C` is zero, and the watch log
+  records only the boot BSS clear at `0x80010B0C` writing `0x800BFF5C`. The
+  setter `0x8009204C` and the init entry `0x80092068` never execute, and no
+  `jal`, jump-table word or data word in the loaded image names them.
 
-The pump tick `0x800935CC` is entered 37 times after that point and leaves at
-`0x80093650` every time. The gate at `0x800935F8`-`0x80093610` dereferences
-`[0x800BFF5C]` and tests bit `0x0100` of the word it points at; that pointer is
-zero for the whole run, so the gate reads address 0 and always reports "no
-data". The same is true of the rest of libcd's hardware table in this build:
-`0x800BFF3C` (CD command), `0x800BFF44`/`0x800BFF48` (CD parameter/index),
-`0x800BFF4C`/`0x800BFF50` (GP0/GP1), `0x800BFF54`/`0x800BFF58` (DPCR/DICR),
-`0x800BFF5C` (CD status word) and `0x800BFF6C` (DMA3 CHCR) are written only by
-the boot BSS clear at `0x80010B0C`. The table's setter `0x8009204C` and the
-init around `0x80092068`/`0x8009245C` never execute, and no `jal`, jump table
-or data word in the loaded image names them.
+### Why the CD traffic still works
 
-So the command write at `0x80093740`/`0x80093758`, the DICR/DPCR updates at
-`0x80093F98`-`0x80094040` and the CHCR busy wait at `0x80093F4C`/`0x80093824`
-all land in RAM at address 0 instead of the registers: the pump cannot observe
-the data-ready event or re-program channel 3. Channel 3 still moves data
-because the emulator runs the transfer on the guest's CHCR store alone.
+The apparent contradiction is resolved by a second, fully initialised copy of
+the same driver in the main EXE at `0x80015xxx`. Its table at
+`0x8002297C`-`0x800229C0` holds `0x1F801800`-`0x1F801803`, the CD-delay and
+COM_DELAY registers at `0x1F801018`/`0x1F801020`, DPCR `0x1F8010F0` and DMA3
+`0x1F8010B0`-`0x1F8010B8`. Its command byte store is `0x800153A0` through
+`[0x80022980]`, the main-driver poll sites appear in the log
+(`0x800147D4`, `0x80015084`, `0x80015DFC`), and its CHCR store `0x80015C88`
+is the PC on 1552 of the 1624 DMA3 runs. The commands are issued by this copy,
+and it is the only copy whose status and interrupt registers are valid.
 
-The live table the init should be handed is still intact at `0x800AFE8C`:
-`0x1F801040`, `0x1F801070`, then the four CD ports `0x1F801800`-`0x1F801803`.
-Finding why the module's hardware-table init is never reached is the next step;
-the stream deadlock is a consequence of the null table, not of DMA ordering.
+The overlay's own DMA needs no table. Its transfer routine at `0x80093F14`
+reads CHCR at `0x80093F4C` and writes MADR3/BCR3/CHCR3 through directly
+encoded `0x1F801080`-`0x1F801088` addresses (`0x80094018`-`0x8009408C`). Its
+72 DMA3 runs are the header/payload pairs ending at sector 133166 plus the
+final 8-word header. The null table affects its status and interrupt
+registers, not those transfers.
+
+The null table does explain the overlay pump's status read: the gate cannot
+see a response, so the tick takes the `0x80093650` path and returns through
+its `0x80014120` call without reaching the command setup at `0x80093700`.
+That setup is dormant; had it run, its stores through the null pointers
+would have left nonzero data at RAM address 0, and the dump is zero there. The command, parameter and
+DICR/DPCR stores in this copy are therefore not the traffic that reached the
+drive.
+
+### What is still hypothesis
+
+Why the overlay's table is never populated is unknown. The untouched table at
+`0x800AFE80` holds `0x1F801040` and `0x1F801070` at +0x10/+0x14 and
+`0x1F801800`-`0x1F801803` at +0x1C..+0x28; `0x800AFE8C` itself is zero.
+Copying those words into `0x800BFF3C`-`0x800BFF6C` is the obvious missing
+step, but nothing observed yet shows which load path should perform it.
+
+The observed fact is that the status gate cannot see a response and the
+504-word payload after the slot-17 header never starts. Whether populating
+the overlay table would restart production is untested; the null table is
+still a hypothesis for the deadlock, not an established cause.
