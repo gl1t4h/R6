@@ -226,6 +226,21 @@ None.
   so they did land where the display looks and still wrote no colour: the
   guest is clearing to black rather than drawing a scene. A renderer
   change cannot produce a frame while that is true.
+- **Kernel jump tables:** `GetB0Table` and `GetC0Table` used to return 0, so
+  libcd's hook installer treated address 0 as the BIOS `CdRead` body: it wrote
+  its five-word trampoline to `0x28` and stored `0x3C` in the `0xDFFC`
+  dispatch cell, and the B0 side wrote its three-word stub to `0x9C8`. Both
+  calls now hand out a modelled table in low RAM. B0 sits at `0x80000200`
+  with one thunk per vector (`li $t1, N; jr $0xB0`), C0 at `0x80000380`, and
+  C0 entry 6 names the CD entry table at `0x80000400`, whose `+0x70`/`+0x74`
+  halves rebuild the `CdRead` body address `0x80001100`. B0 entry `0x5B`
+  names the kernel block at `0x80001000`, which libcd patches at `+0x884`
+  and `+0x9C8`; the block and the `CdRead` body are ordinary guest RAM, and
+  the body reserves its `+0x28` patch window and a `+0x3C` resume entry. The
+  body has no CD read behind it, so both entries return 0. Re-running the
+  traced boot, the hook installs at `0x80001128` and `0xDFFC` holds
+  `0x8000113C`; `0x28`, `0x3C` and `0x9C8` stay zero, and everything else is
+  unchanged (682 sectors, 0 unhandled vectors, same CD counters).
 - **Playable native build:** No
 - **Distributed game assets:** No
 

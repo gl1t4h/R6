@@ -173,7 +173,73 @@ std::uint32_t string_find(Memory& memory, std::uint32_t address,
 constexpr std::uint32_t kGpuDataPort = 0x1F801810u;
 constexpr std::uint32_t kGpuControlPort = 0x1F801814u;
 
+// A jump-table entry is a thunk that loads the vector into $t1 and jumps to
+// the kernel trap, so calling the entry runs exactly what a direct trap call
+// runs. Handing out a real table instead of a null pointer matters because
+// libcd indexes the table and patches the code it names.
+constexpr std::uint32_t kThunkBytes = 16u;
+constexpr std::uint32_t kAddiuT1Zero = 0x24090000u;
+constexpr std::uint32_t kAddiuT2Zero = 0x240A0000u;
+constexpr std::uint32_t kAddiuV0Zero = 0x24020000u;
+constexpr std::uint32_t kJumpT2 = 0x01400008u;
+constexpr std::uint32_t kReturnRa = 0x03E00008u;
+
+void write_vector_thunk(Memory& memory, std::uint32_t address,
+                        std::uint32_t trap, std::uint32_t vector) {
+    memory.write32(address, kAddiuT1Zero | (vector & 0xFFFFu));
+    memory.write32(address + 4, kAddiuT2Zero | (trap & 0xFFFFu));
+    memory.write32(address + 8, kJumpT2);
+    memory.write32(address + 12, 0);
+}
+
+// No CD read is implemented behind the kernel, so the modelled routine and
+// its post-patch entry report that nothing was started rather than running
+// uninitialised code.
+void write_cd_stub(Memory& memory, std::uint32_t address) {
+    memory.write32(address, kAddiuV0Zero);
+    memory.write32(address + 4, kReturnRa);
+    memory.write32(address + 8, 0);
+}
+
 }  // namespace
+
+void BiosServices::ensure_kernel_tables(Memory& memory) {
+    if (kernel_tables_ready_) return;
+    kernel_tables_ready_ = true;
+
+    for (std::uint32_t vector = 0; vector < kB0TableEntries; ++vector) {
+        const auto thunk = kB0ThunksAddress + vector * kThunkBytes;
+        write_vector_thunk(memory, thunk, kTrapB0, vector);
+        // Entry 0x5B is the CD/pad driver block: libcd reaches the call sites
+        // it patches as offsets into this block (+0x884, +0x894, +0x9C8).
+        memory.write32(kB0TableAddress + vector * 4,
+                       vector == 0x5B ? kKernelBlockAddress : thunk);
+    }
+
+    for (std::uint32_t vector = 0; vector < kC0TableEntries; ++vector) {
+        const auto thunk = kC0ThunksAddress + vector * kThunkBytes;
+        write_vector_thunk(memory, thunk, kTrapC0, vector);
+        // Entry 6 is not a routine but the CD entry table itself.
+        memory.write32(kC0TableAddress + vector * 4,
+                       vector == 6 ? kCdEntryTableAddress : thunk);
+    }
+
+    for (std::uint32_t offset = 0; offset < 0x80; offset += 4) {
+        memory.write32(kCdEntryTableAddress + offset, 0);
+    }
+    // libcd rebuilds the routine address from two 16-bit halves before it
+    // patches the body, so the table stores the halves, not a pointer.
+    memory.write32(kCdEntryTableAddress + 0x70,
+                   (kCdRoutineAddress >> 16) & 0xFFFFu);
+    memory.write32(kCdEntryTableAddress + 0x74, kCdRoutineAddress & 0xFFFFu);
+
+    for (std::uint32_t offset = 0; offset < kKernelBlockBytes; offset += 4) {
+        memory.write32(kKernelBlockAddress + offset, 0);
+    }
+    write_vector_thunk(memory, kKernelBlockAddress, kTrapB0, 0x5B);
+    write_cd_stub(memory, kCdRoutineAddress);
+    write_cd_stub(memory, kCdRoutineAddress + kCdResumeOffset);
+}
 
 bool BiosServices::trap_table(std::uint32_t pc, BiosTable& table) {
     switch (pc & kKernelAddressMask) {
@@ -422,9 +488,12 @@ std::uint32_t BiosServices::handle_b0(std::uint32_t vector, CpuState& cpu,
         case 0x4B:  // StartCARD2()
         case 0x4C:  // StopCARD2()
             return 0;
-        case 0x56:  // GetC0Table(): there is no retail jump table to hand out.
-        case 0x57:  // GetB0Table()
-            return 0;
+        case 0x56:  // GetC0Table(): the modelled C0 vector table in low RAM.
+            ensure_kernel_tables(memory);
+            return kC0TableAddress;
+        case 0x57:  // GetB0Table(): the modelled B0 vector table in low RAM.
+            ensure_kernel_tables(memory);
+            return kB0TableAddress;
         case 0x17:  // ReturnFromException(): abandon the rest of the chains.
             return_from_exception_ = true;
             return 0;

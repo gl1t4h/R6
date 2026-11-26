@@ -29,6 +29,27 @@ public:
     static constexpr std::uint32_t kTrapB0 = 0x000000B0u;
     static constexpr std::uint32_t kTrapC0 = 0x000000C0u;
 
+    // The kernel hands out the addresses of its B0/C0 vector tables and
+    // callers index them by vector number: GetC0Table()[6] names the CD
+    // entry table, GetB0Table()[0x5B] names the CD/pad driver block whose
+    // body libcd patches at fixed offsets. On the retail console those
+    // tables and routines live in low RAM, so the model writes them there
+    // on the first request and every entry is a writable guest address.
+    static constexpr std::uint32_t kB0TableAddress = 0x80000200u;
+    static constexpr std::uint32_t kB0TableEntries = 0x60u;
+    static constexpr std::uint32_t kB0ThunksAddress = 0x80000600u;
+    static constexpr std::uint32_t kC0TableAddress = 0x80000380u;
+    static constexpr std::uint32_t kC0TableEntries = 0x20u;
+    static constexpr std::uint32_t kC0ThunksAddress = 0x80000C00u;
+    static constexpr std::uint32_t kCdEntryTableAddress = 0x80000400u;
+    static constexpr std::uint32_t kKernelBlockAddress = 0x80001000u;
+    static constexpr std::uint32_t kKernelBlockBytes = 0x0A00u;
+    // The CdRead body the C0 entry table names. libcd rewrites five words at
+    // +0x28 and then calls +0x3C, so the body reserves that patch window.
+    static constexpr std::uint32_t kCdRoutineAddress = 0x80001100u;
+    static constexpr std::uint32_t kCdPatchOffset = 0x28u;
+    static constexpr std::uint32_t kCdResumeOffset = 0x3Cu;
+
     // Recognises a kernel trap address in any of the kuseg/kseg aliases.
     static bool trap_table(std::uint32_t pc, BiosTable& table);
 
@@ -90,6 +111,7 @@ public:
     bool same_state(const BiosServices& other) const {
         if (interrupt_entries_ != other.interrupt_entries_ ||
             entry_int_ != other.entry_int_ ||
+            kernel_tables_ready_ != other.kernel_tables_ready_ ||
             return_from_exception_ != other.return_from_exception_ ||
             clear_pad_ != other.clear_pad_ ||
             unhandled_calls_ != other.unhandled_calls_ ||
@@ -128,6 +150,11 @@ private:
     std::uint32_t handle_b0(std::uint32_t vector, CpuState& cpu,
                             Memory& memory);
     std::uint32_t handle_c0(std::uint32_t vector, CpuState& cpu);
+
+    // Writes the modelled B0/C0 tables, the CD entry table, the vector thunks
+    // and the kernel block into low RAM, once per service.
+    void ensure_kernel_tables(Memory& memory);
+    bool kernel_tables_ready_{false};
 
     EventSlot* find_event(std::uint32_t handle);
     std::uint32_t open_event(std::uint32_t event_class, std::uint32_t spec,

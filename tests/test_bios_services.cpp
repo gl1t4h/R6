@@ -203,6 +203,55 @@ void card_info_reports_ready() {
     R6_CHECK(bios.call_count(BiosTable::a0, 0xAB) == 1);
 }
 
+void kernel_tables_are_modelled_in_ram() {
+    BiosServices bios;
+    Memory memory(0x2000, true);
+    CpuState cpu;
+
+    cpu.gpr[9] = 0x57;  // GetB0Table
+    bios.dispatch(BiosTable::b0, cpu, memory);
+    const auto b0 = cpu.gpr[2];
+    R6_CHECK(b0 == BiosServices::kB0TableAddress);
+
+    cpu.gpr[9] = 0x56;  // GetC0Table
+    bios.dispatch(BiosTable::b0, cpu, memory);
+    const auto c0 = cpu.gpr[2];
+    R6_CHECK(c0 == BiosServices::kC0TableAddress);
+
+    // Every entry is a thunk that dispatches its own vector.
+    const auto open_event = memory.read32(b0 + 0x08u * 4u);
+    R6_CHECK(open_event == BiosServices::kB0ThunksAddress + 8u * 16u);
+    R6_CHECK(memory.read32(open_event) == 0x24090008u);
+    R6_CHECK(memory.read32(open_event + 4) == 0x240A00B0u);
+
+    // B0[0x5B] names the kernel block libcd patches at +0x884 and +0x9C8.
+    R6_CHECK(memory.read32(b0 + 0x16Cu) == BiosServices::kKernelBlockAddress);
+    R6_CHECK(memory.read32(BiosServices::kKernelBlockAddress) == 0x2409005Bu);
+
+    // C0[6] names the CD entry table, whose +0x70/+0x74 halves rebuild the
+    // CdRead body address that libcd patches and then calls at +0x3C.
+    const auto cd_table = memory.read32(c0 + 0x18u);
+    R6_CHECK(cd_table == BiosServices::kCdEntryTableAddress);
+    const auto rebuilt = ((memory.read32(cd_table + 0x70u) & 0xFFFFu) << 16) |
+                         (memory.read32(cd_table + 0x74u) & 0xFFFFu);
+    R6_CHECK(rebuilt == BiosServices::kCdRoutineAddress);
+    R6_CHECK(memory.read32(rebuilt) == 0x24020000u);
+    R6_CHECK(memory.read32(rebuilt + BiosServices::kCdResumeOffset) ==
+             0x24020000u);
+
+    // The body is writable guest memory, which is what the hook install
+    // needs: five words at +0x28 and then the entry at +0x3C.
+    memory.write32(rebuilt + BiosServices::kCdPatchOffset, 0x3C02A001u);
+    R6_CHECK(memory.read32(rebuilt + BiosServices::kCdPatchOffset) ==
+             0x3C02A001u);
+
+    // A second request returns the same table without rewriting it.
+    cpu.gpr[9] = 0x57;
+    bios.dispatch(BiosTable::b0, cpu, memory);
+    R6_CHECK(cpu.gpr[2] == b0);
+    R6_CHECK(bios.unhandled_call_count() == 0);
+}
+
 void unhandled_vectors_are_recorded() {
     BiosServices bios;
     Memory memory(0x2000);
@@ -232,5 +281,6 @@ void run_bios_services_tests() {
     event_slots();
     file_write_reaches_stdout();
     card_info_reports_ready();
+    kernel_tables_are_modelled_in_ram();
     unhandled_vectors_are_recorded();
 }
