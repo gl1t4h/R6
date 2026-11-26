@@ -218,6 +218,14 @@ None.
   the next thing to check, since two different requests filling different
   buffers with the same content suggests the driver copied the same sectors
   twice.
+  The black frame is not a dump bug. `--dump-vram` and the new content
+  box show all 91,379 non-zero pixels at `x >= 704`, the area the game
+  uploads textures to, plus a 256x64 strip at `y = 448`; the 320x240 page
+  and the display window `(0,32)`-`(320,272)` are entirely zero. The
+  217,138 primitives were submitted inside draw bounds `0,32`-`639,479`,
+  so they did land where the display looks and still wrote no colour: the
+  guest is clearing to black rather than drawing a scene. A renderer
+  change cannot produce a frame while that is true.
 - **Playable native build:** No
 - **Distributed game assets:** No
 
