@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "r6/bios_services.h"
+#include "r6/hardware_map.h"
 #include "r6/mips_interpreter.h"
 
 namespace {
@@ -332,6 +333,82 @@ void dma_start_reads_back_idle() {
     // The transfer is already finished, so busy (bit 24) and trigger (bit 28)
     // must read back clear or the guest would wait on them forever.
     R6_CHECK((cpu.gpr[2] & 0x11000000u) == 0u);
+}
+
+// The CD stream reads each sector as an 8-word header followed by a
+// 504-word payload on channel 3. Only the payload may raise the completion
+// interrupt, and CHCR must stay busy until the scheduled completion, so a
+// driver polling it sees the transfer take time. Running the guest's CHCR
+// store through MipsInterpreter exercises the gate that r6-run executes.
+std::uint64_t start_dma3_transfer(Memory& ram, MipsInterpreter& interpreter,
+                                  std::uint32_t words) {
+    auto& cpu = interpreter.cpu();
+    cpu.pc = 0x80010000u;
+    std::uint32_t pc = 0x10000u;
+    auto emit = [&](std::uint32_t instruction) {
+        ram.write32(pc, instruction);
+        pc += 4u;
+    };
+    emit(lui(8, 0x1F80));
+    emit(ori(8, 8, 0x10F4));   // DICR
+    emit(lui(9, 0x0088));
+    emit(sw(9, 0, 8));         // master + channel 3 enable
+    emit(addiu(8, 8, 0xFFBCu));  // DMA3 base 0x1F8010B0
+    emit(lui(9, 0x0010));
+    emit(sw(9, 0, 8));         // MADR = 0x00100000
+    emit(addiu(9, 0, words));
+    emit(sw(9, 4, 8));         // BCR
+    emit(lui(9, 0x0100));
+    emit(sw(9, 8, 8));         // CHCR: start the transfer
+    interpreter.run(11);
+    // run() also charges the triggering store, so the transfer began two
+    // cycles before the current count.
+    return interpreter.hardware().cycles() - r6::kCyclesPerInstruction;
+}
+
+void dma3_completion_splits_at_the_sector_payload() {
+    Memory ram(2u * 1024u * 1024u);
+    TestServices services;
+    MipsInterpreter interpreter(ram, services);
+    auto& hardware = interpreter.hardware();
+
+    const auto busy = [&hardware]() {
+        return (hardware.read32(r6::hardware::kDma3ChannelControl) &
+                (1u << 24)) != 0u;
+    };
+    const auto publish_raised = [&hardware]() {
+        return (hardware.interrupt_status() &
+                r6::hardware::kDmaInterruptBit) != 0u;
+    };
+    const auto advance_to = [&hardware](std::uint64_t cycle) {
+        const auto now = hardware.cycles();
+        R6_CHECK(cycle >= now);
+        hardware.advance_cycles(cycle - now);
+    };
+
+    // An 8-word sector header completes without pulling the interrupt.
+    auto start = start_dma3_transfer(ram, interpreter, 8u);
+    R6_CHECK(busy());
+    advance_to(start + 15u);
+    R6_CHECK(busy());
+    advance_to(start + 16u);
+    R6_CHECK(!busy());
+    // The completion is still recorded as the channel's DICR flag.
+    R6_CHECK((hardware.read32(r6::hardware::kDmaInterrupt) &
+              (1u << 27)) != 0u);
+    R6_CHECK(!publish_raised());
+    R6_CHECK(hardware.take_dma_completion() == 0u);
+
+    // A 504-word payload raises it, once the transfer completes.
+    start = start_dma3_transfer(ram, interpreter, 504u);
+    R6_CHECK(busy());
+    R6_CHECK(hardware.take_dma_completion() == 0u);
+    advance_to(start + 15u);
+    R6_CHECK(busy());
+    advance_to(start + 16u);
+    R6_CHECK(!busy());
+    R6_CHECK(publish_raised());
+    R6_CHECK(hardware.take_dma_completion() == (1u << 3));
 }
 
 void timer_mode_reads_back() {
@@ -880,6 +957,7 @@ void run_mips_interpreter_tests() {
     break_stops_execution();
     irq_status_acknowledges_zero_bits();
     dma_start_reads_back_idle();
+    dma3_completion_splits_at_the_sector_payload();
     timer_mode_reads_back();
     timer_clock_sources_match_the_hardware();
     gpu_status_reports_field_and_vblank();
