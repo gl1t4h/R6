@@ -612,6 +612,29 @@ window body shows those counters plus how many disc sectors have been read.
   non-black**, so whatever comes after the handler-7 handoff has its own
   blocker and 400M steps do not reach the first scene. The knob is therefore
   a confirmed diagnosis of the sound wait, not a fix for the black frame.
+- **Main state 6 and the scene-start routine, traced:** the boot machine
+  sets main state 6 at `0x800C9D60` and clears the substate. `0x800BCCBC` is
+  read only by sound-module code (`0x800335A0`, `0x800341A0`, `0x8003AA14`,
+  `0x8003ACD8`, `0x8003B114`, `0x8003B4A4`), never by a renderer, so state 6
+  is a sound-side stage rather than a draw stage. Handler 7's scene call is
+  `0x8008EF20`, a five-phase stepper: it adds its argument to the counter
+  `0x800BFDB8`, wraps it to 0..4, looks up an 8-byte entry in the table at
+  `0x800BFDC4` (`{s16, s16, function}`), calls the function when it is not
+  null, and publishes the entry's two halfwords to `0x800C4840`/
+  `0x800C4844`. With a null entry it returns 1 immediately, so the caller
+  sees "done" without drawing anything.
+- **Why it still cannot draw:** the call passes `a0 = 0`
+  (`0x800C9D14`), so the counter never moves, and the table is empty. At
+  400M steps with `R6_FORCE_SOUND_TICK=1` the dump shows main state 6,
+  substate 0, phase 5, counter `0x800BFDB8 = 0` and all five table entries
+  zero; `0x800C4840`/`0x800C4844` hold `0x642`/`0x652`, stale values not
+  written by this call. A 150M-step `--watch-write` over the counter and the
+  table records no writes after the boot clear at `0x80010B0C`, and no code
+  computes `0x800BFDC4` as a store address, so nothing in the image ever
+  fills it. The table sits in BSS above the 79,872-byte EXE body (which ends
+  at `0x80023800`), so it has to arrive through a runtime block copy that
+  this run never issues. That missing scene-script load, not the tick, is
+  what keeps the frame black once sound init is forced through.
 - **Test target repair:** `tests/test_unaligned.cpp` was added by `f694247`
   but never listed in the `r6-tests` sources, so the target stopped linking
   (`run_unaligned_tests` unresolved). It is now compiled in and the suite
