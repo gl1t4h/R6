@@ -647,6 +647,29 @@ int run_headless(Host& host, std::uint64_t frames,
                           << " vs=" << hex32(host.ram.read32(0x800B397Cu))
                           << std::endl;
             }
+            if (sync_trace && before == 0x80089AC8u) {
+                static int drain_hits = 0;
+                if (drain_hits < 12) {
+                    ++drain_hits;
+                    const auto status_byte = host.bus->read8(0x1F801800u);
+                    const auto flag_byte = host.bus->read8(0x1F801803u);
+                    std::cout << "DR " << host.bus->hardware().cycles()
+                              << " a0=" << hex32(host.cpu.gpr[4])
+                              << " a1=" << hex32(host.cpu.gpr[5])
+                              << " v0=" << hex32(host.cpu.gpr[2])
+                              << " v1=" << hex32(host.cpu.gpr[3])
+                              << " s0=" << hex32(host.cpu.gpr[16])
+                              << " ra=" << hex32(host.cpu.gpr[31])
+                              << " cd50=" << hex32(host.ram.read32(0x800B1C50u))
+                              << " cd5C=" << hex32(host.ram.read32(0x800B1C5Cu))
+                              << " cd60=" << hex32(host.ram.read32(0x800B1C60u))
+                              << " stat=" << hex32(status_byte)
+                              << " irq=" << hex32(flag_byte)
+                              << " dev="
+                              << hex32(host.bus->hardware().cdrom().interrupt())
+                              << std::endl;
+                }
+            }
             if (walk_trace && before == 0x800868B4u) {
                 static int walk_records = 0;
                 if (walk_records < 200) {

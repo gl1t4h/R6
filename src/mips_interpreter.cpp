@@ -606,6 +606,23 @@ RunResult MipsInterpreter::run(std::uint64_t max_steps) {
             std::fputc(10, stdout);
             std::fputc(10, stdout);
         }
+        if (trace_sync && current_pc == 0x80089AC8u) {
+            static int drain_hits = 0;
+            if (drain_hits < 12) {
+                ++drain_hits;
+                std::printf("DR %llu a0=%08X a1=%08X v0=%08X v1=%08X s0=%08X "
+                            "ra=%08X cd50=%08X cd5C=%08X cd60=%08X stat=%08X "
+                            "irq=%08X dev=%08X",
+                            static_cast<unsigned long long>(hardware_.cycles()),
+                            cpu_.gpr[4], cpu_.gpr[5], cpu_.gpr[2], cpu_.gpr[3],
+                            cpu_.gpr[16], cpu_.gpr[31],
+                            read32(0x800B1C50u), read32(0x800B1C5Cu),
+                            read32(0x800B1C60u), read8(0x1F801800u),
+                            read8(0x1F801803u),
+                            hardware_.cdrom().interrupt());
+                std::fputc(10, stdout);
+            }
+        }
         if (trace_walk && current_pc == 0x800868B4u) {
             static int walk_records = 0;
             if (walk_records < 200) {
