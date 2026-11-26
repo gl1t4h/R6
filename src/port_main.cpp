@@ -660,6 +660,21 @@ int run_headless(Host& host, std::uint64_t frames,
                               << std::endl;
                 }
             }
+            if (sync_trace && before == 0x800865C8u) {
+                static int par_hits = 0;
+                if (par_hits < 8) {
+                    ++par_hits;
+                    const auto rec = host.cpu.gpr[17];
+                    std::cout << "PA " << host.bus->hardware().cycles()
+                              << " rec=" << hex32(rec) << " bytes=";
+                    for (int k = 0; k < 8; ++k) {
+                        std::cout << hex32(host.ram.read8(rec + k)).substr(6);
+                    }
+                    std::cout << " a3=" << hex32(host.cpu.gpr[7])
+                              << " s4=" << hex32(host.cpu.gpr[20])
+                              << std::endl;
+                }
+            }
             if (sync_trace && before == 0x80086824u) {
                 static int lk_hits = 0;
                 if (lk_hits < 8) {

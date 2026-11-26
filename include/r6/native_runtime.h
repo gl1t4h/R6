@@ -92,6 +92,15 @@ public:
         if (address < 0x800BF6E0u || address > 0x800BF760u) return;
         std::fprintf(stderr, "TBL %c %08X pc=%08X\n", kind, address, trace_pc_);
     }
+    // Write-value watch: names the block and the value for stores into the
+    // extent entry that feeds the loader's read.
+    static void trace_table_write(std::uint32_t address, std::uint32_t value) {
+        static const bool enabled = std::getenv("R6_TRACE_TABLE") != nullptr;
+        if (!enabled) return;
+        if (address != 0x800BF6E8u) return;
+        std::fprintf(stderr, "TBLW %08X = %08X pc=%08X\n", address, value,
+                     trace_pc_);
+    }
     inline static std::uint32_t trace_pc_ = 0;
 
     // Value watch: reports the block that loads a specific value, which is how
@@ -320,6 +329,7 @@ public:
     void write32(std::uint32_t address, std::uint32_t value) {
         note_watch(address, "write32");
         trace_table('W', address);
+        trace_table_write(address, value);
         const auto physical = address & 0x1FFFFFFFu;
         if (hardware_.is_cdrom(physical)) {
             for (std::uint32_t index = 0; index < 4; ++index) {
