@@ -622,6 +622,17 @@ void MipsInterpreter::run_dma3_transfer() {
                             std::to_string(hardware_.cdrom().sector()) +
                             " pc=0x" + format_hex(cpu_.pc));
     }
+    static const bool trace_before = std::getenv("R6_TRACE_STREAM") != nullptr;
+    if (trace_before && cpu_.pc >= 0x80093000u) {
+        std::printf("SDp %llu pc=%08X madr=%08X words=%u cmd=%02X sec=%u "
+                    "off=%zu size=%zu\n",
+                    static_cast<unsigned long long>(hardware_.cycles()),
+                    cpu_.pc, address, words,
+                    hardware_.cdrom().last_command(),
+                    hardware_.cdrom().presented_sector(),
+                    hardware_.cdrom().data_offset(),
+                    hardware_.cdrom().data_size());
+    }
     for (std::uint32_t index = 0; index < words; ++index) {
         write32(address + index * 4, hardware_.cdrom().read_word());
     }
@@ -647,9 +658,12 @@ void MipsInterpreter::run_dma3_transfer() {
     static const bool trace_stream = std::getenv("R6_TRACE_STREAM") != nullptr;
     if (trace_stream && cpu_.pc >= 0x80093000u && cpu_.pc < 0x80095000u) {
         std::printf("SD %llu pc=%08X madr=%08X words=%u dicr=%08X "
-                    "int=%u\n",
+                    "int=%u cmd=%02X off=%zu size=%zu\n",
                     static_cast<unsigned long long>(hardware_.cycles()),
-                    cpu_.pc, address, words, dicr, interrupt ? 1u : 0u);
+                    cpu_.pc, address, words, dicr, interrupt ? 1u : 0u,
+                    hardware_.cdrom().last_command(),
+                    hardware_.cdrom().data_offset(),
+                    hardware_.cdrom().data_size());
     }
     // Complete inside the tick that starts the transfer. The DMA interrupt is
     // only taken once the tick re-enables interrupts after writing the record

@@ -186,6 +186,9 @@ public:
     // Bring-up state: tells "the drive is waiting for the guest" apart from
     // "the guest never asked again" when a stream stops.
     std::uint32_t presented_sector() const { return presented_sector_; }
+    std::uint8_t last_command() const { return last_command_; }
+    std::size_t data_size() const { return data_.size(); }
+    std::size_t data_offset() const { return data_index_; }
     std::size_t data_remaining() const {
         return data_index_ < data_.size() ? data_.size() - data_index_ : 0;
     }
@@ -292,6 +295,18 @@ private:
     }
 
     void present_sector() {
+        // Bytes the guest has not collected are still its data: presenting the
+        // next sector over them shifts every following record by whatever was
+        // left unread, and the stream never realigns. The 12-byte sync header
+        // is the one exception - drivers read it before the user data, and a
+        // 2048-byte collection leaves it behind on purpose.
+        constexpr std::size_t kSyncHeaderBytes = 12;
+        if (data_.size() - data_index_ > kSyncHeaderBytes) {
+            sector_pending_ = true;
+            sector_delay_ = sector_delay_cycles_;
+            return;
+        }
+
         next_sector_pending_ = false;
         data_acknowledged_ = false;
         load_sector();
@@ -487,6 +502,7 @@ private:
     }
 
     void execute_command(std::uint8_t command) {
+        last_command_ = command;
         // A driver polling the drive's status while a sector is waiting must
         // not cost it that sector. Commands that abort or restart a transfer
         // do discard the FIFO; a status or parameter command leaves it alone.
@@ -704,6 +720,8 @@ private:
     bool data_end_raised_{false};
     // Sector most recently placed in the FIFO, for the drain trace.
     std::uint32_t presented_sector_{0};
+    // Bring-up: the command whose data the FIFO currently holds.
+    std::uint8_t last_command_{0};
     bool start_read_after_ack_{false};
     bool next_sector_pending_{false};
     bool sector_pending_{false};

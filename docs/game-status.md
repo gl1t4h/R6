@@ -1410,3 +1410,26 @@ long stalls instead of streaming. Dropping the 12-byte sync remnant from
 the FIFO when a driver has taken the user bytes makes the boot fail after
 550 BIOS calls, so those bytes are needed and the misalignment has another
 origin.
+
+### The FIFO offset at each stream transfer
+
+`R6_TRACE_STREAM` now prints the command, presented sector and FIFO offset
+both before and after a transfer. The good frames read `sec=133144` to
+`133146` with the offset at 12 before the 32-byte record header and 44
+before the 2016-byte payload, so a sector is consumed exactly as
+12 sync + 32 header + 2016 payload = 2060 bytes. The payloads were never
+reading zeros; the earlier offsets were printed after the transfer.
+
+At the boundary the attempt is still on `sec=133147` with offset 12, yet
+the word it collects is `0x50050400`. That pattern is not the start of any
+sector on the disc: it only occurs at user offset 32 of later sectors
+(133199, 133569, ...), which is a payload start rather than a record start.
+The drive is therefore presenting another sector over data the guest has
+not collected, and every attempt after the eighteenth frame lands in the
+middle of a record.
+
+`present_sector()` now refuses to replace a FIFO whose user bytes are still
+unread (only the 12-byte sync header may be left behind, since drivers read
+it before the user data). Tests pass and the boot is unchanged, but the
+stream still stops after 18 frames: the replace happens through a new read
+command, which clears the FIFO first, so the guard does not cover it.
