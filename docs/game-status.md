@@ -472,23 +472,46 @@ None.
   then goes on to load the engine module out of `CD.WAD` (last LBA 10,644) and
   halts on dynamic code at `0x8014D5AC`. The movie is no longer where the run
   stops; the dynamic-code gap is.
-- **What is on screen is still not a picture.** A capture at 950 fields
-  (`--shot`, inside `LOGO.STR` at LBA 281,930, 46,080 macroblocks decoded) is a
-  repeating three-colour stripe pattern across the frame with a small noise
-  patch, 61,329 non-black pixels and 1,641 distinct colours of which three
-  account for about 18,900 pixels each - not the pale-blue converging shafts or
-  the ACTIVISION wordmark the reference decoder shows for those frames. So the
-  stream, the reader and the decoder now run, but the decoded strips are not
-  being placed in VRAM as a frame; the upload of the 24x240 strips is the next
-  thing to chase.
+- **Does the re-offer path ever fire, or does it only spin?** Traced over a
+  950-field run it fires **7 times, all in the first 2.6 M cycles**, each with
+  the FIFO still at offset 0 (sectors 17, 19, 23, 397, 128,304, 23 and 468 at
+  cycles 1,251,542 to 2,566,664). The drive is not stalled at any of them: the
+  stream continues past each, reaches 4,020 sectors by 940 fields, and no
+  re-offer is issued once the movie is running. It is therefore not a spin loop
+  over a sector the guest keeps declining - it is what lets the boot-time
+  declines retry at all - and it stays, alongside the hold rule.
+- **Fixed: the three-colour stripe pattern was the display mode, not the
+  upload.** The player programs GP1(08) with `display_mode = 17` (`0x11`: 320
+  wide plus bit 4, the 24-bit framebuffer bit) and double-buffers between
+  display areas (0,0) and (0,256) - both observed in the VRAM dumps at 700 and
+  750 fields. `SoftwareGpu::display_frame()` ignored that register and always
+  decoded 15-bit pairs, so a 24-bit buffer whose bytes are `1C 08 0A` repeated
+  came out as three VRAM words repeating across every line; those three colours
+  accounted for about 56,700 of the 61,329 non-black pixels at 950 fields.
+  `display_frame()` now decodes three bytes per pixel (one VRAM row, 2048 bytes,
+  per 960-byte line) whenever `display_mode_ & 0x10` is set, and leaves the
+  15-bit path untouched. A 940-field capture with the corrected decoder
+  (45,120 macroblocks, LBA 281,890) has **58,603 non-black pixels in 4,651
+  colours**, no repeating cycle: a dark red field with a picture-shaped mass in
+  the middle instead of stripes.
+- **What is on screen is still not a picture.** That 940-field frame is not the
+  pale-blue converging shafts or the ACTIVISION wordmark the reference decoder
+  shows for `LOGO.STR` frames: pixel-for-pixel it matches no reference frame
+  (mean absolute error 33/255 against every frame tried from 30 to 150, and the
+  content mass spans about a third of the width and half the height), and a
+  second capture at 700 fields looks the same way. So the display format was
+  one cause, and it is fixed and committed; what the guest converts and uploads
+  into that buffer is the remaining one, and that - not the upload placement,
+  which is correct, and not the display decode - is what to chase next.
 - **Can the content movie at `286,228` reach the screen?** `286,228` is inside
   `/CINEMAS/L1M1.STR` (LBA 282,216), and the reference decoder shows real content
   there (`241 of 300 macroblock(s)`, ~63,000 lit pixels). The decoder is no
   longer idle - it decodes 174 frames and the drive reaches the first sector of
   `L1M1.STR` - but the run leaves the movie for the engine module before that
-  frame is read, and the frames that do reach VRAM are the stripe pattern
-  described above, not a picture. Both the upload placement and the dynamic-code
-  halt stand between here and a visible `L1M1` frame.
+  frame is read, and the frames that do reach VRAM are the corrupted picture
+  described above, not a reference frame. The conversion the guest performs on
+  the decoded output and the dynamic-code halt stand between here and a visible
+  `L1M1` frame.
 - **Playable native build:** No
 - **Distributed game assets:** No
 

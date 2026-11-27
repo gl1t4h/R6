@@ -939,6 +939,38 @@ bool SoftwareGpu::filled_vram_bounds(std::uint32_t& left, std::uint32_t& top,
 std::vector<std::uint32_t> SoftwareGpu::display_frame() const {
     std::vector<std::uint32_t> frame(
         static_cast<std::size_t>(kDisplayWidth) * kDisplayHeight, 0xFF000000u);
+    // Display mode bit 4 selects a 24-bit framebuffer. In that mode the GPU
+    // still receives the image through 16-bit uploads, but the bytes are the
+    // three colour bytes of each pixel in order, so a line spans 960 bytes and
+    // the next line starts one VRAM row (2048 bytes) later. Decoding such a
+    // buffer as 15-bit turns every colour into a three-pixel cycle, which is
+    // what the movie previously looked like.
+    if ((display_mode_ & 0x10u) != 0) {
+        const auto* bytes = reinterpret_cast<const std::uint8_t*>(vram_.data());
+        const auto limit = vram_.size() * sizeof(std::uint16_t);
+        for (std::uint32_t y = 0; y < kDisplayHeight; ++y) {
+            const auto source_y = display_area_y_ + static_cast<std::int32_t>(y);
+            if (source_y < 0 ||
+                source_y >= static_cast<std::int32_t>(kVramHeight)) {
+                continue;
+            }
+            const std::size_t line =
+                static_cast<std::size_t>(source_y) * kVramWidth *
+                    sizeof(std::uint16_t) +
+                static_cast<std::size_t>(display_area_x_) *
+                    sizeof(std::uint16_t);
+            for (std::uint32_t x = 0; x < kDisplayWidth; ++x) {
+                const std::size_t offset = line + static_cast<std::size_t>(x) * 3;
+                if (offset + 2 >= limit) continue;
+                frame[static_cast<std::size_t>(y) * kDisplayWidth + x] =
+                    0xFF000000u |
+                    (static_cast<std::uint32_t>(bytes[offset]) << 16) |
+                    (static_cast<std::uint32_t>(bytes[offset + 1]) << 8) |
+                    static_cast<std::uint32_t>(bytes[offset + 2]);
+            }
+        }
+        return frame;
+    }
     for (std::uint32_t y = 0; y < kDisplayHeight; ++y) {
         const auto source_y = display_area_y_ + static_cast<std::int32_t>(y);
         if (source_y < 0 ||
