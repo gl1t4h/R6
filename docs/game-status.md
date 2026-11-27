@@ -102,12 +102,15 @@ None.
   slice of a new frame, and the wrap in step 3 found slot 0 still holding the
   previous frame, so the handler cleared the slot's type, set state 9 in
   `[0x800B1000]` and returned without reading the 2016-byte payload. The drive
-  is then left holding that payload (`fifo=2016`, `acked=1`, nothing armed) and
-  will not present the next sector until it is drained; the driver waits for
-  another data-ready interrupt that nothing will raise. Neither side moves: the
-  movie stops at frame 6 of the 219 in `gp+0x6B4` (`gp` = `0x800B47F4`). The
-  trigger is therefore on the consumer side - the decoder had not released the
-  frame header slot - not in the sector data or the drive's registers.
+  is then left holding that payload (`fifo=2016`, `acked=1`, nothing armed),
+  and the model this note was written against would not present the next
+  sector until it was drained, so the driver waited for another data-ready
+  interrupt that nothing raised. The drive now gives up an acknowledged sector
+  after one sector time and presents the next one (*Streaming ahead of the
+  guest's drain* in the Silent Hill section); Spider-Man has not been
+  re-measured against that model. The trigger is still on the consumer side -
+  the decoder had not released the frame header slot - not in the sector data
+  or the drive's registers.
 - **CD model fixes for that path:** a status, parameter or read command no
   longer discards a sector whose bytes are still in the FIFO just because its
   interrupt has already been acknowledged, and a command's own answer takes the
@@ -180,7 +183,11 @@ None.
   acknowledged but never drained expire after three sector times does fire, and
   it is worse - the reader loses a slice, resynchronises and re-reads the disc:
   1400 fields then read 54,730 sectors (last 182,944) for 1,800 macroblocks
-  instead of 2,400. It was reverted.
+  instead of 2,400. It was reverted. The model now releases such a sector after
+  one sector time instead of three, and the Silent Hill stream resynchronises
+  the same way: the sector index runs to about 175,112 and then restarts at
+  about 143,549, with the frame still black (*Streaming ahead of the guest's
+  drain*).
 - **STR route (`tools/str-frame.cpp`):** the demux and the decoder both work
   now, and the tool writes a real picture. It walks the image from a given LBA,
   groups video records into frames by the record header's frame number, skips XA
