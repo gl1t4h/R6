@@ -1116,6 +1116,27 @@ RunResult MipsInterpreter::run(std::uint64_t max_steps) {
 MipsInterpreter::StepResult MipsInterpreter::execute(
     std::uint32_t instruction,
     std::uint32_t pc) {
+    // Bring-up: records the PCs executed inside a cycle window so a stall can
+    // be read off as a trace. Off unless R6_TRACE_PC_WINDOW is set.
+    if (const char* window = std::getenv("R6_TRACE_PC_WINDOW")) {
+        static const std::uint64_t span_start =
+            std::strtoull(window, nullptr, 0);
+        const char* colon = std::strchr(window, ':');
+        static const std::uint64_t span_end =
+            colon ? std::strtoull(colon + 1, nullptr, 0) : 0;
+        const auto now = hardware_.cycles();
+        if (span_end != 0 && now >= span_start && now <= span_end) {
+            if (pc_window_trace_.size() < 60000) {
+                pc_window_trace_.push_back(this->cpu().pc);
+            }
+        } else if (!pc_window_trace_.empty()) {
+            std::printf("PCT %zu\n", pc_window_trace_.size());
+            for (const auto trace_pc : pc_window_trace_) {
+                std::printf("P %08X\n", trace_pc);
+            }
+            pc_window_trace_.clear();
+        }
+    }
     StepResult result;
     auto& gpr = cpu_.gpr;
     const auto opcode = instruction >> 26;

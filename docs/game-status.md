@@ -1549,30 +1549,42 @@ a keeping command changed those offsets but not the outcome - 18 payloads
 and a black frame either way - so it was dropped rather than kept as an
 unmeasured model change.
 
-### The buffer and the check that does not run
+### What decides a record is not usable yet
 
-The header addresses the stream DMAs use step by 0x20 from `0x801A8040`
-and the payload addresses step by 0x7E0 from `0x801A8320`. The gap between
-the two bases is 0x2E0, exactly 23 header entries, so slot 18 at
-`0x801A8280` and its payload at `0x801B10E0` both fall inside the span the
-player uses; the buffer is not what stops the stream at eighteen records.
-An end-of-run RAM dump finds those bytes occupied by libcd traffic
-(`0x801A8280` = `0xF6CCB233`, written by `pc=0x80015C88`), so the same
-memory is shared with the CD library once the player stops.
+`R6_TRACE_PC_WINDOW=start:end` records every PC the guest executes inside a
+cycle window. With `R6_FORCE_SOUND_TICK=1` and enough steps, the window
+399,790,000-399,840,000 contains the boundary. That measurement withdraws
+the earlier claim that `0x8009391C` never executes: it does run, four times
+in that window. The zero hit count that suggested otherwise came from a run
+without the sound tick, where the movie never reached this code.
 
-The resident code at `0x8009391C` compares a record's first halfword with
-`0x0160` and its channel field with `[0x800C4990]`, storing error 5 in
-`0x800BFF84` when they differ. An earlier version of this note called that
-the frame-19 rejection. That was wrong: `--watch-pc` on `0x800938C4`,
-`0x8009391C`, `0x80093954`, `0x800939D0` and `0x80093A10` reports **zero
-executions** over a 420M-instruction run, so none of that code runs at any
-point, including during the eighteen records that do stream. The zero
-globals it would read (`0x800C6DD8`, `0x800C4990`, `0x800C49B0`,
-`0x800C49B8`, only ever cleared once by `0x80010B0C`) are a consequence of
-that code never running, not a cause of the stall.
+The path measured for every record is:
 
-What judges a record is therefore still unlocated. The DMA that moves the
-header and payload runs at `0x8009408C`, and the drive hands over
-`0x80010160` at offset 12 for the nineteenth record exactly as it does for
-the first eighteen, but the code that decides the nineteenth is unusable
-has not been found.
+```
+0x8009408C  sw $v0, 0($a1)      ; CHCR write that starts the DMA (ch in $s0)
+0x80093824  poll DMA, set up the next transfer
+0x8009391C  entry[0] == 0x0160 ? then channel == [0x800C4990] ?
+0x80093994  entry[2], entry[4] tests
+0x80093A50  lhu  $v0, 4($a0)    ; entry[2]
+0x80093A64  bne  $v0, $zero, 0x80093C9C
+0x80093B3C  $v0 = [0x800C49BC] - [0x800C499C] - 1
+0x80093B58  $v1 = lhu  6($a0)   ; entry[3] = 9 in the movie records
+0x80093B60  sltu $v0, $v0, $v1  ; queued ahead < entry[3] ?
+0x80093B64  beq  $v0, $zero, 0x80093C88
+0x80093B80  sh   $v0(1), 0($a0) ; mark the entry
+0x80093BD4  [0x800BFF84] = 8    ; status 8, no payload transfer
+```
+
+So the first halfword (`0x0160`) and the channel both pass for record
+133147, as the earlier trace showed, and the branch that stops it is the
+count at `0x80093B3C`: the player compares how many records are queued
+ahead (`[0x800C49BC] - [0x800C499C] - 1`) against the record's own
+`entry[3]` field (9 for these sectors). When the queue is shorter than
+that, it marks the record, sets `[0x800C49B0]` and returns status 8
+without starting the payload DMA.
+
+The records are not rejected for their contents. The player wants nine
+records of read-ahead, and the drive model presents one sector at a time
+only after the guest drains the fifo, so the queue can never grow past a
+couple of records and the eighteen that do play are the ones consumed
+before the count first falls short.

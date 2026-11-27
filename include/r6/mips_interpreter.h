@@ -42,6 +42,8 @@ struct RunResult {
 // compare against; it is not a shipping emulator, and it does not attempt
 // cycle accuracy, the CD-ROM controller beyond sector reads, or the SPU.
 class MipsInterpreter {
+
+    std::vector<std::uint32_t> pc_window_trace_;
 public:
     // General exception vector. Real hardware selects 0xA0000080 when SR.BEV is
     // clear, which is BIOS code this project does not carry.
