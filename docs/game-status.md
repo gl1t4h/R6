@@ -75,8 +75,10 @@ None.
 - **Next step:** find what the player waits on after the fifth decoded frame.
   It has the pixels in RAM, the drive is idle and only `GetlocL` is polled, so
   the missing link is between the decoder's output buffer and the VRAM upload
-  (no GP0 `0xA0` upload is submitted at all). The `0x1F801098` test now passes:
-  the run no longer calls `CdInit` from `0x80085000`.
+  (no GP0 `0xA0` upload is submitted at all). The `0x1F801098` test now passes
+  while the movie runs: the whole 1400-field run issues two `CdInit`
+  sequences (boot and movie start) instead of resetting the drive every field,
+  which is what happened while DMA1 had no reason to be armed.
 - **Playable native build:** No
 - **Distributed game assets:** No
 
