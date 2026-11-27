@@ -38,31 +38,52 @@ public:
     // instead of 79, so the delay stays at the value the rest of the port was
     // measured with.
     static constexpr std::uint64_t kSectorDelayCycles = 4000;
-    // A drive streams while a read is active; it does not stop and wait for
-    // the guest to empty the data fifo. The next sector is armed when one is
-    // presented, and a sector the guest acknowledged but did not collect
-    // within its own sector time is given up and overwritten. That is what
-    // lets a player which is behind on collecting still fill its read-ahead.
+    // A drive streams while a read is active: presenting a sector arms the
+    // next one. It only goes into the fifo once the guest has collected every
+    // byte of the sector already there. Overwriting a sector the guest has not
+    // finished with destroys data silently, and the streamed movie reader
+    // validates each record's slice and frame number, so a sector taken away
+    // under it makes the next sector it collects carry a later frame than it
+    // expects. That is a fatal stream error to the reader, which resets its
+    // position and never issues another read. Pacing the drive to the guest's
+    // collection instead lets a player that is behind hold the stream back
+    // through the ring, which is the back-pressure real hardware provides.
     //
-    // A streamed movie additionally needs frame-granular service, not a uniform
-    // cadence.
-    // The guest's player claims a frame on its first published slice, converts
-    // it, and only frees that frame's ring slots when it is done - 550,000 to
-    // 800,000 cycles - while a 2x drive stages ten sectors in about 60,000. A
-    // uniform fast cadence therefore laps the four-frame payload pool (the
-    // reader bails at the frame boundary with its slot still claimed) and a
-    // uniform slow one starves the converter mid-frame. Serving a record's
-    // slices back to back and then waiting about one conversion satisfies both.
-    // The gap only applies to STR records (type 0x0160/0x0161 with more than
-    // one slice), so ordinary file reads are unaffected.
-    // Swept on the streaming drive base by running the movie to completion at
-    // each value: 50k-300k never reach the picture at all (0-3,600
-    // macroblocks, no video pixels), 400k-590k decode part of a stream and then
-    // stall mid-chain, 600k and 620k complete, 640k-660k stall again, and every
-    // value from 680k to 1.5M completes. 600k is the smallest gap that plays
-    // the movie but sits in a window only ~40,000 cycles wide, so the shipped
-    // value is taken from the wide plateau instead.
-    static constexpr std::uint64_t kFrameGapCycles = 700000;
+    // A streamed movie is served slice by slice at the fast cadence and then
+    // held back for about one frame conversion.
+    // The guest's player claims a frame when its slice 0 arrives and frees that
+    // frame's ring slots only after converting it - 550,000 to 1,100,000 cycles
+    // here - while ten slices take 40,000. At that rate its four-frame pool
+    // fills within a few frames, the reader finds the previously published
+    // frame still pending, drops the new one, and then rejects the next slice
+    // because its expectation still points at the dropped frame. Waiting about
+    // one conversion between frames keeps the pool from filling. The gap only
+    // applies after a record's last slice, so ordinary file reads are
+    // unaffected.
+    // Nor can the drive simply stream at the disc's real 2x rate (225,792
+    // cycles a sector): measured, that stops at frame 3 with the ring refilled
+    // by a repeated 0x0401 marker and every later data-ready interrupt declined
+    // with status 4. The guest wants slices back to back and a pause between
+    // frames.
+    // 1,300,000 is measured on this player, not guessed. Swept at 1,200
+    // fields: 700,000 stalls after 64 decoded frames, 1,000,000 after 100, and
+    // 1,300,000 completes the intro (174 frames) and moves on to the next
+    // stream; 1,600,000 completes too but reaches the same point later, so the
+    // smallest value that finishes is shipped.
+    static constexpr std::uint64_t kFrameGapCycles = 1300000;
+    // How soon a held sector is offered to the guest again.
+    //
+    // The guest's data-ready handler can decline a sector: when the ring slot
+    // it would fill is still marked busy it returns without collecting the
+    // bytes, and it only looks again on the next data-ready interrupt. A drive
+    // that simply waits for the guest therefore deadlocks with the sector
+    // unread and no interrupt left to retry on, and one that overwrites the
+    // sector loses data. Re-arming the same sector's interrupt (rewound to its
+    // first byte so a repeated header read is harmless) is the third option:
+    // the guest retries the sector it declined and nothing is lost. The retry
+    // is paced well inside one frame conversion so a freed slot is picked up
+    // promptly without the guest's handler running every few thousand cycles.
+    static constexpr std::uint64_t kReofferCycles = 50000;
 
     explicit CdromDevice(PlatformServices& services) : services_(services) {}
 
@@ -108,10 +129,18 @@ public:
                 present_sector();
                 changed = true;
             } else {
-                // The guest is still working on the sector in the fifo. Keep
-                // the sector armed and look again on the next tick, so the
-                // stream continues as soon as it lets go of it.
-                sector_delay_ = 0;
+                // The guest has not collected the sector in the fifo. It is
+                // held, never replaced, and offered again shortly: a handler
+                // that declined it only retries when a data-ready interrupt
+                // arrives.
+                sector_delay_ = kReofferCycles;
+                if (interrupt_ == 0 && !data_.empty() &&
+                    data_acknowledged_ && data_index_ < data_.size()) {
+                    data_index_ = 0;
+                    data_acknowledged_ = false;
+                    interrupt_ = kIntDataReady;
+                    changed = true;
+                }
             }
         }
         return changed;
@@ -284,7 +313,8 @@ public:
                record_type_ == other.record_type_ &&
                record_slice_ == other.record_slice_ &&
                record_slices_ == other.record_slices_ &&
-               frame_gap_pending_ == other.frame_gap_pending_ &&
+               streaming_ == other.streaming_ &&
+               last_slice_ == other.last_slice_ &&
                data_acknowledged_ == other.data_acknowledged_ &&
                xa_enabled_ == other.xa_enabled_;
     }
@@ -325,9 +355,9 @@ private:
             // back behind a command answer is no longer owed.
             deferred_interrupt_ = 0;
             // Collecting the sector is not what arms the next one: the drive
-            // did that when it presented this one. Draining only clears the
-            // unread window that a presentation is allowed to overwrite.
-            unread_since_ = clock_;
+            // did that when it presented this one. Draining is what lets the
+            // armed sector into the fifo, so the drive cannot run ahead of
+            // the guest.
         }
         return value;
     }
@@ -341,9 +371,8 @@ private:
         // A streamed record is served back to back and then held back for
         // about one frame conversion; see kFrameGapCycles. The flag is set by
         // load_sector() for the record's last slice.
-        sector_delay_ = frame_gap_pending_ ? kFrameGapCycles
-                                           : sector_delay_cycles_;
-        frame_gap_pending_ = false;
+        sector_delay_ = (streaming_ && last_slice_) ? kFrameGapCycles
+                                                    : sector_delay_cycles_;
     }
 
     // Bring-up: prints where the FIFO stands around the two places that can
@@ -360,23 +389,20 @@ private:
     // Whether the drive may put another sector in the fifo now.
     //
     // The first sector of a read is always allowed. After that the guest must
-    // have acknowledged the data-ready interrupt, and must either have
-    // collected the sector or left it untouched for a whole sector time. A
-    // drive does not wait for the fifo to drain: a player that has read only
-    // a sector's header still sees the stream move on, which is what lets its
-    // own read-ahead fill while it is behind.
+    // have acknowledged the data-ready interrupt and collected every byte of
+    // the sector in the fifo. A sector is never replaced while any of it is
+    // unread: the reader sends each sector once, so whatever is left in the
+    // fifo at that point is data the guest still needs.
     bool presentation_allowed() const {
         if (data_.empty()) return true;
         if (!data_acknowledged_) return false;
-        if (data_index_ >= data_.size()) return true;
-        return clock_ - unread_since_ >= sector_delay_cycles_;
+        return data_index_ >= data_.size();
     }
 
     void present_sector() {
         trace_fifo_event("present-in", last_command_);
         next_sector_pending_ = false;
         data_acknowledged_ = false;
-        unread_since_ = clock_;
         load_sector();
         interrupt_ = kIntDataReady;
         trace_fifo_event("present-out", last_command_);
@@ -423,9 +449,9 @@ private:
             ++sectors_read_;
             if (reading_) ++sector_;
             // A streamed record's header is the first eight bytes of user
-            // data: type, then slice index, slice count and frame number. Only
-            // a record's last slice arms the frame gap; ordinary file sectors
-            // keep the plain cadence.
+            // data: type, then slice index, slice count and frame number. An
+            // STR record is streamed at the drive's real rate; ordinary file
+            // sectors keep the plain cadence.
             const auto* record = data_.data() + kHeaderBytes;
             record_type_ = static_cast<std::uint16_t>(record[0] |
                                                       (record[1] << 8));
@@ -433,11 +459,12 @@ private:
                                                        (record[5] << 8));
             record_slices_ = static_cast<std::uint16_t>(record[6] |
                                                         (record[7] << 8));
-            frame_gap_pending_ =
-                loaded &&
-                (record_type_ == 0x0160u || record_type_ == 0x0161u) &&
-                record_slices_ > 1 &&
-                static_cast<std::uint32_t>(record_slice_) + 1u >= record_slices_;
+            streaming_ = loaded &&
+                         (record_type_ == 0x0160u || record_type_ == 0x0161u) &&
+                         record_slices_ > 1;
+            last_slice_ = streaming_ &&
+                          static_cast<std::uint32_t>(record_slice_) + 1u >=
+                              record_slices_;
             // Subheader byte 2 is the submode; bit 2 marks XA-ADPCM audio.
             if (loaded && xa_enabled_ && (data_[6] & 0x04u) != 0) {
                 note("sector " + std::to_string(presented) + " xa skip");
@@ -490,10 +517,6 @@ private:
         }
         if (previous == kIntDataReady && reading_) {
             data_acknowledged_ = true;
-            // The sector's unread window starts here: the drive gives the
-            // guest a full sector time from this acknowledgement to collect
-            // the bytes before it overwrites them.
-            unread_since_ = clock_;
         }
         if (interrupt_ == 0 && deferred_interrupt_ != 0 &&
             data_index_ < data_.size()) {
@@ -661,7 +684,8 @@ private:
                 data_.clear();
                 start_read_after_ack_ = true;
                 next_sector_pending_ = false;
-                frame_gap_pending_ = false;
+                streaming_ = false;
+                last_slice_ = false;
                 data_acknowledged_ = false;
                 begin_command(kIntAcknowledge, 0);
                 break;
@@ -828,12 +852,13 @@ private:
     std::uint16_t record_type_{0};
     std::uint16_t record_slice_{0};
     std::uint16_t record_slices_{0};
-    bool frame_gap_pending_{false};
+    // The sector just loaded is a streamed STR record, and whether it is the
+    // record's last slice (which arms the inter-frame gap).
+    bool streaming_{false};
+    bool last_slice_{false};
     bool data_acknowledged_{false};
-    // Cycle count and the time the sector in the fifo was last acknowledged
-    // or collected; together they bound how long unread bytes stay valid.
+    // Cycle count of the drive model, for command and sector timers.
     std::uint64_t clock_{0};
-    std::uint64_t unread_since_{0};
     // SetMode bit 6: the drive decodes XA-ADPCM audio sectors and keeps them
     // out of the data FIFO.
     bool xa_enabled_{false};

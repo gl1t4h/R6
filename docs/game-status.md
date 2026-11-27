@@ -426,16 +426,22 @@ None.
   the second movie is set up at cycle 854,061,748 (ring base moves to
   `0x80166ADC`) and is streamed with one continuous `ReadS` (`0x1B`) issued at
   854,102,018 - the last non-`Getstat` CD command of the run. The port presents
-  sectors on the drive's own cadence and, by design (`cdrom_device.h`: "a sector
-  the guest acknowledged but did not collect within its own sector time is given
-  up and overwritten"), throws away any the guest has not read. The guest's
+  sectors on the drive's own cadence and, by the design of that model, threw
+  away any the guest had not read: a sector was expired one sector time after
+  its acknowledgement and the next one was written over it. The guest's
   software convert path costs 22.3M instructions, so while it decoded frame 61
   the drive presented ~19 sectors it never collected: frame 61 slices 2-8, frame
   62 slices 0-8 and frame 63 slice 0. The next sector the reader did collect
   carried frame 63 while it expected frame 61, so the check at `0x800853DC`
   (slice, header +4) and `0x800853F8` (frame, header +8) failed and the reject
-  path at `0x80085404` ran: expectations reset to frame 0 / slice 0 at cycle
-  899,498,596, the slot header cleared, and a re-seek issued through `0x8008DB04`.
+  path at `0x80085404` ran at cycle 899,498,596: it resets the expectations to
+  frame 0 / slice 0 (`0x800C14F0`, `0x800C1504`), zeroes the ring-slot headers
+  from the read index to the write index through `0x8008DB04` (a 32-byte-stride
+  store loop over the ring, not a seek - it touches no CD register), sets the
+  player status `0x800B1000` to 6 and returns. That path contains no Setloc and
+  no ReadS: it is the game's own terminal "stream error" exit, so a drive that
+  has taken a sector away cannot be recovered by patching the reader - the fix
+  has to be not taking the sector away.
   It never recovers - the last CD command byte is a `Getstat` at 899,807,404, and
   after that only register selects and request bits are written, so no read is
   re-issued and no slot is ever published again. From then to the end of the run
@@ -446,20 +452,43 @@ None.
   and nothing new is uploaded. The drive keeps "streaming `L1M1.STR`" only because
   of that run-ahead: 6,785 sectors, from LBA 280,621 (`LOGO.STR` frame 63) through
   288,374 (`L1M1.STR` frame 616), were presented and discarded unread.
-- **Can the content movie at `286,228` reach the screen? No, for two independent
-  reasons.** `286,228` is inside `/CINEMAS/L1M1.STR` (LBA 282,216, 57,131,008
-  bytes), and the reference decoder shows real content there (`241 of 300
-  macroblock(s)`, ~63,000 lit pixels). The drive does read that file (2,600
-  fields: 20,010 sectors, last 288,375), but the decoder is idle: its count sits
-  at 12,681 macroblocks (42 frames) from 1,900 fields onward, so no frame from
-  `L1M1.STR` is decoded, and every movie strip uploaded before the halt carries
-  zeros - 949 strips of 24x240 at 2,600 fields, all `nzw=0`. The upload path now
-  works; nothing from that stream reaches it. Second, the halt is not in the
-  movie at all: at 3,299 fields the drive is back at low LBAs (10,645, inside
-  `CD.WAD`) loading `shell.rel`, so the jump into the engine module is what ends
-  the run. Making `shell.rel` executable is necessary for anything after boot,
-  but not sufficient for this frame - the movie consumer stalling after its first
-  42 frames has to be solved as well.
+- **Fixed: the drive holds uncollected sectors and re-offers them.**
+  `CdromDevice::presentation_allowed()` no longer lets an unread sector expire:
+  the next sector enters the FIFO only after every byte of the current one has
+  been collected, and it is never replaced. Holding alone deadlocked the guest,
+  because its data-ready handler (`0x80085000`) returns with status 4 when the
+  ring slot at its write index is still marked busy - it only looks again on the
+  next data-ready interrupt, and a quiet drive never sends one. A held sector is
+  therefore re-armed every `kReofferCycles` (50,000) with the FIFO rewound to its
+  first byte, so a repeated header read is harmless and the handler retries the
+  same sector: nothing is overwritten and nothing wedges. The inter-frame gap is
+  1,300,000 cycles, measured rather than guessed: at 1,200 fields a 700,000
+  gap stalls after 64 decoded frames, 1,000,000 after 100, and 1,300,000
+  completes; 1,600,000 also completes but reaches the same point later.
+  Measured with the shipped values (`--frames 1600`, halt at 1,320 fields):
+  **52,320 macroblocks decoded = 174 whole frames** (was 12,681 = 42), 1,287,040
+  words in and 10,045,440 out, 4,587 sectors read, the intro finishes, `LOGO.STR`
+  streams to LBA 282,140 (the first sector of `L1M1.STR` is 282,216), and the run
+  then goes on to load the engine module out of `CD.WAD` (last LBA 10,644) and
+  halts on dynamic code at `0x8014D5AC`. The movie is no longer where the run
+  stops; the dynamic-code gap is.
+- **What is on screen is still not a picture.** A capture at 950 fields
+  (`--shot`, inside `LOGO.STR` at LBA 281,930, 46,080 macroblocks decoded) is a
+  repeating three-colour stripe pattern across the frame with a small noise
+  patch, 61,329 non-black pixels and 1,641 distinct colours of which three
+  account for about 18,900 pixels each - not the pale-blue converging shafts or
+  the ACTIVISION wordmark the reference decoder shows for those frames. So the
+  stream, the reader and the decoder now run, but the decoded strips are not
+  being placed in VRAM as a frame; the upload of the 24x240 strips is the next
+  thing to chase.
+- **Can the content movie at `286,228` reach the screen?** `286,228` is inside
+  `/CINEMAS/L1M1.STR` (LBA 282,216), and the reference decoder shows real content
+  there (`241 of 300 macroblock(s)`, ~63,000 lit pixels). The decoder is no
+  longer idle - it decodes 174 frames and the drive reaches the first sector of
+  `L1M1.STR` - but the run leaves the movie for the engine module before that
+  frame is read, and the frames that do reach VRAM are the stripe pattern
+  described above, not a picture. Both the upload placement and the dynamic-code
+  halt stand between here and a visible `L1M1` frame.
 - **Playable native build:** No
 - **Distributed game assets:** No
 
