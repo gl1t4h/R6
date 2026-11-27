@@ -206,14 +206,45 @@ None.
   player never uploads the decoded frames to VRAM, and it stops asking for more
   video at 171 sectors (last 128385), which is the same ring-slot refusal
   recorded above.
-- **Next step:** find the copy that is supposed to move a frame's payload into
-  `0x800FDAC8` before the decode command, and why it does not run. The MDEC side
-  needs no further work: a real payload in that buffer now decodes.
+- **The buffer is a real conversion, not a template:** the writes come from the
+  game's own converter at `0x8002A3A8`-`0x8002A7D4`. It holds a 160-bit window of
+  the staged payload (`lw` of five words at `0x8002A3AC`, advancing `0x14` a
+  step), byte-swaps the halves, and emits one 16-bit code word per block:
+  `0x8002A478` stores the DC word (`0x0400` chroma, `0x0600` luma) and
+  `0x8002A454` stores the `0xFE00` end-of-block. A write watch over the 1,400
+  fields counts 4,800 `0x0400`, 9,600 `0x0600` and 14,784 `0xFE00` stores into
+  the buffer - one DC plus one EOB for each of 8 x 1,800 blocks - and the same
+  watch catches it reading the payload at `0x8002A3A8`/`0x8002A4C0` while it
+  writes. There is a pre-fill as well: `0x800653F0` writes `0x33333333` over the
+  whole buffer three times, and one CD DMA of exactly 1,824 words (7,296 bytes,
+  the whole buffer) lands there once; the conversion overwrites it word by word,
+  which is why the decoded stream shows none of it.
+- **Why the eight buffers are identical:** because the eight source frames are.
+  The reference decode gives the same digest for frames 1-10
+  (`b47ba8839f8f`), so an identical code stream is the right output for eight
+  identical black frames, not a sign of a template.
+- **Why nothing reaches VRAM:** the run issues 31 GP0 commands in 1,400 fields
+  and not one is an upload - no `0xA0`. The image contains exactly two
+  `0xA0000000` (GP0 upload) sites, both in the display code at `0x80082FF8` and
+  `0x8008302C`, and neither is reached. The decoder side did its job: DMA1 moved
+  2,880 words per transfer, 20 transfers per frame, into `0x80160ADC` and
+  `0x801637E4` (the two field buffers), so 57,600 words per frame are sitting in
+  main RAM. What stops is the player's own loop: `0x8002AD38` -> 24-bit control
+  at `0x8002AF20` and 16-bit output DMA at `0x8002AF58` -> test bit `0x10` of
+  the flag that `0x80086CA8` fills in -> either loop or fall into the exit path
+  at `0x8002B18C`, which waits and then tears the movie down at `0x8002B1FC`.
+  After 8 iterations it takes the exit path, so the per-frame display step never
+  runs, and the CD side then refuses the next sector because the ring's slot 0
+  was never released.
+- **So the upload is not missing, it is never asked for.** Decoding, the DMA1
+  delivery and the ring all behave; the gate is the flag the player tests after
+  each decode. Next step: find what sets bit `0x10` of the object `0x80086CA8`
+  returns and what clears bit `2`, which is the pair the exit path waits on.
 - **Where this route dead-ends:** the 1400-field run submits 13 GP0
   primitives but uploads no pixels, because the video never reaches the display
-  stage. (The 2,400 macroblocks it reports are eight black frames
-  of 300, decoded correctly from the code words the player feeds it; what never
-  happens is the upload to VRAM.) Every
+  stage. (The 2,400 macroblocks it reports are eight black frames of 300,
+  decoded correctly from the code words the player feeds it; what never happens
+  is the upload, and the reason is the flag above, not the decoder.) Every
   further CD/register change is chasing a refusal the guest makes on purpose
   while it is waiting for its own decoder. The two ways forward are (a) work the
   player's frame pipeline instead - the consumer that clears the frame header
