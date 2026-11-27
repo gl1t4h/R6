@@ -1482,15 +1482,17 @@ the frame loop waits on.
 ### Sector framing is not the stall
 
 `CdromDevice::load_sector` presents a sector as 12 header bytes followed by
-the 2048 user bytes, and `pop_data` only queues the next sector once
-`data_index_ >= data_.size()`, so a consumer that stops short of 2060 bytes
-parks the drive. The stream pump does not stop short: it reads the header
-through the data port (four bytes at `0x80093778`, eight at `0x800937A0`),
-then DMAs 8 words and 504 words, which is 2060 bytes exactly. The payload
-half of the sector is issued from the sound module (`0x8004DD08`,
-`0x8004DD58`, `0x8004DDE8` call the payload routine at `0x80093D00`), so
-the pump stops after a header only when the sound module stops calling it -
-which is the frozen retry loop at `0x801E331C`, not a drive accounting bug.
+the 2048 user bytes. A consumer that stops short of 2060 bytes does not park
+the drive any more: the next sector is armed when one is presented, and an
+acknowledged sector left unread for a whole sector time is overwritten (see
+*Streaming ahead of the guest's drain*). The stream pump itself does not
+stop short either: it reads the header through the data port (four bytes at
+`0x80093778`, eight at `0x800937A0`), then DMAs 8 words and 504 words, which
+is 2060 bytes exactly. The payload half of the sector is issued from the
+sound module (`0x8004DD08`, `0x8004DD58`, `0x8004DDE8` call the payload
+routine at `0x80093D00`), so the pump stops after a header only when the
+sound module stops calling it - which is the frozen retry loop at
+`0x801E331C`, not a drive accounting bug.
 
 ### What the guest draws
 
@@ -1614,16 +1616,22 @@ cycles, each cleared from the ring entry at `0x801A8040`. Only reads that
 run to DataEnd reach the callback, and our controller never raised INT4,
 so a read could only end on a timeout.
 
-The starvation itself is the sector-retention bug fixed in `ad26042`: the
+The starvation itself was the sector-retention bug fixed in `ad26042`: the
 drive discarded a sector whose interrupt had been acknowledged while its
 bytes were still in the FIFO, so nothing was left to drain and no next
-sector was armed. Rebuilt on top of that fix, the numbers below were taken
-with `--watch-args` printing the callers above. The player still re-reads
-LBA 133148, whose user data starts `60 01` (the `0x160` halfword it
-validates) while the raw sector starts `00 FF FF .. 29 37 23 02`, so the
-record it expects and the sector it is handed still have to be reconciled.
+sector was armed. The drive arms its next sector when it presents one now,
+not when the guest drains the fifo; the measurements below predate that
+change. Rebuilt on top of the retention fix, they were taken with
+`--watch-args` printing the callers above. Every retry re-read LBA 133148,
+whose user data starts `60 01` (the `0x160` halfword it validates) while the
+raw sector starts `00 FF FF .. 29 37 23 02`, so the record it expected and
+the sector it was handed had to be reconciled.
 
-### The record check passes; the stream still limps
+### The record check passes; what stopped the stream at record 19
+
+These measurements were taken before the drive kept streaming past an
+uncollected sector: the record check they describe still holds, the stall
+they report does not.
 
 Watching the ring entry the cutscene player fills shows it is not the
 `0x160` check that stops it. The 8-word header DMA (`0x8009408C`) writes
@@ -1631,18 +1639,18 @@ Watching the ring entry the cutscene player fills shows it is not the
 `60 01 01 80`, so `lhu 0(entry) == 0x160` holds and the record is accepted
 (`0x80093A10` clears the slot on the accept path).
 
-On the current tree the drive streams header and payload back to back:
-18 consecutive 8-word/504-word pairs between cycle 399696120 and 399809128,
-one every 6,100 cycles, which is about twice disc speed. The sectors handed
-over are 133127 to 133148 with 133134 and 133142 skipped as XA audio, so
-LBA 133148 itself is read and consumed.
+With the drive still waiting for each drain, it streamed header and payload
+back to back: 18 consecutive 8-word/504-word pairs between cycle 399696120
+and 399809128, one every 6,100 cycles, which is about twice disc speed.
+The sectors handed over are 133127 to 133148 with 133134 and 133142 skipped
+as XA audio, so LBA 133148 itself is read and consumed.
 
-What is left is the chunk boundary after those 18 frames. The next header
-DMA writes `0x50050400` and then `0x00504004` - three words into the
-stream, not at a sector start - and is rejected at `0x80093990`. Every
-184M cycles the player re-seeks to 133148, retries, and eventually gets a
-clean `0x80010160` again, so the ring advances a frame at a time between
-long stalls instead of streaming. Dropping the 12-byte sync remnant from
+What was left was the chunk boundary after those 18 frames. The next
+header DMA wrote `0x50050400` and then `0x00504004` - three words into the
+stream, not at a sector start - and was rejected at `0x80093990`. Every
+184M cycles the player re-seeked to 133148 and retried until it got a clean
+`0x80010160` again, so the ring advanced a frame at a time between long
+stalls instead of streaming. Dropping the 12-byte sync remnant from
 the FIFO when a driver has taken the user bytes makes the boot fail after
 550 BIOS calls, so those bytes are needed and the misalignment has another
 origin.
@@ -1660,14 +1668,16 @@ At the boundary the attempt is still on `sec=133147` with offset 12, yet
 the word it collects is `0x50050400`. That pattern is not the start of any
 sector on the disc: it only occurs at user offset 32 of later sectors
 (133199, 133569, ...), which is a payload start rather than a record start.
-The drive is therefore presenting another sector over data the guest has
-not collected, and every attempt after the eighteenth frame lands in the
+The drive was therefore presenting another sector over data the guest had
+not collected, which is now the modelled behaviour (*Streaming ahead of the
+guest's drain*), and every attempt after the eighteenth frame landed in the
 middle of a record.
 
 A guard that refused to replace a FIFO whose user bytes are still unread
 was tried and dropped: the replace arrives through a new read command,
 which clears the FIFO before the guard can see it, so it never fired and
-changed nothing measurable. The stream still stops after 18 frames.
+changed nothing measurable. At that point the stream still stopped after 18
+frames; with the sector timer armed at presentation it does not.
 
 ### The FIFO around every command
 
@@ -1692,9 +1702,9 @@ that point, so the rejection is not an alignment fault in the drive.
 What the log does show is the retry path: `GetStat` and `Setmode` keep the
 sector by design, so the next header read lands at offset 56, 88 or 100 and
 collects payload bytes (`0x218040A0`, `0x50050400`). Rewinding the FIFO on
-a keeping command changed those offsets but not the outcome - 18 payloads
-and a black frame either way - so it was dropped rather than kept as an
-unmeasured model change.
+a keeping command changed those offsets but not the outcome at the time -
+18 payloads and a black frame either way - so it was dropped rather than
+kept as an unmeasured model change.
 
 ### What decides a record is not usable yet
 
