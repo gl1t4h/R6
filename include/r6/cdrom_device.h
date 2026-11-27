@@ -295,17 +295,6 @@ private:
     }
 
     void present_sector() {
-        // Bytes the guest has not collected are still its data: presenting the
-        // next sector over them shifts every following record by whatever was
-        // left unread, and the stream never realigns. The 12-byte sync header
-        // is the one exception - drivers read it before the user data, and a
-        // 2048-byte collection leaves it behind on purpose.
-        constexpr std::size_t kSyncHeaderBytes = 12;
-        if (data_.size() - data_index_ > kSyncHeaderBytes) {
-            sector_pending_ = true;
-            sector_delay_ = sector_delay_cycles_;
-            return;
-        }
 
         next_sector_pending_ = false;
         data_acknowledged_ = false;

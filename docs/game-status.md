@@ -1428,8 +1428,7 @@ The drive is therefore presenting another sector over data the guest has
 not collected, and every attempt after the eighteenth frame lands in the
 middle of a record.
 
-`present_sector()` now refuses to replace a FIFO whose user bytes are still
-unread (only the 12-byte sync header may be left behind, since drivers read
-it before the user data). Tests pass and the boot is unchanged, but the
-stream still stops after 18 frames: the replace happens through a new read
-command, which clears the FIFO first, so the guard does not cover it.
+A guard that refused to replace a FIFO whose user bytes are still unread
+was tried and dropped: the replace arrives through a new read command,
+which clears the FIFO before the guard can see it, so it never fired and
+changed nothing measurable. The stream still stops after 18 frames.
