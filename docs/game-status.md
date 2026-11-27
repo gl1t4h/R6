@@ -27,24 +27,27 @@ None.
   window stays black.
 - **What is actually missing:** the CD driver feeds a 48-slot sector ring
   (`0x800C1510` = `0x80148AD4`: a 32-byte header then 2016 bytes of data per
-  slot, 2048 bytes each). When the run stops, slots 0-35 hold `ATVILOGO.STR`
-  sectors 128304-128334 and 128336-128340, read from the sector addresses the
-  driver stamps into each slot, so the one missing LBA is the XA-ADPCM sector
-  128335 that the drive filters because the guest asks for mode `0xE0` (bit 6,
-  XA playback). The producer's write index (`0x800C1514`) is 36 and the
-  consumer's poll index (`0x800C151C`) is 39, so the reader waits for the last
-  three sectors of the movie's 39-sector block. Sector 128341 is presented by
-  the drive but never acknowledged or DMA'd: the guest has stopped servicing
-  the CD interrupt and only polls `GetStat`.
-  `0x80087340` is what moves that index: once a chunk's first slot has been
-  consumed it zeroes the states of the rest of the chunk and stores
-  `slot + length` into `0x800C151C`, so 39 means chunk 4 (slots 30-38) was
-  released as a whole at cycle 10,289,928 - 5 M cycles after the producer
-  stopped. The sector the driver never serviced, 128341, is also the first one
-  it answered with `GetStat` instead of an acknowledge, so a command's INT3
-  replacing the pending data-ready flag is the next hypothesis to test.
-- **Next step:** Find why the CD thread stops servicing sector interrupts at
-  slot 36, which is what leaves the consumer three slots short.
+  slot, 2048 bytes each). When the stream stops, slots 0-35 hold
+  `ATVILOGO.STR` sectors 128304-128334 and 128336-128340, read from the sector
+  addresses the driver stamps into each slot; 128335 is the XA-ADPCM sector the
+  drive filters because the guest asks for mode `0xE0` (bit 6). The reader's
+  index (`0x800C151C` = 39) is set by the chunk-release routine `0x80087340`,
+  not by sector arrivals.
+  The pending sector interrupt is not what stops the stream. With `--cd-log`
+  sector 128341 is presented and acknowledged (`ack 7 int=1`); the handler at
+  `0x80085000` then tests `*(u32*)0x1F801098`, the DMA1 (MDEC output) channel
+  control, and calls `CdInit` (`0x8008CBC4`) when bit 8 is clear. `CdInit`
+  waits for the VSync counter `0x800B397C` to advance 960 ticks (the target is
+  in `0x800C6394`), so the movie restarts instead of decoding. The port models
+  no MDEC at all, so DMA1 never reaches the state the player checks for.
+- **CD model fix:** a status command issued while a sector was still in the
+  data FIFO used to clear that FIFO and overwrite the flag register, which
+  would have dropped the sector's data-ready interrupt. It now keeps both and
+  reports the command's own answer once the sector is acknowledged. `r6-tests`
+  passes and the measured stall is unchanged.
+- **Next step:** model MDEC output far enough for a DMA1 transfer to complete
+  (an STR sector is MDEC input; the decoded 320x240 frame is MDEC output), then
+  re-check the `0x1F801098` test and the first non-black frame.
 - **Playable native build:** No
 - **Distributed game assets:** No
 
