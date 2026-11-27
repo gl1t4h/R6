@@ -176,16 +176,21 @@ None.
   `kFrameGapCycles` after that record's last slice. The record header is parsed
   from the sector's user data (`0x0160`/`0x0161`, slice at +4, count at +6), so
   only STR records are affected and ordinary file reads keep the 4,000-cycle
-  cadence. Measured on the movie: a 700,000-cycle gap decodes 80 frames
-  (24,000 macroblocks) and then stops with the drive holding 129,105's payload,
-  so the gap has to cover the largest frame rather than the first; at 1,500,000
-  the run reaches the same end state as 2, 2.5 and 3 million - `MDEC: 52320
-  macroblock(s), 1287040 word(s) in, 10045440 word(s) out`, `CD: 4587
-  sector(s), last 10644` with `reading=0` and `fifo=0`, and `GPU: 44522 VRAM
-  pixel(s)` against 0 before. The stream at 128,304 is only 31 sectors and
-  frames 1-10 (the record type changes at 128,335), so frame 9 is inside it and
-  now stages; the run then plays on into the following streams and the guest
-  stops the drive itself at LBA 10,644 instead of grinding in the converter.
+  cadence. Two bases were measured. On the drain-gated device a 700,000-cycle
+  gap decodes 80 frames (24,000 macroblocks) and then stops with the drive
+  holding 129,105's payload, so the gap has to cover the largest frame rather
+  than the first; at 1,500,000 that base reaches `MDEC: 52320 macroblock(s)`,
+  `CD: 4587 sector(s), last 10644`, `GPU: 44522 VRAM pixel(s)`. On the current
+  streaming base the same 1,500,000-cycle gap gives `MDEC: 21057 macroblock(s),
+  523680 word(s) in, 4042944 word(s) out`, `CD: 8402 sector(s), last 10645`
+  with `reading=0` and `fifo=0`, and `GPU: 34626 VRAM pixel(s)` - against
+  `MDEC: 1200 macroblock(s)`, 481,607 sectors to LBA 609,814 and **0** VRAM
+  pixels with the streaming model alone. The stream at 128,304 is only 31
+  sectors and frames 1-10 (the record type changes at 128,335), so frame 9 is
+  inside it and now stages; the run then plays on into the following streams
+  and the guest stops the drive itself at LBA 10,645 instead of running the
+  head over the whole image. The 1,500,000 value was swept on the older base;
+  it has not been re-swept on the streaming one.
 - **Drive-side release re-tested and rejected:** letting a sector the guest
   acknowledged but never drained expire after three sector times does fire, and
   it is worse - the reader loses a slice, resynchronises and re-reads the disc:
