@@ -638,6 +638,13 @@ RunResult MipsInterpreter::run(std::uint64_t max_steps) {
         std::getenv("R6_TRACE_DECRYPT") != nullptr;
     while (result.steps < max_steps) {
         const auto current_pc = cpu_.pc;
+        if (poke_trigger_pc_ != 0 && !pokes_applied_ &&
+            current_pc == poke_trigger_pc_) {
+            for (const auto& [address, value] : deferred_pokes_) {
+                write32(address, value);
+            }
+            pokes_applied_ = true;
+        }
         {
             static const bool trace_loop =
                 std::getenv("R6_TRACE_LOOP") != nullptr;

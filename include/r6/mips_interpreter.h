@@ -80,6 +80,16 @@ public:
     }
     void set_hot_enabled(bool enabled) { hot_enabled_ = enabled; }
     void set_trace_reg(std::uint32_t address) { trace_reg_ = address; }
+    // Bring-up aid: apply a set of word pokes the first time the guest reaches
+    // a given PC. The boot's pack decrypt zeroes most of the resident image
+    // after start-up, so a poke given at load time does not survive; this
+    // lets a probe land after the load instead. Debug only, unused by default.
+    void set_pokes_at(std::uint32_t trigger_pc,
+                      std::vector<std::pair<std::uint32_t, std::uint32_t>>
+                          pokes) {
+        poke_trigger_pc_ = trigger_pc;
+        deferred_pokes_ = std::move(pokes);
+    }
     // Logs every store that lands on one address, with the writing PC, so a
     // value that appears in guest memory can be traced back to its writer.
     void watch_write(std::uint32_t address) { watch_writes_.push_back(address); }
@@ -339,6 +349,11 @@ private:
     // stub report one finished slot, so the boot wait it feeds can be
     // measured without modelling the driver. Debug only.
     bool force_sound_tick_{false};
+    // Deferred bring-up pokes, applied once when the guest reaches the PC
+    // named by set_pokes_at().
+    std::uint32_t poke_trigger_pc_{0};
+    std::vector<std::pair<std::uint32_t, std::uint32_t>> deferred_pokes_;
+    bool pokes_applied_{false};
     // SR before the exception push, kept so an abandoned handler can be unwound
     // without leaving interrupts disabled.
     std::uint32_t interrupt_saved_sr_{0};

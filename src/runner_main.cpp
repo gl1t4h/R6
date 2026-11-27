@@ -88,6 +88,8 @@ int main(int argc, char** argv) {
     std::filesystem::path extract_exe_path;
     bool deliver_vblank = false;
     std::vector<std::pair<std::uint32_t, std::uint32_t>> pokes;
+    // With --poke-at, the pokes are held back until the guest reaches this PC.
+    std::uint32_t poke_trigger_pc = 0;
     std::vector<std::uint32_t> peeks;
     std::vector<std::uint32_t> watched_pcs;
     std::vector<std::uint32_t> watched_args;
@@ -219,6 +221,11 @@ int main(int argc, char** argv) {
             }
             pokes.emplace_back(std::stoul(poke.substr(0, split), nullptr, 0),
                                std::stoul(poke.substr(split + 1), nullptr, 0));
+        } else if (argument == "--poke-at" && index + 1 < argc) {
+            // Debug aid: apply the --poke list when the guest first reaches
+            // this PC, so a probe survives the boot's pack decrypt.
+            poke_trigger_pc = static_cast<std::uint32_t>(
+                std::stoul(argv[++index], nullptr, 0));
         } else if (input.empty()) {
             input = argument;
         }
@@ -226,7 +233,8 @@ int main(int argc, char** argv) {
 
     if (input.empty()) {
         std::cerr << "usage: r6-run <game.cue|game.bin|game.chd> [--steps N]"
-                     " [--entry 0xADDR] [--extract-exe path] [--poke 0xADDR=0xVALUE] [--vblank]"
+                     " [--entry 0xADDR] [--extract-exe path]"
+                     " [--poke 0xADDR=0xVALUE] [--poke-at 0xADDR] [--vblank]"
                      " [--dump-frame frame.ppm] [--dump-range 0xADDR:COUNT]"
                      " [--list-files] [--extract-file NAME=PATH]"
                      " [--dump-ram file] [--dump-snapshot file]"
@@ -373,11 +381,16 @@ int main(int argc, char** argv) {
         ram.write32(kCrStackGlobal & kRamMask, kDefaultStack);
     }
 
-    for (const auto& [address, value] : pokes) {
-        ram.write32(address & kRamMask, value);
+    if (poke_trigger_pc == 0) {
+        for (const auto& [address, value] : pokes) {
+            ram.write32(address & kRamMask, value);
+        }
     }
 
     r6::MipsInterpreter interpreter(ram, services);
+    if (poke_trigger_pc != 0) {
+        interpreter.set_pokes_at(poke_trigger_pc, pokes);
+    }
     for (auto address : watched_pcs) interpreter.watch_pc(address);
     for (const auto& range : watch_ranges) {
         interpreter.watch_range(range.first, range.second);

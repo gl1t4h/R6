@@ -1168,3 +1168,48 @@ routine.
 The observed fact is that the status gate cannot see a response and the
 504-word payload after the slot-17 header never starts. Whether populating
 the overlay table would restart production is untested.
+### The 2026-11-27 bring-up probes
+
+Two probes were added so the findings above can be retested without editing
+the binary. `--poke-at 0xADDR` defers the `--poke` list until the guest
+first reaches that PC, because the 673,536-byte pack decrypt at `0x80010AD0`
+runs at about 40.7M cycles and zeroes every BSS slot a load-time poke had
+touched. The switch is off unless asked for and changes nothing when unused.
+
+Populating what the pump expects is not enough. With the descriptor copied
+into the slot the pump reads (`0x8009336C`, 18 words from `0x800AFF3C`,
+poked before first use) production still stopped at 17 against 9 consumed
+and the frame body never ran. Pointing the pump's status word
+(`0x800BFF5C`) at a scratch word holding `0x00000100` let the pump run 19
+times and production reached 18/18/18, yet `0x8008F398`, `0x8003AB28` and
+`0x8003AA4C` were still never entered and `0x800CC258` stayed zero. The
+table is needed for the pump to see its own status but it is not the gate
+the frame loop waits on.
+
+### Sector framing is not the stall
+
+`CdromDevice::load_sector` presents a sector as 12 header bytes followed by
+the 2048 user bytes, and `pop_data` only queues the next sector once
+`data_index_ >= data_.size()`, so a consumer that stops short of 2060 bytes
+parks the drive. The stream pump does not stop short: it reads the header
+through the data port (four bytes at `0x80093778`, eight at `0x800937A0`),
+then DMAs 8 words and 504 words, which is 2060 bytes exactly. The payload
+half of the sector is issued from the sound module (`0x8004DD08`,
+`0x8004DD58`, `0x8004DDE8` call the payload routine at `0x80093D00`), so
+the pump stops after a header only when the sound module stops calling it -
+which is the frozen retry loop at `0x801E331C`, not a drive accounting bug.
+
+### What the guest draws
+
+`R6_TRACE_PRIM` shows the frame body's whole submission: a texture page
+select (`GP0 0xE1`), three `0x64` textured rectangles with modulation
+`0x808080` and sizes `0x0100`/`0x0080`, and a black `0x02` fill of the
+320x224 page, repeated every frame. The rectangles sample the 8-bit page at
+`x=960` with the CLUT word carried in the packet (`0x7830`), which points
+at VRAM the game never fills: its atlases land at `(768,0)`, `(896,0)` and
+`(704,256)`, and its palette at `(0,496)`. Every sampled texel is zero, and
+PS1 texture blending treats texel zero as transparent, so the page is left
+untouched. The black frame is the clear, not a rasteriser fault.
+
+The open defect is therefore the sound phase machine: the frame body draws
+a black clear because the scene that would give it colour never starts.
