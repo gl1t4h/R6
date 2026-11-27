@@ -1494,35 +1494,30 @@ a keeping command changed those offsets but not the outcome - 18 payloads
 and a black frame either way - so it was dropped rather than kept as an
 unmeasured model change.
 
-### The record check and the buffer it reads
+### The buffer and the check that does not run
 
-The check that rejects frame 19 is at `0x8009391C`. It does not look at the
-address the DMA wrote:
+The header addresses the stream DMAs use step by 0x20 from `0x801A8040`
+and the payload addresses step by 0x7E0 from `0x801A8320`. The gap between
+the two bases is 0x2E0, exactly 23 header entries, so slot 18 at
+`0x801A8280` and its payload at `0x801B10E0` both fall inside the span the
+player uses; the buffer is not what stops the stream at eighteen records.
+An end-of-run RAM dump finds those bytes occupied by libcd traffic
+(`0x801A8280` = `0xF6CCB233`, written by `pc=0x80015C88`), so the same
+memory is shared with the CD library once the player stops.
 
-```
-0x8009391C  lw   $a0, [0x800C6DD8]     ; entry pointer, not the DMA target
-0x80093928  lhu  $v1, 0($a0)
-0x8009392C  addiu $v0, $zero, 0x0160   ; first halfword of the record
-0x80093930  bne  $v1, $v0, reject      ; -> [0x800BFF84] = 5, entry cleared
-0x80093938  lhu  $v0, 2($a0)
-0x80093944  srl  $v0, 10
-0x80093948  andi $v0, 0x1F             ; channel
-0x8009394C  beq  $v0, [0x800C4990], accept
-```
+The resident code at `0x8009391C` compares a record's first halfword with
+`0x0160` and its channel field with `[0x800C4990]`, storing error 5 in
+`0x800BFF84` when they differ. An earlier version of this note called that
+the frame-19 rejection. That was wrong: `--watch-pc` on `0x800938C4`,
+`0x8009391C`, `0x80093954`, `0x800939D0` and `0x80093A10` reports **zero
+executions** over a 420M-instruction run, so none of that code runs at any
+point, including during the eighteen records that do stream. The zero
+globals it would read (`0x800C6DD8`, `0x800C4990`, `0x800C49B0`,
+`0x800C49B8`, only ever cleared once by `0x80010B0C`) are a consequence of
+that code never running, not a cause of the stall.
 
-So it compares the record's first halfword with `0x0160` and its channel
-field with `[0x800C4990]`; a mismatch stores error 5 in `0x800BFF84` and
-clears the entry. The accept path at `0x800939D0` stores 6.
-
-`0x800C6DD8`, `0x800C4990`, `0x800C49B0` and `0x800C49B8` are only ever
-written once in the whole run, by the clearing routine at `0x80010B0C`,
-with zero. Nothing ever stores the ring base into them, so the check reads
-its "entry" from address 0 rather than from the record the drive delivered.
-
-The buffer itself is not the problem. The header area starts at
-`0x801A8040` and the payload area at `0x801A8320`, exactly 0x2E0 later,
-which is 23 slots of 0x20 - so slot 18 at `0x801A8280` and its payload at
-`0x801B10E0` are both inside a 23-slot ring. A watch on `0x801A8280` shows
-it written by libcd (`pc=0x80015C88`, value 0xF6CCB233), and an end-of-run
-RAM dump finds exactly that word there, so the same memory is reused as a
-plain libcd read buffer once the player stops.
+What judges a record is therefore still unlocated. The DMA that moves the
+header and payload runs at `0x8009408C`, and the drive hands over
+`0x80010160` at offset 12 for the nineteenth record exactly as it does for
+the first eighteen, but the code that decides the nineteenth is unusable
+has not been found.
