@@ -171,14 +171,21 @@ None.
   6,864,968 in the whole run, and the player only drains the four frames still
   staged (releases at 7,489,000, 8,053,500, 8,617,936) before stopping at 2,400
   macroblocks.
-- **Why pacing alone cannot close that gap:** at 4,000 cycles a sector the
-  reader is about eighteen times faster than the player and laps the four-frame
-  pool at frame 5; at the real 2x rate it instead claims a frame on its first
-  published slice and starts converting while nine slices are still arriving,
-  which is the 227-macroblock stall. A delivery that satisfies both constraints
-  is frame-granular - ten sectors back to back, then a gap of about one
-  conversion (~700,000 cycles). That is a drive-pacing change and was out of
-  scope here.
+- **Frame-granular delivery (implemented and measured):** `CdromDevice` now
+  serves a streamed record's slices back to back and arms the next sector with
+  `kFrameGapCycles` after that record's last slice. The record header is parsed
+  from the sector's user data (`0x0160`/`0x0161`, slice at +4, count at +6), so
+  only STR records are affected and ordinary file reads keep the 4,000-cycle
+  cadence. Measured on the movie: a 700,000-cycle gap decodes 80 frames
+  (24,000 macroblocks) and then stops with the drive holding 129,105's payload,
+  so the gap has to cover the largest frame rather than the first; at 1,500,000
+  the run reaches the same end state as 2, 2.5 and 3 million - `MDEC: 52320
+  macroblock(s), 1287040 word(s) in, 10045440 word(s) out`, `CD: 4587
+  sector(s), last 10644` with `reading=0` and `fifo=0`, and `GPU: 44522 VRAM
+  pixel(s)` against 0 before. The stream at 128,304 is only 31 sectors and
+  frames 1-10 (the record type changes at 128,335), so frame 9 is inside it and
+  now stages; the run then plays on into the following streams and the guest
+  stops the drive itself at LBA 10,644 instead of grinding in the converter.
 - **Drive-side release re-tested and rejected:** letting a sector the guest
   acknowledged but never drained expire after three sector times does fire, and
   it is worse - the reader loses a slice, resynchronises and re-reads the disc:
@@ -325,11 +332,10 @@ None.
   the previous frame's type, so it zeroes that slot, records state 9 in
   `[0x800B1000]` and returns without staging the sector. Frame 9's payload is
   never staged for that reason, and it cannot be released from the drive side -
-  the release has to come from the player consuming frame 8, which it does
-  90,000 cycles too late. **The movie does not play past eight frames:** at 4000
-  cycles per sector it decodes eight black frames (2,400 macroblocks) and stops
-  in the ninth; at the real 2x rate it stops inside the first (227
-  macroblocks).
+  the   release has to come from the player consuming frame 8, which it does
+  90,000 cycles too late. **Before frame-granular delivery the movie did not
+  play past eight frames** - 2,400 macroblocks at 4,000 cycles per sector, 227
+  at the real 2x rate; the delivery change below takes it to 52,320.
 - **Where this route dead-ends:** the 1400-field run submits 13 GP0
   primitives but uploads no pixels, because the video never reaches the display
   stage. (The 2,400 macroblocks it reports are eight black frames of 300,

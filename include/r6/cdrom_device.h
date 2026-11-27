@@ -43,6 +43,23 @@ public:
     // presented, and a sector the guest acknowledged but did not collect
     // within its own sector time is given up and overwritten. That is what
     // lets a player which is behind on collecting still fill its read-ahead.
+    //
+    // A streamed movie additionally needs frame-granular service, not a uniform
+    // cadence.
+    // The guest's player claims a frame on its first published slice, converts
+    // it, and only frees that frame's ring slots when it is done - 550,000 to
+    // 800,000 cycles - while a 2x drive stages ten sectors in about 60,000. A
+    // uniform fast cadence therefore laps the four-frame payload pool (the
+    // reader bails at the frame boundary with its slot still claimed) and a
+    // uniform slow one starves the converter mid-frame. Serving a record's
+    // slices back to back and then waiting about one conversion satisfies both.
+    // The gap only applies to STR records (type 0x0160/0x0161 with more than
+    // one slice), so ordinary file reads are unaffected.
+    // Measured on the movie: 700,000 cycles carries it 80 frames before the
+    // release falls behind again, and 1,500,000 plays the whole stream; 2, 2.5
+    // and 3 million give the identical end state, so the gap is not itself the
+    // limiting factor above this value.
+    static constexpr std::uint64_t kFrameGapCycles = 1500000;
 
     explicit CdromDevice(PlatformServices& services) : services_(services) {}
 
@@ -261,6 +278,10 @@ public:
                sector_pending_ == other.sector_pending_ &&
                sector_delay_cycles_ == other.sector_delay_cycles_ &&
                sector_delay_ == other.sector_delay_ &&
+               record_type_ == other.record_type_ &&
+               record_slice_ == other.record_slice_ &&
+               record_slices_ == other.record_slices_ &&
+               frame_gap_pending_ == other.frame_gap_pending_ &&
                data_acknowledged_ == other.data_acknowledged_ &&
                xa_enabled_ == other.xa_enabled_;
     }
@@ -314,7 +335,12 @@ private:
     void schedule_sector() {
         next_sector_pending_ = false;
         sector_pending_ = true;
-        sector_delay_ = sector_delay_cycles_;
+        // A streamed record is served back to back and then held back for
+        // about one frame conversion; see kFrameGapCycles. The flag is set by
+        // load_sector() for the record's last slice.
+        sector_delay_ = frame_gap_pending_ ? kFrameGapCycles
+                                           : sector_delay_cycles_;
+        frame_gap_pending_ = false;
     }
 
     // Bring-up: prints where the FIFO stands around the two places that can
@@ -393,6 +419,22 @@ private:
             presented_sector_ = presented;
             ++sectors_read_;
             if (reading_) ++sector_;
+            // A streamed record's header is the first eight bytes of user
+            // data: type, then slice index, slice count and frame number. Only
+            // a record's last slice arms the frame gap; ordinary file sectors
+            // keep the plain cadence.
+            const auto* record = data_.data() + kHeaderBytes;
+            record_type_ = static_cast<std::uint16_t>(record[0] |
+                                                      (record[1] << 8));
+            record_slice_ = static_cast<std::uint16_t>(record[4] |
+                                                       (record[5] << 8));
+            record_slices_ = static_cast<std::uint16_t>(record[6] |
+                                                        (record[7] << 8));
+            frame_gap_pending_ =
+                loaded &&
+                (record_type_ == 0x0160u || record_type_ == 0x0161u) &&
+                record_slices_ > 1 &&
+                static_cast<std::uint32_t>(record_slice_) + 1u >= record_slices_;
             // Subheader byte 2 is the submode; bit 2 marks XA-ADPCM audio.
             if (loaded && xa_enabled_ && (data_[6] & 0x04u) != 0) {
                 note("sector " + std::to_string(presented) + " xa skip");
@@ -616,6 +658,7 @@ private:
                 data_.clear();
                 start_read_after_ack_ = true;
                 next_sector_pending_ = false;
+                frame_gap_pending_ = false;
                 data_acknowledged_ = false;
                 begin_command(kIntAcknowledge, 0);
                 break;
@@ -778,6 +821,11 @@ private:
     bool sector_pending_{false};
     std::uint64_t sector_delay_cycles_{kSectorDelayCycles};
     std::uint64_t sector_delay_{0};
+    // Record header of the sector just loaded, and whether it ended a record.
+    std::uint16_t record_type_{0};
+    std::uint16_t record_slice_{0};
+    std::uint16_t record_slices_{0};
+    bool frame_gap_pending_{false};
     bool data_acknowledged_{false};
     // Cycle count and the time the sector in the fifo was last acknowledged
     // or collected; together they bound how long unread bytes stay valid.
