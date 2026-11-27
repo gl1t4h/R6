@@ -122,7 +122,40 @@ None.
   refusal happens, 30 sectors into the movie instead of 79, with the payload not
   read at all (`fifo=2060`) and 227 macroblocks decoded instead of 2400. The
   constant is back at 4000, the value the rest of these numbers were measured
-  with.
+  with. Re-measured over 3000 fields, the 2x rate reads `1004 sector(s), last
+  129225` - past the movie's own 171 sectors - while decoding 227 macroblocks:
+  the guest gives up on the movie inside frame 1 and goes on to read whatever
+  follows it, so it no longer hangs but never plays the stream either. Slower
+  pacing does not fix the movie, because the guest's converter then starts on a
+  frame whose slices are still arriving and grinds through the `0x33333333`
+  pre-fill; faster pacing fills the ring. Both sides of that window are now
+  measured.
+- **Where the ring stops, measured slot by slot:** the ring is 48 slots of 32
+  bytes at `0x80148AD4`, and every header read from it matches the disc image
+  byte for byte (sector 128304 holds `0160 8001 0000 000A 0001 ...`: type
+  `0x0160`, slice index 0 at +4, ten slices at +6, frame 1 at +8), with the
+  write index advancing one slot per sector. Publication is **once per frame,
+  not once per sector**: the epilogue at `0x800858B0` stores 3 into the slot's
+  type (payload staged), increments `[0x800C1514]`, and calls `0x8008DB44` only
+  when `[0x800C1508]` is set - which only the last-slice branch at `0x800857A4`
+  does, and a trace of 14 sectors shows `[0x800C1508] = 0` at every check. The
+  reader gives up at a frame boundary when the slot it is about to reuse still
+  holds a type: `0x800850E8`-`0x8008512C` stores state 4, and the new-frame wrap
+  at `0x80085628`-`0x80085648` zeroes slot 0's type and stores state 9. In the
+  4000-cycle trace that is sector 128385 with the write index at 39 of 48 and
+  the consumer index still 0: nothing had been released yet, and the player's
+  first release of ten slots lands 90,000 cycles later. The ring is therefore
+  full of frames the player has not consumed, and the bail is the reader's own
+  back-pressure, not a misread header.
+- **The drive is not parked (correction to the note above):** the `fifo=2016`,
+  `acked=1` state read as a deadlock is the end-of-run snapshot of a drive that
+  had already been stopped from the guest side; a 4000-cycle run ends with
+  `fifo=0` and `reading=1`, and a live drain takes a few hundred cycles. Adding
+  a release for a sector the guest acknowledged but never drained (drop the
+  remainder after three sector times and arm the next) does fire, and it is
+  worse: the reader loses a slice, resynchronises and re-reads the disc - 1400
+  fields then read 54,730 sectors (last 182,944) for 1,800 macroblocks instead
+  of 2,400. It was reverted; the drain gate is not what stops the stream.
 - **STR route (`tools/str-frame.cpp`):** the demux and the decoder both work
   now, and the tool writes a real picture. It walks the image from a given LBA,
   groups video records into frames by the record header's frame number, skips XA
@@ -255,8 +288,16 @@ None.
 - **So the upload is not missing, it is never asked for.** The decoder, the
   DMA1 delivery and the ring all behave for the eight frames that arrive; the
   ninth never gets data, and the player hangs in the converter long before it
-  could ask the GPU for anything. Next step: find why the reader leaves LBA
-  128385 unread (ring slot 0 never released), so frame 9's payload is staged.
+  could ask the GPU for anything. The reader leaves LBA 128385 unread because
+  its own back-pressure bails at the frame boundary first: slot 0 still held
+  the previous frame's type, so it zeroes that slot, records state 9 in
+  `[0x800B1000]` and returns without staging the sector. Frame 9's payload is
+  never staged for that reason, and it cannot be released from the drive side -
+  the release has to come from the player consuming frame 8, which it does
+  90,000 cycles too late. **The movie does not play past eight frames:** at 4000
+  cycles per sector it decodes eight black frames (2,400 macroblocks) and stops
+  in the ninth; at the real 2x rate it stops inside the first (227
+  macroblocks).
 - **Where this route dead-ends:** the 1400-field run submits 13 GP0
   primitives but uploads no pixels, because the video never reaches the display
   stage. (The 2,400 macroblocks it reports are eight black frames of 300,
