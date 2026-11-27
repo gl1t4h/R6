@@ -859,10 +859,6 @@ int run_headless(Host& host, std::uint64_t frames,
                   << " macroblock(s), " << bus.hardware().mdec().words_in()
                   << " word(s) in, " << bus.hardware().mdec().words_out()
                   << " word(s) out, depth " << bus.hardware().mdec().depth()
-                  << " bits " << bus.hardware().mdec().bits_used()
-                  << " started "
-                  << (bus.hardware().mdec().stream_started() ? 1 : 0)
-                  << " failed " << bus.hardware().mdec().failed_blocks()
                   << "\n";
         std::cout << "Clock: " << bus.hardware().cycles() << " cycle(s), "
                   << bus.hardware().interrupt_status() << " I_STAT, "

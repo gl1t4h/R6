@@ -545,32 +545,6 @@ private:
         if (words == 0) words = 0x10000u;
         if (blocks > 1) words *= blocks;
         const auto address = 0x80000000u | hardware_.dma_address(0);
-        if (std::getenv("MDEC_TRACE") != nullptr) {
-            // What the player actually hands the decoder, so a stream that is
-            // not the disc's payload can be seen instead of guessed at.
-            static int traced = 0;
-            if (traced < 8) {
-                std::fprintf(stderr, "dma0 src %08X words %u\n", address, words);
-                for (std::uint32_t index = 0; index < 16 && index < words;
-                     ++index) {
-                    std::fprintf(stderr, "  [%u] %08X\n", index,
-                                 ram_.read32((address + index * 4) & kRamMask));
-                }
-                static bool dumped = false;
-                if (words > 512 && !dumped) {  // the decode, not a table
-                    dumped = true;
-                    if (auto* dump = std::fopen("work/mdec_in.bin", "wb")) {
-                        for (std::uint32_t index = 0; index < words; ++index) {
-                            const auto word =
-                                ram_.read32((address + index * 4) & kRamMask);
-                            std::fwrite(&word, 4, 1, dump);
-                        }
-                        std::fclose(dump);
-                    }
-                }
-                ++traced;
-            }
-        }
         for (std::uint32_t index = 0; index < words; ++index) {
             hardware_.mdec().push_word(
                 ram_.read32((address + index * 4) & kRamMask));

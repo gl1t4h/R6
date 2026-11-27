@@ -178,35 +178,42 @@ None.
   scanning at, the frame index from there (zero based), the output file, and
   optionally a coded width and height. The `work/` folder holds the ffmpeg build
   and the reference YUV dumps; neither is committed.
-- **The decoder is in the port now, and the player does not use it:** the
-  bit-packed reader moved into `r6::MdecDevice` (table shared with the tool
-  through `include/r6/mdec_rl_table.h`), so the device reads the STR stream
-  directly instead of 16-bit run/level codes. Given a real frame payload it
-  produces 300 of 300 macroblocks and 38,400 words, the 15-bit size - the same
-  picture the tool writes. In the 1400-field run it produces nothing, and that is
-  now explained rather than guessed: the words the player sends are not the
-  stream. Captured from DMA0 (source `0x800FDAC8`, 1,824 words) the buffer holds
-  exactly three distinct words - `FE000400` 600 times, `FE000600` 1,200 times and
-  `FE00FE00` 24 times - and the disc payload's first bytes (`20 07 00 38`) appear
-  nowhere in it. It is a fill pattern of blank blocks, so the device decodes 0
-  macroblocks, the GPU uploads nothing, and the screen stays black.
-- **Where the movie stands after that move:** `MDEC: 0 macroblock(s), 14,656
-  word(s) in, 0 word(s) out, depth 2`; `GPU: primitives=13 vram_pixels=0
-  bounds=none`; the 320x240 shot has 312 non-black pixels, which is only the port's
-  own "60 FPS" overlay, and a mean channel value of 1.0. So the answer to "does a
-  non-black movie frame reach the screen" is no - and it is not the decoder that
-  fails now: the player never puts the payload into its own MDEC input buffer.
-  That buffer is filled and then left alone while the player waits at the ring
-  slot refusal (171 sectors read, last 128385), which is the same upstream stall
+- **What the player actually hands the decoder, settled:** the DMA0 buffer at
+  `0x800FDAC8` is 1,824 words (7,296 bytes) and holds exactly 1,800 code words
+  followed by 24 `FE00FE00` padding words. All 1,800 are one repeated six-word
+  macroblock - `0400 0400 0600 0600 0600 0600` - so chroma DC 0 in the Cr and Cb
+  words and luma DC -512 in the four Y words, with `FE00` in the high half of
+  every word as the code that takes the scan past coefficient 63. Decoded, that
+  is uniform luma -128 (pixel 0) and chroma 0 (pixel 128): a black frame, the
+  same picture ffmpeg reports for frame 1 (luma mean 0.0, chroma 128).
+  This is a **valid 16-bit MDEC stream of a black frame, not a fill pattern**,
+  and three things rule out a blind fill: the length lands exactly on 300
+  macroblocks of six blocks, the two chroma words differ from the four luma ones
+  (a fill cannot make that distinction), and every block is terminated where the
+  code format requires it. The old reader's 300 macroblocks were therefore a
+  correct decode, and the earlier note here calling them a fill pattern was
+  wrong.
+- **Consequence for the port:** because the player feeds 16-bit code words, that
+  is the reader `MdecDevice` has to have, and the bit-packed STR reader went
+  back to `tools/str-frame.cpp` where the disc's own format belongs (the native
+  movie path). With the code-word reader restored the device decodes 2,400
+  macroblocks (8 black frames of 300) and 460,800 words, which is 192 words per
+  macroblock - the 24-bit size the player asks for.
+- **Where the movie stands:** `MDEC: 2400 macroblock(s), 14,656 word(s) in,
+  460800 word(s) out, depth 2`; `GPU: primitives=13 vram_pixels=0 bounds=none`;
+  the 320x240 shot has 312 non-black pixels, only the port's own "60 FPS"
+  overlay, and a mean channel value of 1.04. Decoding is not the blocker: the
+  player never uploads the decoded frames to VRAM, and it stops asking for more
+  video at 171 sectors (last 128385), which is the same ring-slot refusal
   recorded above.
 - **Next step:** find the copy that is supposed to move a frame's payload into
   `0x800FDAC8` before the decode command, and why it does not run. The MDEC side
   needs no further work: a real payload in that buffer now decodes.
 - **Where this route dead-ends:** the 1400-field run submits 13 GP0
   primitives but uploads no pixels, because the video never reaches the display
-  stage. (It used to report 2,400 macroblocks of MDEC output; those came from
-  reading the player's blank-block fill pattern as if it were a stream, and the
-  bit-packed reader correctly decodes none of it.) Every
+  stage. (The 2,400 macroblocks it reports are eight black frames
+  of 300, decoded correctly from the code words the player feeds it; what never
+  happens is the upload to VRAM.) Every
   further CD/register change is chasing a refusal the guest makes on purpose
   while it is waiting for its own decoder. The two ways forward are (a) work the
   player's frame pipeline instead - the consumer that clears the frame header
