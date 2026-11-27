@@ -692,7 +692,7 @@ window body shows those counters plus how many disc sectors have been read.
 - **Why the scene never activates:** `0x8008F398` (sets `0x800AFDEC`,
   installs the 1602 payload into `0x800C4850`/`0x800BC728`, starts the
   scene) has one caller, `0x80034CD4`, and that call is gated on
-  `*(0x800CC258) == 0x20`. `0x800CC258` is set to `0x20` only at
+  `*(0x800BC258) == 0x20`. `0x800BC258` is set to `0x20` only at
   `0x8003ABD4`, inside the sound scene-start function `0x8003AB28`. Neither
   that function nor its dispatcher `0x8003AA4C` executes at all in 400M
   steps (`--watch-pc` reports 0 for both), so the gate can never open. The
@@ -1083,7 +1083,7 @@ With both fixes a 400M-instruction run (`R6_FORCE_SOUND_TICK=1`) executes 35
 state-3 writes instead of 18. Groups 1 and 2 complete, a new segment starts at
 group 3, all nine group-3 records are consumed and eight of group 4 are
 published, and the final counters are `produced = commit = 17`,
-`consume = 9` in the new segment. The scene gate `0x800CC258` is still 0 and
+`consume = 9` in the new segment. The scene gate `0x800BC258` is still 0 and
 the frame body count is still 254. This removes the first CD-stream deadlock,
 but the new segment then stalls at record 17 (next section), and the scene is
 still closed; the sound module that stores `0x20` there remains the blocker.
@@ -1216,7 +1216,7 @@ poked before first use) production still stopped at 17 against 9 consumed
 and the frame body never ran. Pointing the pump's status word
 (`0x800BFF5C`) at a scratch word holding `0x00000100` let the pump run 19
 times and production reached 18/18/18, yet `0x8008F398`, `0x8003AB28` and
-`0x8003AA4C` were still never entered and `0x800CC258` stayed zero. The
+`0x8003AA4C` were still never entered and `0x800BC258` stayed zero. The
 table is needed for the pump to see its own status but it is not the gate
 the frame loop waits on.
 
@@ -1247,3 +1247,77 @@ untouched. The black frame is the clear, not a rasteriser fault.
 
 The open defect is therefore the sound phase machine: the frame body draws
 a black clear because the scene that would give it colour never starts.
+
+### The main-state table and the sound scene start
+
+`0x800A977C` is the main-state dispatch table. The frame driver loads
+`0x800BCCBC` (the state word, offset `+0x594` of `0x800BC728`) at
+`0x80033070`, indexes that table at `0x80033078` and calls the entry at
+`0x80033088`, once per driver iteration. Its entries are:
+
+| state | handler |
+|---|---|
+| 0 | `0x80032D1C` |
+| 1 | `0x800C95AC` |
+| 2 | `0x800C99A4` (the boot state machine) |
+| 6 | `0x801E279C` (cinema player) |
+| 7 | `0x8003AB28` (sound scene start) |
+| 10 | `0x800348E8` |
+| 11 | `0x80038BD4` |
+| 12 | `0x8003AA4C` |
+
+So `0x8003AB28` is entered whenever the main state is exactly 7, and only
+then. The stores to `+0x594` that can produce 7 are `0x800343C0` (inside the
+scene-start routine `0x80034264`), `0x801E27DC` (the tail of the cinema
+handler), `0x8003ADF8`, `0x8003AF58` and `0x8003B188` (sound sub-states) and
+`0x801E2A48`. The driver reaches `0x80034264` only when `0x80034108`
+returns 2 (`beq` at `0x80032FA8` / `0x800330AC`, call at `0x800330B4`).
+
+`0x80034108` returns 2 in three cases: `*(0x800BC264) & 2` is set and the
+frame counter `0x800A9768` has passed 1801; the pad block reaches
+`0x0F09`/`0x9008`; or `*(0x800BC264) & 0x100` is set. Earlier notes gave
+this word as `0x800CC264`; the displacement `-15772` from `0x800C0000`
+makes it `0x800BC264` (and the scene gate `0x800BC258`), 64 KiB lower.
+
+Nothing ever writes those words. A 420M-step run with
+`--watch-write 0x800BC264 --watch-write 0x800BC258` records exactly one
+store to each: the BSS clear at `0x80010B0C`. Both stay zero, so
+`0x80034108` answers 0 on all 124 calls and `0x800330B4`, `0x80034264`
+and `0x800343C0` never execute.
+
+### Where the cinema path stops
+
+The one path that can set state 7 on its own is the state-6 handler
+`0x801E279C`. It calls `0x801E2AA4` with file id 2054, which is the cinema
+player: it points a 320x240 page at `0x801A2600` (`0x801E2BC8`), opens the
+stream, and then reads one frame per iteration through the 2000x2000 retry
+loop at `0x801E3298`/`0x801E331C` on the 32-byte ring at `0x801A8040`.
+Only after that call returns does `0x801E27DC` set state 7. In a 420M-step
+run the ring is healthy but slow: entries 9-16 are ready, 35 frames have
+been published, and the pump `0x80093170`/`0x800935CC` has run 37 times,
+about one chunk per 11M cycles, so the player never reaches its end.
+
+Seeding the guest's own flag proves the rest of the chain. With
+`R6_FORCE_SOUND_TICK=1 --poke 0x800BC264=0x100 --poke-at 0x80032EE0`
+(the poke has to land after the boot clear at `0x80010B0C`), 420M-500M
+steps give: `0x80034108` returns 2, the driver calls `0x80034264`,
+`0x800343C0` sets the state to 7, `0x8003AB28` runs 1013 times,
+`0x8003ABD4` sets `0x800BC258` to `0x20`, and the state stays 7. The scene
+install still does not happen: `0x80034CD4` (the only caller of
+`0x8008F398`) needs the file-1618 stream to arrive, and the frame is still
+**0 of 76,800** non-black pixels.
+
+The remaining defect is disc throughput on this path. Over 420M cycles the
+controller's data-ready callback `0x80093100` runs twice and the pump 37
+times, while the loader path reads hundreds of sectors in the same budget,
+so the cinema stream is starved rather than mis-addressed. That starvation
+is what keeps `0x801E27DC`, and with it `0x8003AB28`, unreachable in an
+unmodified run.
+
+### Snapshots do not carry the timer mode
+
+A resumed `--state` run spins for ever in the "wait until two reads agree"
+loop at `0x80013130`, because the snapshot holds the CPU and RAM but not
+the timer mode: live, T1 is `0x148` and that loop exits 6010 times out of
+6380 entries, while a resumed map reports mode 0 and every read of
+`0x1F801110` differs. Use a fresh run for anything VSync-paced.
