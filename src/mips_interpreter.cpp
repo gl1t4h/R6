@@ -326,8 +326,12 @@ void MipsInterpreter::write32(std::uint32_t address, std::uint32_t value) {
             const auto sync_mode = (value >> 9) & 3u;
             // Channel control bit 0 is set when the transfer reads main RAM.
             const auto from_ram = (value & 1u) != 0;
-            if (start && sync_mode == 2 && from_ram) {
-                run_dma2_list();
+            if (start && from_ram) {
+                if (sync_mode == 2) {
+                    run_dma2_list();
+                } else if (sync_mode == 1) {
+                    run_dma2_request();
+                }
             }
         }
         if (physical == hardware::kMdecData ||
@@ -541,6 +545,22 @@ void MipsInterpreter::complete_mdec_dma(std::size_t channel) {
     const bool interrupt = (dicr & (1u << 23)) != 0 &&
                            (dicr & (1u << (16 + channel))) != 0;
     hardware_.schedule_dma_completion(channel, 8u, interrupt);
+}
+
+void MipsInterpreter::run_dma2_request() {
+    // DMA2 request mode: the counter carries a block size and a block count,
+    // and the words are the pixels behind a GP0 upload header the guest wrote.
+    const auto counter = hardware_.dma_counter(2);
+    auto words = counter & 0xFFFFu;
+    if (words == 0) words = 0x10000u;
+    const auto blocks = counter >> 16;
+    if (blocks > 1) words *= blocks;
+    const auto address = 0x80000000u | hardware_.dma_address(2);
+    for (std::uint32_t index = 0; index < words; ++index) {
+        services_.write_gpu_register(hardware::kGpuCommand,
+                                     read32(address + index * 4));
+    }
+    events_.record("dma2");
 }
 
 void MipsInterpreter::run_dma0_transfer() {

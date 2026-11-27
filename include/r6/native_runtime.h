@@ -361,7 +361,10 @@ public:
                 const auto start = (value & (1u << 24)) != 0;
                 const auto sync_mode = (value >> 9) & 3u;
                 const auto from_ram = (value & 1u) != 0;
-                if (start && sync_mode == 2 && from_ram) run_dma2_list();
+                if (start && from_ram) {
+                    if (sync_mode == 2) run_dma2_list();
+                    else if (sync_mode == 1) run_dma2_request();
+                }
             }
             if (physical == hardware::kMdecData ||
                 physical == hardware::kMdecStatus) {
@@ -527,6 +530,24 @@ private:
             if (next == kEndMarker) break;
             address = next & kRamAddressMask;
         }
+    }
+
+    // DMA2 request mode: a plain burst of words from main RAM into GP0. The
+    // movie player uploads each 24x240 strip of a decoded frame this way after
+    // writing the GP0(0xA0) copy header itself, so a burst of 2,880 words
+    // arrives behind every header.
+    void run_dma2_request() {
+        const auto counter = hardware_.dma_counter(2);
+        auto words = counter & 0xFFFFu;
+        if (words == 0) words = 0x10000u;
+        const auto blocks = counter >> 16;
+        if (blocks > 1) words *= blocks;
+        const auto address = 0x80000000u | hardware_.dma_address(2);
+        for (std::uint32_t index = 0; index < words; ++index) {
+            hardware_.write32(hardware::kGpuCommand,
+                              ram_.read32((address + index * 4) & kRamMask));
+        }
+        events_.record("dma2");
     }
 
     void complete_mdec_dma(std::size_t channel) {

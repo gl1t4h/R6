@@ -242,6 +242,7 @@ private:
     void record_call_site(std::uint32_t pc);
     // Walks a DMA2 linked list and feeds its packets to the GPU.
     void run_dma2_list();
+    void run_dma2_request();
     // Copies a CD-ROM sector into main RAM for DMA channel 3.
     void run_dma0_transfer();
     void run_dma1_transfer();

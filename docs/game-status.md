@@ -197,27 +197,39 @@ None.
   15,138 and 15,510 VRAM pixels); 640k-660k stall again; and 680k, 700k, 800k,
   900k, 1M, 1.2M and 1.5M all complete. Completion is therefore not monotonic
   in the gap: there is a completing window near 600k-620k and a wide plateau
-  from 680k up. `kFrameGapCycles` is 600,000, the smallest value that plays the
-  movie; the plateau is the safer choice if that window ever moves.
-- **What the screen actually shows:** a `--shot` frame taken 2,000 fields into
-  the run is black apart from the port's own 312-pixel `60 FPS` overlay, and at
-  9,000 fields - and with a 1.2M gap at 3,000 and 6,000 fields - the left half
-  is a field of flat vertical stripes, 30 distinct colours such as `(0,66,0)`,
-  `(198,0,0)`, `(0,0,66)` and `(132,57,0)`, covering 8,009 to 27,401 pixels. No
-  dumped frame contains a picture. The reference decoder on the same stream
-  (frame 6: `300 of 300 macroblock(s), 0 damaged, 21664 of 21696 bit(s) used`)
-  reports **0 lit pixels**, so this part of the movie really is black and the
-  stripes are not a decode fault. **The stripes are the game's own texture
-  atlas:** tracing every GP0 upload in a 9,000-field run shows 25 uploads and
-  not one video frame - the largest are two 24x240 strips at VRAM (0,0) and
-  (24,0), then two 24x192 strips at (408,24) and (336,280), then 5-to-24 pixel
-  sprites. The display area alternates between (0,0) and (0,256) (GP1 0x05), so
-  the display shows those strips, and the coloured bands in the dumped frame
-  line up with the two 24-pixel-wide uploads at x=0..47 - 8,009 non-black
-  pixels there against 11,520 for both strips. A 320x240 frame needs 76,800
-  halfwords in one upload and nothing close is ever issued: the player's
-  upload sites at `0x80082FF8` and `0x8008302C` are still not reached, so the
-  decoded frames never reach VRAM and the screen keeps showing the atlas.
+  from 680k up. `kFrameGapCycles` is 700,000: completion at 600k/620k is only
+  a 40k-wide window, so the constant sits on the wide plateau instead.
+- **How a movie frame reaches VRAM, and what was dropping it:** the player does
+  issue the upload. Its `LoadImage` at `0x80082EF4` is called 2,657 times in a
+  2,600-field run, from the queue flush at `0x800835D0`, with the two MDEC field
+  buffers as the source: 20 strips per frame of 24x240 at VRAM x = 0, 24, ...
+  456 and y = 0 or 256 - a frame per display page. What the strip routine does
+  not do is send the pixels from the CPU. It writes the GP0(0xA0) header, the
+  copy rect and the first two words, then programs **DMA2 in request mode**
+  (`MADR`/`BCR`/`CHCR` at `0x1F8010A0`/`A4`/`A8`, `CHCR = 0x01000201`,
+  `BCR = (180 << 16) | 16` - 2,880 words == 24x240 at 15-bit). The port executed
+  DMA2 only for linked-list mode, so every burst was dropped and the 0xA0 packet
+  never completed; the display kept showing whatever else was in VRAM, which is
+  how the 24-pixel-wide texture strips at (0,0) came to be on screen.
+  `run_dma2_request()` now forwards the burst to GP0 in both the recompiled bus
+  and the interpreter, and a trace of the upload shows `IMG 0,0 24x240 words=2880` for
+  each strip: the movie now covers the screen and the atlas stripes are gone.
+- **What the screen actually shows now: black.** The 24x240 uploads carry
+  `nzw=0` - every pixel word zero - and a RAM snapshot at 1,400 fields has
+  `0x80160ADC` and `0x801637E4` reading 5,760 zero halfwords out of 5,760. That
+  is the right answer for this stream: the reference decoder reports `300 of 300
+  macroblock(s), 0 damaged, 21664 of 21696 bit(s) used` and **0 lit pixels**, so
+  the frames the player is showing really are black. The dumped frame is black
+  apart from the port's own 312-pixel `60 FPS` overlay and a 9,899-pixel patch
+  of noise at (120,96)-(319,183) - 3,949 distinct colours and no structure, so
+  not a decoded frame. **No picture appears**, and the reason is no longer the upload: the run halts at 3,299
+  fields with `no translated block at 0x80189B3C` (identical before this change,
+  so it is not caused by it). The guest jumps into code it loaded into RAM at run
+  time - the bytes there are valid MIPS, writing state at `0x80199B64` and
+  `0x801A1B74` - which the static recompilation has no block for. The
+  content-bearing stream the disc also carries (`286,228`: `241 of 300
+  macroblock(s)`, ~63,000 lit pixels) is read before that halt but its frames are
+  never displayed.
 - **Drive-side release re-tested and rejected:** letting a sector the guest
   acknowledged but never drained expire after three sector times does fire, and
   it is worse - the reader loses a slice, resynchronises and re-reads the disc:
