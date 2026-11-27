@@ -123,37 +123,58 @@ None.
   read at all (`fifo=2060`) and 227 macroblocks decoded instead of 2400. The
   constant is back at 4000, the value the rest of these numbers were measured
   with.
-- **STR route (`tools/str-frame.cpp`):** the demux works and the decode does
-  not. The tool walks the image from a given LBA, groups video records into
-  frames by the record header's frame number, skips XA audio sectors, trims each
-  frame to its coded size and feeds the port's `MdecDevice`, then writes a PPM.
-  The extraction is verified: guest RAM at `0x801490D4` holds the same bytes the
-  tool takes out of the image (2,710 of them for frame 1), so this is the exact
-  stream the guest decodes. What the record headers say, measured from the
-  image: `320x240`, 10 slices per frame, coded size 2,712 bytes for frame 1 and
-  rising to about 13,460 bytes by frame 91 (5,272 at frame 41, 10,116 at 61), and
-  no MPEG start codes anywhere in the payload.
-- **Why the direct feed still gives no picture:** the first frame carries 1,356
-  sixteen-bit codes for 1,200 blocks (300 macroblocks), i.e. about 1.1 codes per
-  block, which only works if most blocks are a single DC code. The model's block
-  reader instead keeps reading AC codes until the scan position passes 63, so it
-  eats about 9 codes per block and runs out after 150 blocks. Tried and
-  rejected, all against frame 1 and against later frames: output depth 0, 1, 2
-  and 3; 16-bit codes big-endian and little-endian; the two 16-bit halves of each
-  word in either order; one code per block; and stopping a block when its quant
-  field is zero (that yields 151 blocks from all 1,356 codes, so it is wrong too).
-  Every combination produces either flat black with a dithered band at the top or
-  a synthetic checkerboard of grey squares - never a recognisable picture, and
-  never a complete frame. So the missing piece is the model's input contract,
-  not the image, the drive or the demux: the STR payload is coded differently
-  from the 16-bit run/level stream `MdecDevice` accepts. The 2,400 macroblocks
-  the port reports while the movie runs are output from that same
-  misinterpretation, not evidence of a correct decode.
-- **Next step for this route:** pin the coding against a known-good decode of
-  one frame (an MPEG-1 capable decoder or an emulator as oracle) and then either
-  teach `MdecDevice` that form or write the converter in front of it. The demux,
-  the frame selection and the image writer in `tools/str-frame.cpp` are reusable
-  as they stand.
+- **STR route (`tools/str-frame.cpp`):** the demux and the decoder both work
+  now, and the tool writes a real picture. It walks the image from a given LBA,
+  groups video records into frames by the record header's frame number, skips XA
+  audio sectors, trims each frame to its coded size and decodes it, with no
+  console, drive or interrupt involved. The extraction was already verified:
+  guest RAM at `0x801490D4` holds the same bytes the tool takes out of the image
+  (2,710 for frame 1). What the record headers say: `320x240`, 10 slices per
+  frame, coded size 2,712 bytes at frame 1 rising to 13,460 by frame 91, and no
+  MPEG start codes anywhere in the payload.
+- **The stream's real format, pinned against a reference decoder:** a static
+  ffmpeg build decodes this stream through its `psxstr` demuxer, which emits
+  *MDEC* packets, not MPEG-1 video, and `libavcodec/mdec.c` decodes those. The
+  format is intra coding bit-packed in the MPEG-1 style:
+  - every 16-bit unit is byte-swapped, then bits are read most significant first;
+  - 4 bytes of preamble, then a 16-bit quantiser scale (`1` here) and a 16-bit
+    version (`2`, which means the 10-bit absolute DC form, not the differential
+    one);
+  - macroblocks are coded **column major** - down a column before moving right -
+    and each carries six blocks in the order Cr, Cb, Y0, Y1, Y2, Y3, with the
+    four luma quadrants TL, TR, BL, BR;
+  - a block starts with a signed 10-bit DC whose value is simply **doubled**
+    (`DC = 2 * value`, no offset; the picture is centred by adding 128 after the
+    inverse transform), then MPEG-1 run/level codes with one sign bit each,
+    dequantised as `(level * qscale * matrix[raster]) >> 3`, with the run
+    counting from the first AC coefficient (scan index 1), `10` as end of block
+    and `000001` as escape.
+  That is what the port's `MdecDevice` was missing: it reads 16-bit run/level
+  words and continues until the scan passes 63, which cannot parse this bit
+  stream. Feeding the STR payload to it gave 150 blocks out of 1,200 and flat or
+  checkerboard images; the bit-packed reader gives
+  300 of 300 macroblocks, no damaged blocks, and uses 99.9% of each frame's bits.
+- **How the tool's frames compare with the reference:** frame 1 decodes to a
+  luma mean of 0.0 against ffmpeg's 0.0 (a black frame); frame 61 gives a mean of
+  4.5 against 4.7 with a luma mean absolute error of 1.76; frame 91 gives 9.8
+  against 10.2 with 3.53. The residual is in bright detail, and it is ffmpeg's
+  side that is weaker there: it logs `ac-tex damaged` on frames in this range,
+  where its own parse runs past the end of a block, while this decoder consumes
+  every frame's bits without provoking one. Swept and rejected while pinning it:
+  AC scan starting at 0 (luma error 31.6 instead of 1.8), raster instead of
+  zigzag scan order (3.88 against 3.56), an inverted sign bit, a different
+  dequant rounding, and AC amplitude scaled 0.5 to 1.25 (error moves by 0.06, so
+  amplitude was never the problem).
+- **What the movie actually shows:** a black screen for the first second or so,
+  then pale blue-white shafts of light sweeping in from the left and the right
+  and converging, and by about frame 130 the **ACTIVISION** wordmark in blue on
+  black, with the logo's own glow behind it; the picture then fades back down
+  before the next scene. Frames are visibly 8x8 blocky in the bright shafts - a
+  flat-colour, low-bitrate encode - which is how the stream is, not a decode
+  fault.
+- **Start here:** `str-frame.exe "Spider-Man (USA).bin" 128304 130 out.ppm`
+  writes that wordmark frame. The `work/` folder holds the ffmpeg build and the
+  reference YUV dumps; neither is committed.
 - **Where this route dead-ends:** the 1400-field run decodes 8 frames (2400
   macroblocks, 460800 words of MDEC output) and submits 13 GP0 primitives but
   uploads no pixels, because the video never reaches the display stage. Every
