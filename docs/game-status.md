@@ -395,6 +395,45 @@ None.
   The `0x1F801098` test passes while the movie runs: the whole 1400-field run
   issues two `CdInit` sequences (boot and movie start) instead of resetting the
   drive every field.
+- **Why the port stops at 3,299 fields: the engine module.** The guest builds the
+  name `shell.bin`, rewrites its extension to `shell.rel`, opens and loads it
+  (`0x8001BAA4`-`0x8001BAF4`: `0x80064B3C` open, `0x800651C8` allocate,
+  `0x80064D28` load, `0x80064F3C` close, `0x8001BF58` relocate) and then calls its
+  entry through the pointer the loader stored: `jalr ra, v0` at `0x8001BB18`, with
+  `ra = 0x8001BB20` and `v0 = 0x80189B3C`. `shell.rel` is not an ISO file - the
+  ISO holds only `SYSTEM.CNF`, `SLUS_008.75`, `CD.HED` (12,525 bytes at LBA 390),
+  `CD.WAD` (63,213,568 bytes at LBA 397) and `CINEMAS/*.STR`. `CD.HED` is the
+  archive index and names 314 members (`*.rel`, `*.bin`, `*.psx`, `*.vab`), so the
+  module is a member of `CD.WAD`. In RAM it starts at `0x80189A88` with a packer
+  header `HIER` (`0x24`, `0x20000`, `0x40000`, ...) and runs `0x1B9C4` bytes to
+  `0x801A544C`; none of its code bytes occur anywhere in the disc image, so the
+  loader decompresses it into RAM and the entry exists only at run time.
+- **What executing it would take:** the port has no dynamic-code path. The
+  dispatcher maps PC to a pre-translated function and the port links no
+  interpreter, so any PC outside the 24,214 translated EXE blocks is a hard stop
+  - which is what `no translated block at 0x80189B3C` reports. Three routes,
+  cheapest first: (a) an interpreter fallback using the existing
+  `MipsInterpreter`, which already takes the same `Memory&` and
+  `PlatformServices&` the native port uses; on a dispatcher miss, hand it the CPU
+  state and run until the PC is back inside a translated block. (b) translate
+  blocks on demand at run time, adapting `tools/r6-recomp.cpp`. (c) translate the
+  decompressed module image offline at its observed load address - cheapest, but
+  it hardcodes an allocator result and has to be redone for each of the archive
+  members loaded this way. (a) is the route that generalises.
+- **Can the content movie at `286,228` reach the screen? No, for two independent
+  reasons.** `286,228` is inside `/CINEMAS/L1M1.STR` (LBA 282,216, 57,131,008
+  bytes), and the reference decoder shows real content there (`241 of 300
+  macroblock(s)`, ~63,000 lit pixels). The drive does read that file (2,600
+  fields: 20,010 sectors, last 288,375), but the decoder is idle: its count sits
+  at 12,681 macroblocks (42 frames) from 1,900 fields onward, so no frame from
+  `L1M1.STR` is decoded, and every movie strip uploaded before the halt carries
+  zeros - 949 strips of 24x240 at 2,600 fields, all `nzw=0`. The upload path now
+  works; nothing from that stream reaches it. Second, the halt is not in the
+  movie at all: at 3,299 fields the drive is back at low LBAs (10,645, inside
+  `CD.WAD`) loading `shell.rel`, so the jump into the engine module is what ends
+  the run. Making `shell.rel` executable is necessary for anything after boot,
+  but not sufficient for this frame - the movie consumer stalling after its first
+  42 frames has to be solved as well.
 - **Playable native build:** No
 - **Distributed game assets:** No
 
