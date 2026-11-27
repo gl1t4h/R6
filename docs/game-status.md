@@ -1171,14 +1171,22 @@ the stream-start helper `0x801E31CC` with status `0x1E0`; it registers
 
 This path does not build the register table. In the 300M run the only write
 to `0x800BFF3C` is still the loader's zero-fill at `0x80010B0C`; the table
-stays zero after the pump is installed. The stream-start path therefore
-installs the pump before any builder runs. The real missing piece is the
-resident CD driver's own table builder, which must run upstream of
-`0x801E31CC`, not a copy from `0x800AFE80`. The only valid CD table
-observed is the boot EXE's `0x8002297C`, present before the resident image
-is loaded. Which routine should build `0x800BFF3C` from that table (or from
-the BIOS CD state) is still unidentified; the null table remains a
-hypothesis for the deadlock, not an established cause.
+stays zero after the pump is installed. The CD driver init at `0x8009C708`
+does run and fills its own object at `0x800C7230`, but it never touches
+`0x800BFF3C`. The stream module's init entry `0x80092068` is unreferenced
+and also does not write the table. No later instruction writes
+`0x800BFF3C`; the only accesses are the pump's reads at `0x800935F8`,
+`0x80093704`-`0x8009377C`, and `0x80094054`.
+
+The builder should run before `0x800930EC` installs `0x80093170` into
+`0x800226BC` (before `0x80093148`), or in the pump's first-use init around
+`0x800936F4`, before the command setup at `0x80093700`. It should fill
+`0x800BFF3C`, `0x800BFF44`-`0x800BFF50`, and `0x800BFF5C` from the hardware
+descriptor fields at `0x800AFE80` (`0x1F801040`, `0x1F801070`, and
+`0x1F801800`-`0x1F801803`). No such routine exists in the loaded image:
+the dead init `0x80092068` is not it, and the loader applies no fixup.
+This is an absent initialization, not a skipped call to an existing
+routine.
 
 The observed fact is that the status gate cannot see a response and the
 504-word payload after the slot-17 header never starts. Whether populating
