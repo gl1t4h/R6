@@ -1321,3 +1321,16 @@ loop at `0x80013130`, because the snapshot holds the CPU and RAM but not
 the timer mode: live, T1 is `0x148` and that loop exits 6010 times out of
 6380 entries, while a resumed map reports mode 0 and every read of
 `0x1F801110` differs. Use a fresh run for anything VSync-paced.
+
+### After the modelled-MDEC build
+
+Rebuilt on top of `fc6e9e3`/`e54f65a`, the same two 500M-step runs give the
+same outcome. Unmodified: main state 6, `0x800BC258` zero, the pump
+`0x80093170` 22 times, 19 frames published, 13,007,512 failed polls of
+`0x800934EC`, and 0 of 76,800 non-black pixels. With
+`--poke 0x800BC264=0x100 --poke-at 0x80032EE0`: main state 7, the gate
+`0x800BC258` = `0x20`, `0x8003AB28` runs 1013 times, but only its sub-state
+`0x8003AC88` is entered - the install case `0x80034CA8`, which lives in the
+state-10 handler `0x800348E8` and calls `0x8008F398`, never runs, and the
+frame is still 0 of 76,800. The modelled MDEC does not by itself finish the
+cinema, so the stream still has to be fixed for state 10 to be reachable.
