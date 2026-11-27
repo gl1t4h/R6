@@ -32,7 +32,11 @@ public:
     // empties. Presenting it synchronously made the guest's interrupt loop
     // drain a whole file inside one exception, which no real handler does and
     // which the interpreter's handler budget eventually has to break. A short
-    // asynchronous delay lets the handler return after each sector.
+    // asynchronous delay lets the handler return after each sector. Timing the
+    // drive at its real 2x rate (225792 cycles) was tried and is not what the
+    // stalled stream waits on: the same refusal happens, just 30 sectors in
+    // instead of 79, so the delay stays at the value the rest of the port was
+    // measured with.
     static constexpr std::uint64_t kSectorDelayCycles = 4000;
 
     explicit CdromDevice(PlatformServices& services) : services_(services) {}

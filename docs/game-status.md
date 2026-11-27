@@ -72,21 +72,42 @@ None.
   would have dropped the sector's data-ready interrupt. It now keeps both and
   reports the command's own answer once the sector is acknowledged. `r6-tests`
   passes and the measured stall is unchanged.
-- **What the movie waits on:** the player's read loop is at `0x8002AD30`. It
-  calls `0x8002B430` -> `0x8002B3CC` -> `0x80086B10`, which fetches the next
-  chunk from a ring at `[0x800C1510]` (48 descriptors of 32 bytes, then nine
-  2016-byte payload slots), and spins while that returns 0. In a snapshot taken
-  at `--frames 1400` the ring's write, read and poll indices are all 9 and every
-  descriptor's type word is 0, so the reader has nothing to consume and the
-  drive has published nothing: the movie is at frame 6 of the 219 recorded in
-  `gp+0x6B4` (`gp` = `0x800B47F4`), so it is not at the end of the stream. The
-  drive state at the same instant explains why: `fifo=2060` bytes still sitting
-  in the data FIFO, `acked=1` (the driver acknowledged the data-ready interrupt),
-  and neither `sector_pending` nor `next_sector_pending` set, so the next sector
-  is never armed. The driver acknowledges a sector before it collects it, and a
-  status command that arrives in between used to make the drive drop the
-  sector's bytes; the loop above then waits forever for a chunk that a dropped
-  sector would have delivered.
+- **How the driver collects a sector:** the movie's CD interrupt handler reads
+  a sector in two DMA3 transfers, both in request mode (`CHCR = 0x11000000`),
+  and publishes it through a 48-slot ring at `[0x800C1510]` (`0x80148AD4`) whose
+  slots are 32 bytes and whose per-slot type halfword is at offset 0:
+  1. `DMA3 8 words` - the sector's 32-byte chunk header into slot
+     `[0x800C1514]` (`base + index*32`). The drive's data FIFO is laid out as the
+     12-byte position/subheader plus the 2048 user bytes, so the header the
+     guest reads is exactly the first 32 bytes of the stream record.
+  2. It validates the slot: type `0x0160` (the record size), the demux id from
+     the top half (`(word >> 10) & 0x1F` against `[0x800C14E8]`), the slice
+     index (`word1 & 0xFFFF` against `[0x800C1504]`) and the frame number
+     (`word2 & 0xFFFF` against `[0x800C14F0]`). A mismatch resets the stream.
+  3. On a new frame (`slice == 0`) it wraps the ring: it copies the header just
+     read into slot 0 and sets `[0x800C1514] = 0`, because slot 0 is the frame's
+     header slot. This only happens when `lh 0(slot0)` reads 0, i.e. the
+     previous frame's header slot has been consumed by the decoder.
+  4. `DMA3 504 words` - the 2016-byte payload into
+     `[0x800C150C] + slice*2048 + 32`.
+  5. It publishes by storing 3 into the slot's type halfword, incrementing
+     `[0x800C1514]`, and calling `0x8008DB44` to wake the decoder.
+  A trace of one sector measures this exactly: `D3 ... words=8` into
+  `0x80148EF4`, then `D3 ... words=504` into `0x801594B4` 408 cycles later, for
+  79 sectors in the movie.
+- **What actually stops the movie:** the header the drive delivers is correct -
+  descriptor 39 in a snapshot holds the disc's bytes for sector 128384 verbatim
+  (28 of 32 bytes; the other two fields are the game's own timestamp and type).
+  What stops it is the driver's own flow control. Sector 128384 is the first
+  slice of a new frame, and the wrap in step 3 found slot 0 still holding the
+  previous frame, so the handler cleared the slot's type, set state 9 in
+  `[0x800B1000]` and returned without reading the 2016-byte payload. The drive
+  is then left holding that payload (`fifo=2016`, `acked=1`, nothing armed) and
+  will not present the next sector until it is drained; the driver waits for
+  another data-ready interrupt that nothing will raise. Neither side moves: the
+  movie stops at frame 6 of the 219 in `gp+0x6B4` (`gp` = `0x800B47F4`). The
+  trigger is therefore on the consumer side - the decoder had not released the
+  frame header slot - not in the sector data or the drive's registers.
 - **CD model fixes for that path:** a status, parameter or read command no
   longer discards a sector whose bytes are still in the FIFO just because its
   interrupt has already been acknowledged, and a command's own answer takes the
@@ -96,12 +117,25 @@ None.
   `cdrom_command_after_ack_keeps_the_sector`). A third change - keeping the
   data-ready interrupt asserted whenever uncollected bytes remain - made the
   guest jump to `0x00000000` after 15 fields and was reverted.
-- **Next step:** work out how the driver collects the sector it acknowledged,
-  then collect the first decoded frame. Neither the drive nor the player moves
-  at that instant, and no GP0 upload is ever submitted. The `0x1F801098` test
-  passes while the movie runs: the whole 1400-field run issues two `CdInit`
-  sequences (boot and movie start) instead of resetting the drive every field,
-  which is what happened while DMA1 had no reason to be armed.
+- **Drive timing is not the cause:** timing each sector at the drive's real
+  2x rate (225792 cycles instead of 4000) was tried and rejected. The same
+  refusal happens, 30 sectors into the movie instead of 79, with the payload not
+  read at all (`fifo=2060`) and 227 macroblocks decoded instead of 2400. The
+  constant is back at 4000, the value the rest of these numbers were measured
+  with.
+- **Where this route dead-ends:** the 1400-field run decodes 8 frames (2400
+  macroblocks, 460800 words of MDEC output) and submits 13 GP0 primitives but
+  uploads no pixels, because the video never reaches the display stage. Every
+  further CD/register change is chasing a refusal the guest makes on purpose
+  while it is waiting for its own decoder. The two ways forward are (a) work the
+  player's frame pipeline instead - the consumer that clears the frame header
+  slot, which is where the refusal comes from - or (b) bypass the PS1 CD
+  subsystem for the movie: the streams are ordinary STR records, so a native
+  port can demux `ATVILOGO.STR`/`LOGO.STR` from the disc image and feed the
+  existing MDEC model directly, which is also the shorter road to a first frame.
+  The `0x1F801098` test passes while the movie runs: the whole 1400-field run
+  issues two `CdInit` sequences (boot and movie start) instead of resetting the
+  drive every field.
 - **Playable native build:** No
 - **Distributed game assets:** No
 
