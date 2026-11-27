@@ -843,6 +843,11 @@ int run_headless(Host& host, std::uint64_t frames,
         std::cout << "CD: " << bus.hardware().cdrom().sectors_read()
                   << " sector(s), last " << bus.hardware().cdrom().sector()
                   << "\n";
+        std::cout << "MDEC: " << bus.hardware().mdec().macroblocks()
+                  << " macroblock(s), " << bus.hardware().mdec().words_in()
+                  << " word(s) in, " << bus.hardware().mdec().words_out()
+                  << " word(s) out, depth " << bus.hardware().mdec().depth()
+                  << "\n";
         std::cout << "Clock: " << bus.hardware().cycles() << " cycle(s), "
                   << bus.hardware().interrupt_status() << " I_STAT, "
                   << bus.hardware().interrupt_mask() << " I_MASK\n";

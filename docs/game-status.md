@@ -21,10 +21,10 @@ None.
   no interpreter linked in. It opens the `.cue` sheet, follows its `FILE` line
   to the `.bin`, boots `SLUS_008.75` (747,520 bytes at `0x80010000`, entry
   `0x8008739C`, 24,214 translated blocks) and runs the guest's own frame loop.
-  A 20 M-cycle headless run reads 128 sectors, streams 38 sectors into
-  `ATVILOGO.STR` and stops at LBA 128341, then issues only `GetStat`. It
-  submits 13 GP0 commands, fills three areas and writes no VRAM pixels, so the
-  window stays black.
+  A 20 M-cycle headless run reads 128 sectors and stops at LBA 128341, then
+  issues only `GetStat`; the 1400-field run described below streams `LOGO.STR`
+  and decodes it, and still submits only 13 GP0 commands, fills three areas and
+  writes no VRAM pixels, so the window stays black.
 - **What is actually missing:** the CD driver feeds a 48-slot sector ring
   (`0x800C1510` = `0x80148AD4`: a 32-byte header then 2016 bytes of data per
   slot, 2048 bytes each). When the stream stops, slots 0-35 hold
@@ -38,21 +38,45 @@ None.
   `0x80085000` then tests `*(u32*)0x1F801098`, the DMA1 (MDEC output) channel
   control, and calls `CdInit` (`0x8008CBC4`) when bit 8 is clear. `CdInit`
   waits for the VSync counter `0x800B397C` to advance 960 ticks (the target is
-  in `0x800C6394`). The port models no MDEC at all, so DMA1 never reaches the
-  state the player checks for.
-  A run long enough to clear that wait (`--frames 1400`, 790 M cycles) does move
-  on: the player pauses, seeks to LBA 280000 and streams `LOGO.STR`, 34 more
-  sectors, then stops the same way at 280034 - 162 sectors in total. No frame is
-  drawn: 17 GP0 commands, 7 fills, 0 VRAM pixels, and the dumped frame is black
-  apart from the 312 pixels of the FPS overlay.
+  in `0x800C6394`). Until 27 November 2026 the port modelled no MDEC at all,
+  so DMA1 never reached the state the player checks for.
+  A run long enough to clear that wait (`--frames 1400`, 790 M cycles) moves on:
+  the player pauses, seeks to LBA 280000 and streams `LOGO.STR`.
+- **MDEC model:** `include/r6/mdec.h` now implements the decoder the movie
+  player drives. It covers the command/parameter handshake (`0x1F801820`/
+  `0x1F801824`, commands 1-3, the quant and scale tables), incremental
+  run-length decode with the 10-bit code format and the zig-zag scan, the
+  separable IDCT scaled so a DC-only block comes out flat at DC/8, and the
+  4:2:0 macroblock in 15-bit, 24-bit and monochrome output modes. Both DMA
+  directions run in the recompiled bus and the interpreter: channel 0 feeds
+  compressed words in, channel 1 writes the decoded blocks to RAM, and channel
+  1 also transfers from the decoder's request line when it is left armed in
+  request mode. The decode emits every macroblock whose bits have arrived
+  instead of waiting for the last parameter word, because the player feeds a
+  few words at a time and waits for the pixels before sending more.
+  With that in place the same 1400-field run streams **202** sectors and stops
+  at LBA 280061 (61 sectors into `LOGO.STR`), and the decoder reports **1,440
+  macroblocks**, 16,608 words in and 276,480 words out (exactly 192 words -
+  768 bytes of 24-bit pixels - per macroblock, so the player does read every
+  decoded block back). `depth 2` says the stream is 24-bit output, not 15-bit.
+  The frame is still black: 13 GP0 commands, 3 fills, 0 VRAM pixels, display
+  last programmed off by GP1(03) = `0x03000000`, and the dumped frame is black
+  apart from the 312 pixels of the FPS overlay. The player stops requesting
+  sectors 240 macroblocks into the fifth frame and then only polls `GetlocL`,
+  so the decoded blocks are never converted or uploaded to VRAM. Nothing was
+  found in a 2 MiB snapshot that looks like a decoded frame, which fits the
+  player waiting on something after the last transfer rather than a wrong
+  pixel layout.
 - **CD model fix:** a status command issued while a sector was still in the
   data FIFO used to clear that FIFO and overwrite the flag register, which
   would have dropped the sector's data-ready interrupt. It now keeps both and
   reports the command's own answer once the sector is acknowledged. `r6-tests`
   passes and the measured stall is unchanged.
-- **Next step:** model MDEC output far enough for a DMA1 transfer to complete
-  (an STR sector is MDEC input; the decoded 320x240 frame is MDEC output), then
-  re-check the `0x1F801098` test and the first non-black frame.
+- **Next step:** find what the player waits on after the fifth decoded frame.
+  It has the pixels in RAM, the drive is idle and only `GetlocL` is polled, so
+  the missing link is between the decoder's output buffer and the VRAM upload
+  (no GP0 `0xA0` upload is submitted at all). The `0x1F801098` test now passes:
+  the run no longer calls `CdInit` from `0x80085000`.
 - **Playable native build:** No
 - **Distributed game assets:** No
 

@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "r6/cdrom_device.h"
+#include "r6/mdec.h"
 #include "r6/platform_services.h"
 
 namespace r6 {
@@ -31,6 +32,8 @@ constexpr std::uint32_t kInterruptStatus = 0x1F801070;
 constexpr std::uint32_t kInterruptMask = 0x1F801074;
 constexpr std::uint32_t kDma0BaseAddress = 0x1F801080;
 constexpr std::uint32_t kDma0ChannelControl = 0x1F801088;
+constexpr std::uint32_t kDma1BaseAddress = 0x1F801090;
+constexpr std::uint32_t kDma1ChannelControl = 0x1F801098;
 constexpr std::uint32_t kDma2BaseAddress = 0x1F8010A0;
 constexpr std::uint32_t kDma2ChannelControl = 0x1F8010A8;
 constexpr std::uint32_t kDma3BaseAddress = 0x1F8010B0;
@@ -54,6 +57,8 @@ constexpr std::uint32_t kSpuIrqAddress = 0x1F801DA4;
 constexpr std::uint32_t kInterruptSpu = 1u << 9;
 constexpr std::uint32_t kCdromBase = 0x1F801800;
 constexpr std::uint32_t kCdromEnd = 0x1F801803;
+constexpr std::uint32_t kMdecData = 0x1F801820;
+constexpr std::uint32_t kMdecStatus = 0x1F801824;
 constexpr std::uint32_t kDmaChannelStride = 0x10;
 }  // namespace hardware
 
@@ -108,6 +113,8 @@ public:
         refresh_cdrom_interrupt();
     }
     CdromDevice& cdrom() { return cdrom_; }
+    MdecDevice& mdec() { return mdec_; }
+    const MdecDevice& mdec() const { return mdec_; }
 
     std::uint32_t read32(std::uint32_t address) const {
         if (address == hardware::kTimer0) return timer_value(0);
@@ -132,6 +139,10 @@ public:
             return value;
         }
         if (address == hardware::kGpuCommand) return services_.read_gpu_data();
+        if (address == hardware::kMdecStatus) return mdec_.status();
+        // A read pops the decoder's output fifo, so the map keeps this device
+        // mutable for the same reason it lets the GPU fifo move.
+        if (address == hardware::kMdecData) return mdec_.read_word();
         if (address == kPadData) {
             pad_byte_received();
             return pad_data_;
@@ -178,6 +189,14 @@ public:
         if (address == hardware::kGpuCommand ||
             address == hardware::kGpuStatus) {
             services_.write_gpu_register(address, value);
+            return;
+        }
+        if (address == hardware::kMdecData) {
+            mdec_.write_command(value);
+            return;
+        }
+        if (address == hardware::kMdecStatus) {
+            mdec_.write_control(value);
             return;
         }
         for (std::size_t timer = 0; timer < timers_.size(); ++timer) {
@@ -773,6 +792,7 @@ private:
 
     PlatformServices& services_;
     CdromDevice cdrom_;
+    mutable MdecDevice mdec_;
     std::uint64_t cycles_{0};
     std::uint32_t dma_interrupt_{0};
     std::uint32_t spu_transfer_address_{0};

@@ -241,6 +241,11 @@ private:
     // Walks a DMA2 linked list and feeds its packets to the GPU.
     void run_dma2_list();
     // Copies a CD-ROM sector into main RAM for DMA channel 3.
+    void run_dma0_transfer();
+    void run_dma1_transfer();
+    void run_dma1_words(std::uint32_t words);
+    void pump_mdec_dma();
+    void complete_mdec_dma(std::size_t channel);
     void run_dma3_transfer();
     // Copies main RAM into the SPU for DMA channel 4 and signals completion.
     void run_dma4_transfer();

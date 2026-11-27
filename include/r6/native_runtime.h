@@ -363,6 +363,23 @@ public:
                 const auto from_ram = (value & 1u) != 0;
                 if (start && sync_mode == 2 && from_ram) run_dma2_list();
             }
+            if (physical == hardware::kMdecData ||
+                physical == hardware::kMdecStatus) {
+                pump_mdec_dma();
+            }
+            if (physical == hardware::kDma0ChannelControl) {
+                const auto start = (value & (1u << 24)) != 0;
+                const auto to_device = (value & 1u) != 0;
+                if (start && to_device) {
+                    run_dma0_transfer();
+                    pump_mdec_dma();
+                }
+            }
+            if (physical == hardware::kDma1ChannelControl) {
+                const auto start = (value & (1u << 24)) != 0;
+                const auto to_ram = (value & 1u) == 0;
+                if (start && to_ram) run_dma1_transfer();
+            }
             if (physical == hardware::kDma3ChannelControl) {
                 const auto start = (value & (1u << 24)) != 0;
                 const auto to_ram = (value & 1u) == 0;
@@ -510,6 +527,68 @@ private:
             if (next == kEndMarker) break;
             address = next & kRamAddressMask;
         }
+    }
+
+    void complete_mdec_dma(std::size_t channel) {
+        const auto dicr = hardware_.read32(hardware::kDmaInterrupt);
+        const bool interrupt = (dicr & (1u << 23)) != 0 &&
+                               (dicr & (1u << (16 + channel))) != 0;
+        hardware_.schedule_dma_completion(channel, 8u, interrupt);
+    }
+
+    // DMA0 request-mode transfer: the compressed stream from RAM into the
+    // decoder's input fifo.
+    void run_dma0_transfer() {
+        const auto counter = hardware_.dma_counter(0);
+        const auto blocks = counter >> 16;
+        auto words = counter & 0xFFFFu;
+        if (words == 0) words = 0x10000u;
+        if (blocks > 1) words *= blocks;
+        const auto address = 0x80000000u | hardware_.dma_address(0);
+        for (std::uint32_t index = 0; index < words; ++index) {
+            hardware_.mdec().push_word(
+                ram_.read32((address + index * 4) & kRamMask));
+        }
+        complete_mdec_dma(0);
+        events_.record("dma0");
+    }
+
+    // DMA1 request-mode transfer: the decoder's pixels into main RAM.
+    void run_dma1_transfer() {
+        const auto counter = hardware_.dma_counter(1);
+        const auto blocks = counter >> 16;
+        auto words = counter & 0xFFFFu;
+        if (words == 0) words = 0x10000u;
+        if (blocks > 1) words *= blocks;
+        run_dma1_words(words);
+    }
+
+    void run_dma1_words(std::uint32_t words) {
+        const auto address = 0x80000000u | hardware_.dma_address(1);
+        for (std::uint32_t index = 0; index < words; ++index) {
+            ram_.write32((address + index * 4) & kRamMask,
+                         hardware_.mdec().read_word());
+        }
+        complete_mdec_dma(1);
+        events_.record("dma1");
+    }
+
+    // See the interpreter: the decoder drives channel 1 through its request
+    // line once the channel is armed, without the guest starting a transfer.
+    void pump_mdec_dma() {
+        const auto chcr = hardware_.dma_control(1);
+        if ((chcr & 0x100u) == 0) return;
+        if ((chcr & 1u) != 0) return;
+        const auto pending = hardware_.mdec().pending_words();
+        if (pending == 0) return;
+        const auto counter = hardware_.dma_counter(1);
+        const auto blocks = counter >> 16;
+        auto words = counter & 0xFFFFu;
+        if (words == 0) words = 0x10000u;
+        if (blocks > 1) words *= blocks;
+        const auto move =
+            words < pending ? words : static_cast<std::uint32_t>(pending);
+        run_dma1_words(move);
     }
 
     // DMA3 request-mode transfer from the CD data FIFO into main RAM.
