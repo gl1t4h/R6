@@ -1386,3 +1386,27 @@ with `--watch-args` printing the callers above. The player still re-reads
 LBA 133148, whose user data starts `60 01` (the `0x160` halfword it
 validates) while the raw sector starts `00 FF FF .. 29 37 23 02`, so the
 record it expects and the sector it is handed still have to be reconciled.
+
+### The record check passes; the stream still limps
+
+Watching the ring entry the cutscene player fills shows it is not the
+`0x160` check that stops it. The 8-word header DMA (`0x8009408C`) writes
+`0x80010160` into the entry, which is the sector's user data starting
+`60 01 01 80`, so `lhu 0(entry) == 0x160` holds and the record is accepted
+(`0x80093A10` clears the slot on the accept path).
+
+On the current tree the drive streams header and payload back to back:
+18 consecutive 8-word/504-word pairs between cycle 399696120 and 399809128,
+one every 6,100 cycles, which is about twice disc speed. The sectors handed
+over are 133127 to 133148 with 133134 and 133142 skipped as XA audio, so
+LBA 133148 itself is read and consumed.
+
+What is left is the chunk boundary after those 18 frames. The next header
+DMA writes `0x50050400` and then `0x00504004` - three words into the
+stream, not at a sector start - and is rejected at `0x80093990`. Every
+184M cycles the player re-seeks to 133148, retries, and eventually gets a
+clean `0x80010160` again, so the ring advances a frame at a time between
+long stalls instead of streaming. Dropping the 12-byte sync remnant from
+the FIFO when a driver has taken the user bytes makes the boot fail after
+550 BIOS calls, so those bytes are needed and the misalignment has another
+origin.
