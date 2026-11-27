@@ -1731,7 +1731,44 @@ that, it marks the record, sets `[0x800C49B0]` and returns status 8
 without starting the payload DMA.
 
 The records are not rejected for their contents. The player wants nine
-records of read-ahead, and the drive model presents one sector at a time
-only after the guest drains the fifo, so the queue can never grow past a
-couple of records and the eighteen that do play are the ones consumed
-before the count first falls short.
+records of read-ahead, and at the time of that measurement the drive model
+presented one sector at a time only after the guest drained the fifo, so the
+queue could not grow past a couple of records and the eighteen that did play
+were the ones consumed before the count first fell short.
+
+### Streaming ahead of the guest's drain
+
+The drive no longer waits for the guest to empty the data fifo before the
+next sector arrives. `CdromDevice::present_sector` arms the following
+sector's timer as soon as it has presented one, and `advance_cycles`
+presents it when the fifo is empty or when the guest acknowledged the
+data-ready interrupt and has left the sector uncollected for a whole sector
+time. The write is a real overwrite of unread bytes, which is what a drive
+does; a first sector, or one the guest has not acknowledged, is still never
+overwritten.
+
+Measured with `R6_FORCE_SOUND_TICK=1 R6_TRACE_STREAM=1 R6_TRACE_CD_FIFO=1`
+and `--steps 500000000 --vblank`, the record count no longer stops at 18:
+
+```
+payload DMA3 transfers after cycle 400,000,000:   0 before, 116 after
+present-out ... sec=133147 ...                     the boundary sector
+present-out ... sec=133148 off=44 ...              presented with only the
+                                                   header of 133147 collected
+SDp ... sec=133154 ...                             headers keep being read
+Sector index reached:                              ~175112, then restarted
+                                                   at ~143549
+```
+
+Every one of those 116 payload transfers starts at fifo offset 44, so the
+guest does collect the payload of sectors it accepts; the sectors it defers
+are dropped and the stream moves past them instead of holding position.
+
+The picture does not follow. A frame dumped at the moment the burst of
+accepts ends (`--steps 250000000 --vblank`, cycle ~500,000,000) is
+0 of 76,800 pixels non-black, and the frame at the end of the 500M-step run
+(cycle ~999,800,000) is 0 of 76,800 as well. That run drew 91,379 filled
+VRAM pixels with the display enabled, so the black display is not the drive
+withholding sectors any more: the collected sectors reach the player, and
+what is still missing is between the player's record buffer and the
+displayed framebuffer.

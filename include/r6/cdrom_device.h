@@ -38,6 +38,11 @@ public:
     // instead of 79, so the delay stays at the value the rest of the port was
     // measured with.
     static constexpr std::uint64_t kSectorDelayCycles = 4000;
+    // A drive streams while a read is active; it does not stop and wait for
+    // the guest to empty the data fifo. The next sector is armed when one is
+    // presented, and a sector the guest acknowledged but did not collect
+    // within its own sector time is given up and overwritten. That is what
+    // lets a player which is behind on collecting still fill its read-ahead.
 
     explicit CdromDevice(PlatformServices& services) : services_(services) {}
 
@@ -55,6 +60,7 @@ public:
     // interrupt line.
     bool advance_cycles(std::uint64_t count) {
         bool changed = false;
+        clock_ += count;
         if (command_pending_) {
             if (count < pending_delay_) {
                 pending_delay_ -= count;
@@ -76,11 +82,16 @@ public:
                 // sector now would overwrite the flag register with INT1 and
                 // lose the answer, so it waits for the flag to clear.
                 sector_delay_ = 0;
-            } else {
+            } else if (presentation_allowed()) {
                 sector_pending_ = false;
                 sector_delay_ = 0;
                 present_sector();
                 changed = true;
+            } else {
+                // The guest is still working on the sector in the fifo. Keep
+                // the sector armed and look again on the next tick, so the
+                // stream continues as soon as it lets go of it.
+                sector_delay_ = 0;
             }
         }
         return changed;
@@ -289,13 +300,10 @@ private:
             // The sector has been collected, so a data-ready interrupt held
             // back behind a command answer is no longer owed.
             deferred_interrupt_ = 0;
-            // The driver acknowledges the sector interrupt first and only then
-            // runs the DMA that empties the FIFO, so the next sector can become
-            // ready either before or after the drain. Handle both orders.
-            if (reading_) {
-                next_sector_pending_ = true;
-                if (data_acknowledged_) schedule_sector();
-            }
+            // Collecting the sector is not what arms the next one: the drive
+            // did that when it presented this one. Draining only clears the
+            // unread window that a presentation is allowed to overwrite.
+            unread_since_ = clock_;
         }
         return value;
     }
@@ -320,13 +328,36 @@ private:
                     data_.size(), reading_ ? 1u : 0u);
     }
 
+    // Whether the drive may put another sector in the fifo now.
+    //
+    // The first sector of a read is always allowed. After that the guest must
+    // have acknowledged the data-ready interrupt, and must either have
+    // collected the sector or left it untouched for a whole sector time. A
+    // drive does not wait for the fifo to drain: a player that has read only
+    // a sector's header still sees the stream move on, which is what lets its
+    // own read-ahead fill while it is behind.
+    bool presentation_allowed() const {
+        if (data_.empty()) return true;
+        if (!data_acknowledged_) return false;
+        if (data_index_ >= data_.size()) return true;
+        return clock_ - unread_since_ >= sector_delay_cycles_;
+    }
+
     void present_sector() {
         trace_fifo_event("present-in", last_command_);
         next_sector_pending_ = false;
         data_acknowledged_ = false;
+        unread_since_ = clock_;
         load_sector();
         interrupt_ = kIntDataReady;
         trace_fifo_event("present-out", last_command_);
+        // Arm the following sector now. Waiting for the guest to drain the
+        // fifo before starting the drive's sector time would leave an
+        // uncollected sector holding the whole stream up.
+        if (reading_) {
+            next_sector_pending_ = true;
+            schedule_sector();
+        }
     }
 
     void load_sector() {
@@ -414,9 +445,10 @@ private:
         }
         if (previous == kIntDataReady && reading_) {
             data_acknowledged_ = true;
-            // The next sector is armed either way; presentation waits until
-            // the flag register is free.
-            if (next_sector_pending_) schedule_sector();
+            // The sector's unread window starts here: the drive gives the
+            // guest a full sector time from this acknowledgement to collect
+            // the bytes before it overwrites them.
+            unread_since_ = clock_;
         }
         if (interrupt_ == 0 && deferred_interrupt_ != 0 &&
             data_index_ < data_.size()) {
@@ -747,6 +779,10 @@ private:
     std::uint64_t sector_delay_cycles_{kSectorDelayCycles};
     std::uint64_t sector_delay_{0};
     bool data_acknowledged_{false};
+    // Cycle count and the time the sector in the fifo was last acknowledged
+    // or collected; together they bound how long unread bytes stay valid.
+    std::uint64_t clock_{0};
+    std::uint64_t unread_since_{0};
     // SetMode bit 6: the drive decodes XA-ADPCM audio sectors and keeps them
     // out of the data FIFO.
     bool xa_enabled_{false};
