@@ -1493,3 +1493,36 @@ collects payload bytes (`0x218040A0`, `0x50050400`). Rewinding the FIFO on
 a keeping command changed those offsets but not the outcome - 18 payloads
 and a black frame either way - so it was dropped rather than kept as an
 unmeasured model change.
+
+### The record check and the buffer it reads
+
+The check that rejects frame 19 is at `0x8009391C`. It does not look at the
+address the DMA wrote:
+
+```
+0x8009391C  lw   $a0, [0x800C6DD8]     ; entry pointer, not the DMA target
+0x80093928  lhu  $v1, 0($a0)
+0x8009392C  addiu $v0, $zero, 0x0160   ; first halfword of the record
+0x80093930  bne  $v1, $v0, reject      ; -> [0x800BFF84] = 5, entry cleared
+0x80093938  lhu  $v0, 2($a0)
+0x80093944  srl  $v0, 10
+0x80093948  andi $v0, 0x1F             ; channel
+0x8009394C  beq  $v0, [0x800C4990], accept
+```
+
+So it compares the record's first halfword with `0x0160` and its channel
+field with `[0x800C4990]`; a mismatch stores error 5 in `0x800BFF84` and
+clears the entry. The accept path at `0x800939D0` stores 6.
+
+`0x800C6DD8`, `0x800C4990`, `0x800C49B0` and `0x800C49B8` are only ever
+written once in the whole run, by the clearing routine at `0x80010B0C`,
+with zero. Nothing ever stores the ring base into them, so the check reads
+its "entry" from address 0 rather than from the record the drive delivered.
+
+The buffer itself is not the problem. The header area starts at
+`0x801A8040` and the payload area at `0x801A8320`, exactly 0x2E0 later,
+which is 23 slots of 0x20 - so slot 18 at `0x801A8280` and its payload at
+`0x801B10E0` are both inside a 23-slot ring. A watch on `0x801A8280` shows
+it written by libcd (`pc=0x80015C88`, value 0xF6CCB233), and an end-of-run
+RAM dump finds exactly that word there, so the same memory is reused as a
+plain libcd read buffer once the player stops.
