@@ -420,6 +420,32 @@ None.
   decompressed module image offline at its observed load address - cheapest, but
   it hardcodes an allocator result and has to be redone for each of the archive
   members loaded this way. (a) is the route that generalises.
+- **Why the movie stops: the drive runs ahead and the reader rejects the
+  stream.** Instrumented with cycle-stamped traces of ring-slot stores, the ring
+  control globals, MDEC commands and every sector the drive presents:
+  the second movie is set up at cycle 854,061,748 (ring base moves to
+  `0x80166ADC`) and is streamed with one continuous `ReadS` (`0x1B`) issued at
+  854,102,018 - the last non-`Getstat` CD command of the run. The port presents
+  sectors on the drive's own cadence and, by design (`cdrom_device.h`: "a sector
+  the guest acknowledged but did not collect within its own sector time is given
+  up and overwritten"), throws away any the guest has not read. The guest's
+  software convert path costs 22.3M instructions, so while it decoded frame 61
+  the drive presented ~19 sectors it never collected: frame 61 slices 2-8, frame
+  62 slices 0-8 and frame 63 slice 0. The next sector the reader did collect
+  carried frame 63 while it expected frame 61, so the check at `0x800853DC`
+  (slice, header +4) and `0x800853F8` (frame, header +8) failed and the reject
+  path at `0x80085404` ran: expectations reset to frame 0 / slice 0 at cycle
+  899,498,596, the slot header cleared, and a re-seek issued through `0x8008DB04`.
+  It never recovers - the last CD command byte is a `Getstat` at 899,807,404, and
+  after that only register selects and request bits are written, so no read is
+  re-issued and no slot is ever published again. From then to the end of the run
+  the guest sits in the movie poll (`0x8002B430`), the claim (`0x80086B10`) and
+  the player loop pages - 275M instructions - with zero frames: convert
+  (`0x8002A338`) and release (`0x800872AC`) last run at 899,359,216 / 899,359,266,
+  the MDEC is never armed again (frozen at 12,681 macroblocks, 259,776 words in),
+  and nothing new is uploaded. The drive keeps "streaming `L1M1.STR`" only because
+  of that run-ahead: 6,785 sectors, from LBA 280,621 (`LOGO.STR` frame 63) through
+  288,374 (`L1M1.STR` frame 616), were presented and discarded unread.
 - **Can the content movie at `286,228` reach the screen? No, for two independent
   reasons.** `286,228` is inside `/CINEMAS/L1M1.STR` (LBA 282,216, 57,131,008
   bytes), and the reference decoder shows real content there (`241 of 300
