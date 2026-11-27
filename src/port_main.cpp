@@ -843,6 +843,18 @@ int run_headless(Host& host, std::uint64_t frames,
         std::cout << "CD: " << bus.hardware().cdrom().sectors_read()
                   << " sector(s), last " << bus.hardware().cdrom().sector()
                   << "\n";
+        {
+            const auto& cd = bus.hardware().cdrom();
+            std::cout << "CD state: int=" << cd.interrupt()
+                      << " sector=" << cd.sector()
+                      << " presented=" << cd.presented_sector()
+                      << " fifo=" << cd.data_remaining()
+                      << " acked=" << (cd.data_acknowledged() ? 1 : 0)
+                      << " next=" << (cd.next_sector_pending() ? 1 : 0)
+                      << " pending=" << (cd.sector_pending() ? 1 : 0)
+                      << " deferred=" << cd.deferred_interrupt()
+                      << " reading=" << (cd.reading() ? 1 : 0) << "\n";
+        }
         std::cout << "MDEC: " << bus.hardware().mdec().macroblocks()
                   << " macroblock(s), " << bus.hardware().mdec().words_in()
                   << " word(s) in, " << bus.hardware().mdec().words_out()

@@ -183,6 +183,17 @@ public:
     std::uint32_t sectors_read() const { return sectors_read_; }
     std::uint8_t status_byte() const { return status_; }
     std::uint32_t interrupt() const { return interrupt_; }
+    // Bring-up state: tells "the drive is waiting for the guest" apart from
+    // "the guest never asked again" when a stream stops.
+    std::uint32_t presented_sector() const { return presented_sector_; }
+    std::size_t data_remaining() const {
+        return data_index_ < data_.size() ? data_.size() - data_index_ : 0;
+    }
+    bool data_acknowledged() const { return data_acknowledged_; }
+    bool next_sector_pending() const { return next_sector_pending_; }
+    bool sector_pending() const { return sector_pending_; }
+    std::uint32_t deferred_interrupt() const { return deferred_interrupt_; }
+    bool reading() const { return reading_; }
     // The controller drives its interrupt line only while a pending flag is
     // also enabled in its own mask register, as on hardware.
     bool interrupt_asserted() const {
@@ -257,6 +268,9 @@ private:
         const auto value = data_[data_index_++];
         if (data_index_ >= data_.size()) {
             note("drained " + std::to_string(presented_sector_));
+            // The sector has been collected, so a data-ready interrupt held
+            // back behind a command answer is no longer owed.
+            deferred_interrupt_ = 0;
             // The driver acknowledges the sector interrupt first and only then
             // runs the DMA that empties the FIFO, so the next sector can become
             // ready either before or after the drain. Handle both orders.
@@ -369,16 +383,19 @@ private:
         }
         if (previous == kIntDataReady && reading_) {
             data_acknowledged_ = true;
-            if (deferred_interrupt_ != 0) {
-                // A status command arrived while this sector was still in the
-                // FIFO; it answers now, before the next sector can take the
-                // flag register back.
-                interrupt_ = deferred_interrupt_;
-                deferred_interrupt_ = 0;
-            }
             // The next sector is armed either way; presentation waits until
             // the flag register is free.
             if (next_sector_pending_) schedule_sector();
+        }
+        if (interrupt_ == 0 && deferred_interrupt_ != 0 &&
+            data_index_ < data_.size()) {
+            // The sector could not take the flag register while the command's
+            // answer was pending. Its bytes are still here, so raise the
+            // data-ready interrupt now or the guest never collects them and
+            // the read never arms another sector.
+            interrupt_ = deferred_interrupt_;
+            deferred_interrupt_ = 0;
+            data_acknowledged_ = false;
         }
     }
 
@@ -386,15 +403,16 @@ private:
         // While a read is active the drive reports "reading" as well as motor
         // on; the loader waits for the reading bit before it collects sectors.
         status_ = static_cast<std::uint8_t>(kMotorOn | (reading_ ? 0x20 : 0x00));
-        if (sector_ready_for_command_) {
-            // The sector's data-ready interrupt is what the read acknowledges,
-            // so it stays visible and the command's own answer is reported
-            // once that acknowledgement arrives. Overwriting it here loses the
-            // ack the next sector is waiting on, and the stream stops.
-            deferred_interrupt_ = interrupt;
-        } else {
-            interrupt_ = interrupt;
+        if (data_index_ < data_.size()) {
+            // A sector is waiting in the fifo. The guest issued this command
+            // and is waiting for its answer, so the answer takes the flag
+            // register; the sector's data-ready interrupt follows once that
+            // answer is acknowledged. Reporting the sector first makes a
+            // library that acks blindly clear the data interrupt while it is
+            // handling the answer, and it then never collects the bytes.
+            deferred_interrupt_ = kIntDataReady;
         }
+        interrupt_ = interrupt;
         complete_pending_ = complete;
         push_response(status_);
         // The drive answers every command with eight bytes: status, track,
@@ -472,16 +490,26 @@ private:
         // A driver polling the drive's status while a sector is waiting must
         // not cost it that sector. Commands that abort or restart a transfer
         // do discard the FIFO; a status or parameter command leaves it alone.
-        const bool sector_ready =
-            interrupt_ == kIntDataReady && data_index_ < data_.size();
+        // Whether a sector's bytes are still in the fifo is a property of the
+        // fifo, not of the flag register. The driver acknowledges the
+        // data-ready interrupt before it collects the sector, so a command that
+        // arrives between those two steps used to find the flags clear, treat
+        // the sector as stale and drop it - and with nothing left to drain, the
+        // drive never armed the next sector and the stream stopped for good.
+        const bool data_present = data_index_ < data_.size();
+        const bool data_interrupt = interrupt_ == kIntDataReady;
         const bool keeps_sector = command == 0x01 || command == 0x0B ||
                                   command == 0x0C || command == 0x0D ||
                                   command == 0x0E || command == 0x0F ||
                                   command == 0x10 || command == 0x11 ||
                                   command == 0x13 || command == 0x14 ||
                                   command == 0x19 || command == 0x1A;
-        sector_ready_for_command_ = sector_ready && keeps_sector;
-        if (sector_ready) {
+        // Only an unanswered data-ready interrupt has to be reported after the
+        // command's own answer; a sector that has been acknowledged but not yet
+        // collected does not block the answer.
+        sector_ready_for_command_ = data_present && data_interrupt &&
+                                    keeps_sector;
+        if (data_present && data_interrupt) {
             note("sector " +
                  std::to_string(sector_ready_for_command_ ? presented_sector_
                                                           : sector_) +
@@ -489,9 +517,10 @@ private:
                                             : " discarded by cmd ") +
                  hex_byte(command));
         }
-        if (!sector_ready_for_command_) {
+        if (data_present && !keeps_sector) {
             data_index_ = 0;
             data_.clear();
+            deferred_interrupt_ = 0;
         }
         response_.clear();
         response_index_ = 0;

@@ -650,31 +650,71 @@ void cdrom_status_command_keeps_the_pending_sector() {
     hardware.write_cdrom(0x1F801800u, 0);
     hardware.write_cdrom(0x1F801801u, 0x01);  // GetStat
 
-    // The sector, and the interrupt the read acknowledges, both survive.
-    R6_CHECK(cdrom.interrupt() == 1);
+    // The command the guest is waiting on answers first; the sector data stays
+    // in the fifo behind it.
+    R6_CHECK(cdrom.interrupt() == 3);  // INT3 for the GetStat
     R6_CHECK((hardware.read_cdrom(0x1F801800u) & 0x40u) != 0);
-    // 0x22 is the drive status: motor on, reading. The answer is queued.
+    // 0x22 is the drive status: motor on, reading.
     R6_CHECK(hardware.read_cdrom(0x1F801801u) == 0x22);
 
-    // Acknowledging the sector now releases the deferred answer, so the guest
-    // sees INT3 rather than a lost command.
+    // Acknowledging the answer releases the sector's own data-ready interrupt
+    // rather than losing it.
     hardware.write_cdrom(0x1F801800u, 1);
-    hardware.write_cdrom(0x1F801803u, 0x07);  // ack INT1
-    R6_CHECK(cdrom.interrupt() == 3);  // INT3 for the GetStat
+    hardware.write_cdrom(0x1F801803u, 0x07);
+    R6_CHECK(cdrom.interrupt() == 1);
 
-    // Draining the sector arms the next one, but its INT1 must not replace the
-    // unacknowledged answer: it waits for the guest to collect it.
+    // Draining the sector arms the next one, which waits for the data-ready
+    // interrupt to be acknowledged.
     for (int index = 0; index < 515; ++index) cdrom.read_word();
     hardware.advance_cycles(1000);
-    R6_CHECK(cdrom.interrupt() == 3);
-    R6_CHECK(cdrom.sector() == next_sector);  // nothing presented over the answer
+    R6_CHECK(cdrom.interrupt() == 1);
+    R6_CHECK(cdrom.sector() == next_sector);  // nothing presented yet
 
     hardware.write_cdrom(0x1F801800u, 1);
-    hardware.write_cdrom(0x1F801803u, 0x07);  // ack INT3
-    R6_CHECK(cdrom.interrupt() == 0);
+    hardware.write_cdrom(0x1F801803u, 0x07);  // ack INT1
     hardware.advance_cycles(1000);
-    R6_CHECK(cdrom.interrupt() == 1);  // the next sector, after the answer
+    R6_CHECK(cdrom.interrupt() == 1);  // the next sector
     R6_CHECK(cdrom.sector() == next_sector + 1);
+}
+
+// The driver acknowledges a sector before it collects the bytes. A command
+// that lands between those two steps must not cost it the sector: the data is
+// still in the fifo, so keeping it is what lets the read arm its next sector.
+// Dropping it left the drive idle with a stream half read.
+void cdrom_command_after_ack_keeps_the_sector() {
+    Memory ram(2u * 1024u * 1024u);
+    TestServices services;
+    MipsInterpreter interpreter(ram, services);
+    auto& hardware = interpreter.hardware();
+    auto& cdrom = hardware.cdrom();
+    cdrom.set_command_delay(0);
+    cdrom.set_sector_delay(1000);
+
+    hardware.write_cdrom(0x1F801800u, 0);
+    hardware.write_cdrom(0x1F801801u, 0x06);  // ReadN
+    hardware.write_cdrom(0x1F801800u, 1);
+    hardware.write_cdrom(0x1F801803u, 0x07);  // ack INT3: arms the first sector
+    hardware.advance_cycles(1000);
+    R6_CHECK(cdrom.interrupt() == 1);
+
+    // Acknowledge the data-ready interrupt first, as libcd does.
+    hardware.write_cdrom(0x1F801800u, 1);
+    hardware.write_cdrom(0x1F801803u, 0x07);
+    R6_CHECK(cdrom.interrupt() == 0);
+
+    // The driver polls the drive before it collects the sector.
+    hardware.write_cdrom(0x1F801800u, 0);
+    hardware.write_cdrom(0x1F801801u, 0x01);  // GetStat
+    R6_CHECK((hardware.read_cdrom(0x1F801800u) & 0x40u) != 0);
+
+    // Collecting the sector then arms the next one as usual, which presents
+    // once the command's own answer has been acknowledged.
+    for (int index = 0; index < 515; ++index) cdrom.read_word();
+    hardware.write_cdrom(0x1F801800u, 1);
+    hardware.write_cdrom(0x1F801803u, 0x07);  // ack the GetStat answer
+    hardware.advance_cycles(1000);
+    R6_CHECK(cdrom.interrupt() == 1);
+    R6_CHECK(cdrom.sector() == 2);
 }
 
 // GPUSTAT bit 31 is the drawing field: zero through vertical blank and the
@@ -1023,6 +1063,7 @@ void run_mips_interpreter_tests() {
     cdrom_command_answer_is_delayed();
     cdrom_read_sector_arrives_after_delay();
     cdrom_status_command_keeps_the_pending_sector();
+    cdrom_command_after_ack_keeps_the_sector();
     interrupt_takes_the_exception_vector();
     interrupt_handler_returns_through_rfe();
     interrupt_without_a_vector_stays_pending();

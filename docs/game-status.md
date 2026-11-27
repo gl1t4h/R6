@@ -72,11 +72,34 @@ None.
   would have dropped the sector's data-ready interrupt. It now keeps both and
   reports the command's own answer once the sector is acknowledged. `r6-tests`
   passes and the measured stall is unchanged.
-- **Next step:** find what the player waits on after the fifth decoded frame.
-  It has the pixels in RAM, the drive is idle and only `GetlocL` is polled, so
-  the missing link is between the decoder's output buffer and the VRAM upload
-  (no GP0 `0xA0` upload is submitted at all). The `0x1F801098` test now passes
-  while the movie runs: the whole 1400-field run issues two `CdInit`
+- **What the movie waits on:** the player's read loop is at `0x8002AD30`. It
+  calls `0x8002B430` -> `0x8002B3CC` -> `0x80086B10`, which fetches the next
+  chunk from a ring at `[0x800C1510]` (48 descriptors of 32 bytes, then nine
+  2016-byte payload slots), and spins while that returns 0. In a snapshot taken
+  at `--frames 1400` the ring's write, read and poll indices are all 9 and every
+  descriptor's type word is 0, so the reader has nothing to consume and the
+  drive has published nothing: the movie is at frame 6 of the 219 recorded in
+  `gp+0x6B4` (`gp` = `0x800B47F4`), so it is not at the end of the stream. The
+  drive state at the same instant explains why: `fifo=2060` bytes still sitting
+  in the data FIFO, `acked=1` (the driver acknowledged the data-ready interrupt),
+  and neither `sector_pending` nor `next_sector_pending` set, so the next sector
+  is never armed. The driver acknowledges a sector before it collects it, and a
+  status command that arrives in between used to make the drive drop the
+  sector's bytes; the loop above then waits forever for a chunk that a dropped
+  sector would have delivered.
+- **CD model fixes for that path:** a status, parameter or read command no
+  longer discards a sector whose bytes are still in the FIFO just because its
+  interrupt has already been acknowledged, and a command's own answer takes the
+  flag register first while the sector's data-ready interrupt is reported once
+  that answer is acknowledged. Both are covered by `r6-tests`
+  (`cdrom_status_command_keeps_the_pending_sector`,
+  `cdrom_command_after_ack_keeps_the_sector`). A third change - keeping the
+  data-ready interrupt asserted whenever uncollected bytes remain - made the
+  guest jump to `0x00000000` after 15 fields and was reverted.
+- **Next step:** work out how the driver collects the sector it acknowledged,
+  then collect the first decoded frame. Neither the drive nor the player moves
+  at that instant, and no GP0 upload is ever submitted. The `0x1F801098` test
+  passes while the movie runs: the whole 1400-field run issues two `CdInit`
   sequences (boot and movie start) instead of resetting the drive every field,
   which is what happened while DMA1 had no reason to be armed.
 - **Playable native build:** No
