@@ -123,6 +123,37 @@ None.
   read at all (`fifo=2060`) and 227 macroblocks decoded instead of 2400. The
   constant is back at 4000, the value the rest of these numbers were measured
   with.
+- **STR route (`tools/str-frame.cpp`):** the demux works and the decode does
+  not. The tool walks the image from a given LBA, groups video records into
+  frames by the record header's frame number, skips XA audio sectors, trims each
+  frame to its coded size and feeds the port's `MdecDevice`, then writes a PPM.
+  The extraction is verified: guest RAM at `0x801490D4` holds the same bytes the
+  tool takes out of the image (2,710 of them for frame 1), so this is the exact
+  stream the guest decodes. What the record headers say, measured from the
+  image: `320x240`, 10 slices per frame, coded size 2,712 bytes for frame 1 and
+  rising to about 13,460 bytes by frame 91 (5,272 at frame 41, 10,116 at 61), and
+  no MPEG start codes anywhere in the payload.
+- **Why the direct feed still gives no picture:** the first frame carries 1,356
+  sixteen-bit codes for 1,200 blocks (300 macroblocks), i.e. about 1.1 codes per
+  block, which only works if most blocks are a single DC code. The model's block
+  reader instead keeps reading AC codes until the scan position passes 63, so it
+  eats about 9 codes per block and runs out after 150 blocks. Tried and
+  rejected, all against frame 1 and against later frames: output depth 0, 1, 2
+  and 3; 16-bit codes big-endian and little-endian; the two 16-bit halves of each
+  word in either order; one code per block; and stopping a block when its quant
+  field is zero (that yields 151 blocks from all 1,356 codes, so it is wrong too).
+  Every combination produces either flat black with a dithered band at the top or
+  a synthetic checkerboard of grey squares - never a recognisable picture, and
+  never a complete frame. So the missing piece is the model's input contract,
+  not the image, the drive or the demux: the STR payload is coded differently
+  from the 16-bit run/level stream `MdecDevice` accepts. The 2,400 macroblocks
+  the port reports while the movie runs are output from that same
+  misinterpretation, not evidence of a correct decode.
+- **Next step for this route:** pin the coding against a known-good decode of
+  one frame (an MPEG-1 capable decoder or an emulator as oracle) and then either
+  teach `MdecDevice` that form or write the converter in front of it. The demux,
+  the frame selection and the image writer in `tools/str-frame.cpp` are reusable
+  as they stand.
 - **Where this route dead-ends:** the 1400-field run decodes 8 frames (2400
   macroblocks, 460800 words of MDEC output) and submits 13 GP0 primitives but
   uploads no pixels, because the video never reaches the display stage. Every
