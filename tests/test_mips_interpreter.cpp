@@ -621,6 +621,62 @@ void cdrom_read_sector_arrives_after_delay() {
     R6_CHECK((hardware.interrupt_status() & 0x04u) != 0);
 }
 
+// Sony's library polls GetStat while a sector is still in the data FIFO. That
+// command must not cost the driver the sector it has not collected yet: the
+// data-ready interrupt and the sector bytes stay, the command's own answer is
+// queued behind them, and the next sector waits so it cannot overwrite that
+// answer before the guest reads it. Losing any of the three stops a streaming
+// read, which is what an intro movie is.
+void cdrom_status_command_keeps_the_pending_sector() {
+    Memory ram(2u * 1024u * 1024u);
+    TestServices services;
+    MipsInterpreter interpreter(ram, services);
+    auto& hardware = interpreter.hardware();
+    auto& cdrom = hardware.cdrom();
+    cdrom.set_command_delay(0);
+    cdrom.set_sector_delay(1000);
+
+    hardware.write_cdrom(0x1F801800u, 0);
+    hardware.write_cdrom(0x1F801801u, 0x06);  // ReadN
+    hardware.write_cdrom(0x1F801800u, 1);
+    hardware.write_cdrom(0x1F801803u, 0x07);  // ack INT3: arms the first sector
+    hardware.advance_cycles(1000);
+    R6_CHECK(cdrom.interrupt() == 1);  // INT1: a sector is waiting
+    R6_CHECK((hardware.read_cdrom(0x1F801800u) & 0x40u) != 0);  // and its data
+    // The drive's position has already moved past the sector it presented.
+    const auto next_sector = cdrom.sector();
+
+    // The driver polls the drive's status without collecting the sector first.
+    hardware.write_cdrom(0x1F801800u, 0);
+    hardware.write_cdrom(0x1F801801u, 0x01);  // GetStat
+
+    // The sector, and the interrupt the read acknowledges, both survive.
+    R6_CHECK(cdrom.interrupt() == 1);
+    R6_CHECK((hardware.read_cdrom(0x1F801800u) & 0x40u) != 0);
+    // 0x22 is the drive status: motor on, reading. The answer is queued.
+    R6_CHECK(hardware.read_cdrom(0x1F801801u) == 0x22);
+
+    // Acknowledging the sector now releases the deferred answer, so the guest
+    // sees INT3 rather than a lost command.
+    hardware.write_cdrom(0x1F801800u, 1);
+    hardware.write_cdrom(0x1F801803u, 0x07);  // ack INT1
+    R6_CHECK(cdrom.interrupt() == 3);  // INT3 for the GetStat
+
+    // Draining the sector arms the next one, but its INT1 must not replace the
+    // unacknowledged answer: it waits for the guest to collect it.
+    for (int index = 0; index < 515; ++index) cdrom.read_word();
+    hardware.advance_cycles(1000);
+    R6_CHECK(cdrom.interrupt() == 3);
+    R6_CHECK(cdrom.sector() == next_sector);  // nothing presented over the answer
+
+    hardware.write_cdrom(0x1F801800u, 1);
+    hardware.write_cdrom(0x1F801803u, 0x07);  // ack INT3
+    R6_CHECK(cdrom.interrupt() == 0);
+    hardware.advance_cycles(1000);
+    R6_CHECK(cdrom.interrupt() == 1);  // the next sector, after the answer
+    R6_CHECK(cdrom.sector() == next_sector + 1);
+}
+
 // GPUSTAT bit 31 is the drawing field: zero through vertical blank and the
 // field polarity afterwards. Bit 22 is colour depth, so it must not follow
 // the field.
@@ -966,6 +1022,7 @@ void run_mips_interpreter_tests() {
     cdrom_interrupt_line_honours_the_enable_mask();
     cdrom_command_answer_is_delayed();
     cdrom_read_sector_arrives_after_delay();
+    cdrom_status_command_keeps_the_pending_sector();
     interrupt_takes_the_exception_vector();
     interrupt_handler_returns_through_rfe();
     interrupt_without_a_vector_stays_pending();
