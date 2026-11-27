@@ -55,11 +55,14 @@ public:
     // slices back to back and then waiting about one conversion satisfies both.
     // The gap only applies to STR records (type 0x0160/0x0161 with more than
     // one slice), so ordinary file reads are unaffected.
-    // Measured on the movie: 700,000 cycles carries it 80 frames before the
-    // release falls behind again, and 1,500,000 plays the whole stream; 2, 2.5
-    // and 3 million give the identical end state, so the gap is not itself the
-    // limiting factor above this value.
-    static constexpr std::uint64_t kFrameGapCycles = 1500000;
+    // Swept on the streaming drive base by running the movie to completion at
+    // each value: 50k-300k never reach the picture at all (0-3,600
+    // macroblocks, no video pixels), 400k-590k decode part of a stream and then
+    // stall mid-chain, 600k and 620k complete, 640k-660k stall again, and every
+    // value from 680k to 1.5M completes. 600k is therefore the smallest gap
+    // that plays the movie, but it sits in a window roughly 40,000 cycles wide;
+    // 700k and up are the safe plateau if that window ever moves.
+    static constexpr std::uint64_t kFrameGapCycles = 600000;
 
     explicit CdromDevice(PlatformServices& services) : services_(services) {}
 

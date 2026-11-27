@@ -189,8 +189,26 @@ None.
   sectors and frames 1-10 (the record type changes at 128,335), so frame 9 is
   inside it and now stages; the run then plays on into the following streams
   and the guest stops the drive itself at LBA 10,645 instead of running the
-  head over the whole image. The 1,500,000 value was swept on the older base;
-  it has not been re-swept on the streaming one.
+  head over the whole image. **Swept on the streaming base** (each value run to
+  completion over 12,000 fields, and each value repeats exactly, so the runs
+  are deterministic): 50k-300k never reach the video (0-3,600 macroblocks, 0
+  video pixels); 400k-590k decode part of a stream and stall mid-chain (last
+  sector 160,000-416,000); 600k and 620k complete (last 10,645, `reading=0`,
+  15,138 and 15,510 VRAM pixels); 640k-660k stall again; and 680k, 700k, 800k,
+  900k, 1M, 1.2M and 1.5M all complete. Completion is therefore not monotonic
+  in the gap: there is a completing window near 600k-620k and a wide plateau
+  from 680k up. `kFrameGapCycles` is 600,000, the smallest value that plays the
+  movie; the plateau is the safer choice if that window ever moves.
+- **What the screen actually shows:** a `--shot` frame taken 2,000 fields into
+  the run is black apart from the port's own 312-pixel `60 FPS` overlay, and at
+  9,000 fields - and with a 1.2M gap at 3,000 and 6,000 fields - the left half
+  is a field of flat vertical stripes, 30 distinct colours such as `(0,66,0)`,
+  `(198,0,0)`, `(0,0,66)` and `(132,57,0)`, covering 8,009 to 27,401 pixels. No
+  dumped frame contains a picture. The reference decoder on the same stream
+  (frame 6: `300 of 300 macroblock(s), 0 damaged, 21664 of 21696 bit(s) used`)
+  reports **0 lit pixels**, so this part of the movie really is black and the
+  stripes are the port's own rubbish rather than a decode fault. A fair
+  picture check has to dump a frame from a stream that is not black.
 - **Drive-side release re-tested and rejected:** letting a sector the guest
   acknowledged but never drained expire after three sector times does fire, and
   it is worse - the reader loses a slice, resynchronises and re-reads the disc:
