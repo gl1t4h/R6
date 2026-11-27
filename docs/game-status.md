@@ -38,8 +38,13 @@ None.
   `0x80085000` then tests `*(u32*)0x1F801098`, the DMA1 (MDEC output) channel
   control, and calls `CdInit` (`0x8008CBC4`) when bit 8 is clear. `CdInit`
   waits for the VSync counter `0x800B397C` to advance 960 ticks (the target is
-  in `0x800C6394`), so the movie restarts instead of decoding. The port models
-  no MDEC at all, so DMA1 never reaches the state the player checks for.
+  in `0x800C6394`). The port models no MDEC at all, so DMA1 never reaches the
+  state the player checks for.
+  A run long enough to clear that wait (`--frames 1400`, 790 M cycles) does move
+  on: the player pauses, seeks to LBA 280000 and streams `LOGO.STR`, 34 more
+  sectors, then stops the same way at 280034 - 162 sectors in total. No frame is
+  drawn: 17 GP0 commands, 7 fills, 0 VRAM pixels, and the dumped frame is black
+  apart from the 312 pixels of the FPS overlay.
 - **CD model fix:** a status command issued while a sector was still in the
   data FIFO used to clear that FIFO and overwrite the flag register, which
   would have dropped the sector's data-ready interrupt. It now keeps both and
