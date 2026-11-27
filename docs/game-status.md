@@ -10,64 +10,35 @@ None.
 
 - **Platform:** PlayStation 1
 - **Region:** USA
-- **Status:** Interpreter execution runner
-- **Progress:** 97%
-- **Completed:** Local BIN/CUE verification, ISO9660 root discovery, and PS-X
-  EXE header identification, plus a delay-slot-aware control-flow walk from
-  the entry point and discovered direct calls, plus the first dependency-free
-  R3000A instruction decoder and synthetic tests, plus a local-only generator
-  that emits a small C++ translation prototype, plus native little-endian
-  memory helpers for common byte/halfword/word loads and stores, plus
-  delay-slot-aware branch/jump/call lowering, a platform service interface,
-  and a PC-to-native-function dispatcher with a step budget. The generator
-  now emits and registers functions reached through validated direct in-image
-  calls and control-flow edges. Simple `lui`/`ori`/`addiu` constant propagation
-  now resolves some indirect `jalr` and `jr` targets, including targets loaded
-  from in-image constant tables. A local report tool now lists potential
-  indirect `jr`/`jalr` sites without uploading executable data. The report now
-  includes a CFG-filtered unresolved-site list. The native runtime now exposes
-  controller, timer, GPU, disc-sector, audio, video, and BIOS service seams.
-  The local Python extractor now reads Mode2/2352 sectors individually instead
-  of one contiguous run, so extracted analysis copies are no longer shifted by
-  304 bytes per sector; `tests/test_inspect_disc.py` covers this with a
-  synthetic image. The interpreter now stops on the guest's own `BREAK`
-  instead of falling through it, matching PsyQ startup code that ends with
-  `BREAK` after `main` returns. The runner reports the recent guest PCs, warns
-  when the guest stack leaves RAM, and accepts `--entry` and `--poke` for
-  bring-up. The hardware map models the three root counters, DMA channel
-  control with instant completion, and `I_STAT`/`I_MASK`. The disc controller
-  serves sector reads and validates positions, and the guest now reaches its
-  own frame loop. The interrupt controller now implements the real PS1
-  acknowledgement polarity: writing a zero to `I_STAT` clears that source and
-  writing one leaves it unchanged. That let libetc's dispatcher finish instead
-  of retrying on an unacknowledged vblank: an 80M-instruction run delivers
-  over 1,200 vblanks with two handler overruns, and the VSync counter advances.
-  The disc controller now models the real register banking, interrupt codes
-  (INT3 acknowledge, INT2 complete, INT1 per sector) and streaming handshake,
-  and presents the 12-byte sector header (BCD address, mode, subheader) ahead
-  of the 2048 user bytes. With the position check passing, the guest streams
-  whole files: `sfx.vab` is printed, sector 390 (`CD.HED`) is read, and runs
-  reach `CD.WAD` at LBA 397. A 150M-instruction run reads 172 sectors. Root
-  counters now advance from an emulated cycle counter instead of the host
-  clock, GPUSTAT reports interlace/field bits, and DMA interrupt/DMA4 completion
-  plus SPU transfer-register stubs are in place. The C++ core and `r6-tests`
-  compile and pass under GCC; the batch has not yet been validated through the
-  documented Visual Studio build or an on-disc run. Both front ends now open
-  CHD version 5 CD images directly (uncompressed, `cdzl` and `cdlz` hunks, and
-  plain or Huffman-compressed maps), verified against synthetic fixtures
-  produced by `chdman` 0.289 rather than a retail image. COP2 geometry is no longer
-  only counted: RTPS/RTPT, NCLIP, AVSZ3/4, MVMVA and SQR compute with the
-  documented saturation and FLAG behaviour, so transformed vertices, screen
-  clipping and ordering-table Z now come out of the GTE. The lighting path
-  (NCS, NCCS, NCDS and their triple forms NCT, NCCT, NCDT) computes IR values
-  and colour-FIFO entries, including depth cueing; the colour commands that work
-  from existing IR values are still counted per opcode and named in the
-  `r6-run` report. See `docs/gte-scope.md`.
-- **Next step:** Rerun Spider-Man on disc to confirm the emulated-cycle timers
-  make `CdSync`/`CdRead` waits deterministic. After that, investigate why the
-  loader parks (`0x8008C9C4`/`0x8008CA84`) after a Pause and
-  capture when the first draw-environment and polygon packets appear. The GTE
-  colour-from-IR commands and MDEC follow.
+- **Tested with:** a local `.cue` beside a single-track MODE2/2352 `.bin`
+  (729,736,224 bytes, one `INDEX 01 00:00:00`). The CHD image this section
+  described before was replaced on 27 November 2026; nothing below comes from
+  a CHD.
+- **Status:** 0% - Not Started
+- **Progress:** 0%
+- **Completed:** None.
+- **Where the port stands:** `pc\SpiderMan.exe` is recompiled native code with
+  no interpreter linked in. It opens the `.cue` sheet, follows its `FILE` line
+  to the `.bin`, boots `SLUS_008.75` (747,520 bytes at `0x80010000`, entry
+  `0x8008739C`, 24,214 translated blocks) and runs the guest's own frame loop.
+  A 20 M-cycle headless run reads 128 sectors, streams 38 sectors into
+  `ATVILOGO.STR` and stops at LBA 128341, then issues only `GetStat`. It
+  submits 13 GP0 commands, fills three areas and writes no VRAM pixels, so the
+  window stays black.
+- **What is actually missing:** the CD driver feeds a 48-slot sector ring
+  (`0x800C1510` = `0x80148AD4`: a 32-byte header then 2016 bytes of data per
+  slot, 2048 bytes each). When the run stops, slots 0-35 hold `ATVILOGO.STR`
+  sectors 128304-128334 and 128336-128340, read from the sector addresses the
+  driver stamps into each slot, so the one missing LBA is the XA-ADPCM sector
+  128335 that the drive filters because the guest asks for mode `0xE0` (bit 6,
+  XA playback). The producer's write index (`0x800C1514`) is 36 and the
+  consumer's poll index (`0x800C151C`) is 39, so the reader waits for the last
+  three sectors of the movie's 39-sector block. Sector 128341 is presented by
+  the drive but never acknowledged or DMA'd: the guest has stopped servicing
+  the CD interrupt and only polls `GetStat`.
+- **Next step:** Find why the CD thread stops servicing sector interrupts at
+  slot 36, which is what leaves the consumer three slots short.
+
 - **Playable native build:** No
 - **Distributed game assets:** No
 

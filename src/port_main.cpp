@@ -240,6 +240,7 @@ std::filesystem::path find_image(const std::filesystem::path& explicit_path) {
 
 struct Host {
     std::filesystem::path image;
+    std::filesystem::path track;
     std::unique_ptr<r6::WindowsPlatformServices> services;
     r6::Memory ram{kRamSize, true};
     r6::CpuState cpu{};
@@ -256,8 +257,13 @@ struct Host {
 };
 
 bool load_boot(Host& host, std::string& error) {
+    // A .cue sheet is a text index, not a track: the reader seeks raw 2352-byte
+    // sectors, so it has to be pointed at the .bin the sheet names. Handing the
+    // reader the sheet itself opens 82 bytes of text and finds no ISO9660
+    // volume, which is why `--disc game.cue` used to fail outright.
+    host.track = r6::boot::resolve_bin(host.image);
     host.services =
-        std::make_unique<r6::WindowsPlatformServices>(host.image);
+        std::make_unique<r6::WindowsPlatformServices>(host.track);
     if (!host.services->disc_open()) {
         error = "disc image could not be opened: " +
                 host.services->disc_error();
@@ -1023,8 +1029,11 @@ int main(int argc, char** argv) {
     }
 
     std::cout << "R6 native port\n"
-              << "Disc: " << image.filename().string() << "\n"
-              << "EXE:  " << host.exe.payload.size() << " bytes at "
+              << "Disc: " << image.filename().string() << "\n";
+    if (host.track != image) {
+        std::cout << "Track: " << host.track.filename().string() << "\n";
+    }
+    std::cout << "EXE:  " << host.exe.payload.size() << " bytes at "
               << hex32(host.exe.load_address) << "\n";
     if (!resume_state.empty()) {
         std::cout << "State: " << resume_state.filename().string() << "\n";
