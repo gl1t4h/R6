@@ -36,9 +36,15 @@ None.
   three sectors of the movie's 39-sector block. Sector 128341 is presented by
   the drive but never acknowledged or DMA'd: the guest has stopped servicing
   the CD interrupt and only polls `GetStat`.
+  `0x80087340` is what moves that index: once a chunk's first slot has been
+  consumed it zeroes the states of the rest of the chunk and stores
+  `slot + length` into `0x800C151C`, so 39 means chunk 4 (slots 30-38) was
+  released as a whole at cycle 10,289,928 - 5 M cycles after the producer
+  stopped. The sector the driver never serviced, 128341, is also the first one
+  it answered with `GetStat` instead of an acknowledge, so a command's INT3
+  replacing the pending data-ready flag is the next hypothesis to test.
 - **Next step:** Find why the CD thread stops servicing sector interrupts at
   slot 36, which is what leaves the consumer three slots short.
-
 - **Playable native build:** No
 - **Distributed game assets:** No
 
