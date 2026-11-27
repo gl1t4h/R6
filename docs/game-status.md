@@ -229,17 +229,34 @@ None.
   `0x8008302C`, and neither is reached. The decoder side did its job: DMA1 moved
   2,880 words per transfer, 20 transfers per frame, into `0x80160ADC` and
   `0x801637E4` (the two field buffers), so 57,600 words per frame are sitting in
-  main RAM. What stops is the player's own loop: `0x8002AD38` -> 24-bit control
-  at `0x8002AF20` and 16-bit output DMA at `0x8002AF58` -> test bit `0x10` of
-  the flag that `0x80086CA8` fills in -> either loop or fall into the exit path
-  at `0x8002B18C`, which waits and then tears the movie down at `0x8002B1FC`.
-  After 8 iterations it takes the exit path, so the per-frame display step never
-  runs, and the CD side then refuses the next sector because the ring's slot 0
-  was never released.
-- **So the upload is not missing, it is never asked for.** Decoding, the DMA1
-  delivery and the ring all behave; the gate is the flag the player tests after
-  each decode. Next step: find what sets bit `0x10` of the object `0x80086CA8`
-  returns and what clears bit `2`, which is the pair the exit path waits on.
+  main RAM. What stops is the player's own loop: it polls the stream ring
+  (`0x8002B430` -> `0x8002B3CC` -> `0x80086B10`), then calls the CD library for
+  `GetStat` (`0x80086CA8` with command `1`, no parameter, result buffer on its
+  own stack) and tests bit `0x10` of the first response byte. That bit is the
+  drive's shell-open flag, so `0x8002AF84` into the wait and teardown at
+  `0x8002B18C`/`0x8002B1FC` is an abort path - and it is never taken. All eight
+  polls answer `22 00 01 ..`: motor on (`0x02`) plus reading (`0x20`), with bit
+  `0x10` and the seek/id error bits clear, so the player keeps looping. Nothing
+  in this software stack sets bit `0x10`, and bit `0x02` is never cleared; the
+  drive reports healthy at every single poll.
+- **What the movie actually stops on:** the ninth frame's VLC conversion. The
+  player starts iteration 9, calls the ring poll, and never returns. PC samples
+  every 100,000 cycles from cycle 9,100,000 to 12,000,000 all land inside the
+  converter at `0x8002A3A8`-`0x8002A7D4`, with `ra=0x8002A424`: the source
+  pointer walks `0x8015C588` -> `0x8016A018` and the output pointer `0x800FE0CC`
+  -> `0x8011CC76`, while the 160-bit source window reads `33333333 33333333
+  33333333 33333333` - the `0x800653F0` pre-fill, not a frame. That buffer was
+  never given frame 9's bitstream, so no `FE00` end-of-block ever arrives and
+  the loop is still grinding through the fill three million cycles later. The
+  device log's final entries are `GetStat` polls at LBA 128385 with that sector
+  left unread, so the reader stops at the same frame boundary. The subsystem at
+  fault is therefore the CD-to-ring handoff - frame 9's payload is never staged
+  - not the drive status and not the decoder.
+- **So the upload is not missing, it is never asked for.** The decoder, the
+  DMA1 delivery and the ring all behave for the eight frames that arrive; the
+  ninth never gets data, and the player hangs in the converter long before it
+  could ask the GPU for anything. Next step: find why the reader leaves LBA
+  128385 unread (ring slot 0 never released), so frame 9's payload is staged.
 - **Where this route dead-ends:** the 1400-field run submits 13 GP0
   primitives but uploads no pixels, because the video never reaches the display
   stage. (The 2,400 macroblocks it reports are eight black frames of 300,
