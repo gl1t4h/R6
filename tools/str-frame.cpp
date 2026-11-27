@@ -63,7 +63,7 @@ constexpr std::uint8_t kZigzag[64] = {
     35, 42, 49, 56, 57, 50, 43, 36, 29, 22, 15, 23, 30, 37, 44, 51,
     58, 59, 52, 45, 38, 31, 39, 46, 53, 60, 61, 54, 47, 55, 62, 63};
 
-#include "str-vlc.inc"
+#include "r6/mdec_rl_table.h"
 
 std::uint16_t le16(const std::uint8_t* p) {
     return static_cast<std::uint16_t>(p[0] | (p[1] << 8));

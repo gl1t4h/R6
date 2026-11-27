@@ -4,7 +4,11 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <vector>
+
+#include "r6/mdec_rl_table.h"
 
 namespace r6 {
 
@@ -26,8 +30,9 @@ public:
         output_index_ = 0;
         command_ = 0;
         param_target_ = 0;
-        half_index_ = 0;
-        half_end_ = 0;
+        bit_index_ = 0;
+        stream_started_ = false;
+        qscale_ = 1;
         colour_ = false;
         depth_ = 0;
         signed_ = true;
@@ -37,8 +42,11 @@ public:
         macroblocks_ = 0;
         words_in_ = 0;
         words_out_ = 0;
-        iq_y_.fill(1);
-        iq_uv_.fill(1);
+        // The movie streams carry only the quantiser scale, never the
+        // matrix, so the tables start at the MPEG-1 intra matrix the
+        // encoder used.
+        iq_y_ = kDefaultIntraQuant;
+        iq_uv_ = kDefaultIntraQuant;
     }
 
     // 1F801820h write: a command word, or a parameter word while a command is
@@ -63,6 +71,8 @@ public:
                 param_target_ = value & 0xFFFFu;
                 if (param_target_ == 0) param_target_ = 0x10000u;
                 input_.clear();
+                bit_index_ = 0;
+                stream_started_ = false;
                 return;
             case 2:
                 // Set quant tables: 64 bytes each, chroma only when bit 0 is
@@ -93,13 +103,18 @@ public:
         if (input_.size() >= param_target_) return;
         input_.push_back(value);
         ++words_in_;
+        if (command_ == 1 && input_.size() <= 9 &&
+            std::getenv("MDEC_TRACE") != nullptr) {
+            std::fprintf(stderr, "mdec word[%zu] = %08X (size %zu)\n",
+                         input_.size() - 1, value, param_target_);
+        }
         if (command_ == 1) {
             decode_available();
             if (input_.size() >= param_target_) {
                 command_ = 0;
                 input_.clear();
-                half_index_ = 0;
-                half_end_ = 0;
+                bit_index_ = 0;
+                stream_started_ = false;
             }
             return;
         }
@@ -162,6 +177,9 @@ public:
     // Bring-up counters: "the player never sent a command" and "the decode
     // produced nothing" look the same from the DMA side otherwise.
     std::uint64_t macroblocks() const { return macroblocks_; }
+    std::size_t bits_used() const { return bit_index_; }
+    bool stream_started() const { return stream_started_; }
+    std::uint64_t failed_blocks() const { return failed_blocks_; }
     std::uint64_t words_in() const { return words_in_; }
     std::uint64_t words_out() const { return words_out_; }
 
@@ -205,91 +223,131 @@ private:
         param_target_ = 0;
     }
 
-    // Decodes from the current position as far as the buffered words allow and
-    // leaves the read position at the last block boundary, so the rest of a
-    // block is retried when the player's next transfer arrives.
+    // Decodes as far as the buffered words allow and leaves the read position
+    // at the last macroblock boundary, so a macroblock whose bits are still in
+    // flight is retried when the player's next transfer arrives.
+    //
+    // The stream is the STR payload byte for byte, and it is bit packed rather
+    // than a sequence of 16-bit codes: a 4-byte preamble, the quantiser scale,
+    // the stream version, then per macroblock six blocks in the order Cr, Cb,
+    // Y0..Y3, each starting with a signed 10-bit DC that is used doubled.
     void decode_available() {
-        half_end_ = input_.size() * 2;
+        if (!stream_started_) {
+            if (available_bits() < 64) return;
+            qscale_ = static_cast<int>(bits_at(32, 16));
+            if (qscale_ <= 0) qscale_ = 1;
+            version_ = static_cast<int>(bits_at(48, 16));
+            bit_index_ = 64;
+            stream_started_ = true;
+        }
         for (;;) {
-            const auto start = half_index_;
-            if (half_index_ >= half_end_) break;
+            const auto start = bit_index_;
+            bool complete = true;
             if (depth_ <= 1) {
                 Block luma{};
-                if (!decode_block(iq_y_, luma)) {
-                    half_index_ = start;
-                    break;
-                }
-                emit_mono(luma);
+                complete = decode_block(iq_y_, luma);
+                if (complete) emit_mono(luma);
             } else {
                 Block cr{};
                 Block cb{};
                 std::array<Block, 4> luma{};
-                bool complete = decode_block(iq_uv_, cr) &&
-                                decode_block(iq_uv_, cb);
+                complete =
+                    decode_block(iq_uv_, cr) && decode_block(iq_uv_, cb);
                 for (int quadrant = 0; complete && quadrant < 4; ++quadrant) {
-                    complete = decode_block(iq_y_, luma[static_cast<std::size_t>(
-                                                quadrant)]);
+                    complete = decode_block(
+                        iq_y_, luma[static_cast<std::size_t>(quadrant)]);
                 }
-                if (!complete) {
-                    half_index_ = start;
-                    break;
-                }
-                emit_colour(cr, cb, luma);
+                if (complete) emit_colour(cr, cb, luma);
+            }
+            if (!complete) {
+                bit_index_ = start;
+                ++failed_blocks_;
+                break;
             }
             ++macroblocks_;
+            if (bit_index_ >= available_bits()) break;
         }
     }
 
-    std::uint16_t next_half() {
-        const auto index = half_index_++;
-        const auto word = input_[index / 2];
-        return static_cast<std::uint16_t>((index & 1) == 0 ? word
-                                                          : (word >> 16));
+    std::size_t available_bits() const { return input_.size() * 32; }
+
+    // The words arrive in memory order, and each 16-bit unit of the stream is
+    // stored byte-swapped, so the stream byte at `index` is the data byte at
+    // index ^ 1. Bits run most significant first from there.
+    std::uint8_t stream_byte(std::size_t index) const {
+        const auto data = index ^ 1u;
+        const auto word = input_[data / 4];
+        return static_cast<std::uint8_t>((word >> ((data % 4) * 8)) & 0xFFu);
     }
 
-    static int signed10(std::uint16_t value) {
-        return static_cast<int>((value & 0x3FFu) ^ 0x200u) - 0x200;
+    std::uint32_t bits_at(std::size_t position, int count) const {
+        std::uint32_t value = 0;
+        for (int index = 0; index < count; ++index) {
+            const auto at = position + static_cast<std::size_t>(index);
+            const auto byte = stream_byte(at / 8);
+            value = (value << 1) | ((byte >> (7 - (at % 8))) & 1u);
+        }
+        return value;
     }
 
-    // Run-length decode of one block: DC first, then (run, level) pairs until
-    // the end code (run 3Fh) takes the scan past coefficient 63. Returns false
-    // when the buffered words run out first, so the caller can retry the block
-    // once more of the stream has arrived.
+    static int signed_value(std::uint32_t value, int count) {
+        const std::uint32_t sign = 1u << (count - 1);
+        return (value & sign) != 0 ? static_cast<int>(value) - (1 << count)
+                                   : static_cast<int>(value);
+    }
+
+    // One block: the 10-bit DC, then MPEG-1 run/level codes with a sign bit
+    // each. The scan starts at the first AC coefficient, `10` ends the block
+    // and `000001` is the escape that carries the run and level as literals.
+    // Returns false when the buffered words run out, so the caller can retry.
     bool decode_block(const std::array<std::uint8_t, 64>& quant, Block& block) {
         block.fill(0);
-        std::uint16_t code = 0xFE00u;
-        // FE00h is the padding code; skip any that precede a real block.
-        do {
-            if (half_index_ >= half_end_) return false;
-            code = next_half();
-        } while (code == 0xFE00u);
-
-        const int q_scale = (code >> 10) & 0x3F;
-        int k = 0;
-        int value = signed10(code) * quant[0];
+        if (bit_index_ + 10 > available_bits()) return false;
+        block[0] = 2 * signed_value(bits_at(bit_index_, 10), 10);
+        bit_index_ += 10;
+        int scan = 1;
         for (;;) {
-            if (q_scale == 0) {
-                // Unscaled mode: the code carries the level directly and the
-                // coefficients stay in scan order.
-                value = signed10(code) * 2;
+            const RlCode* found = nullptr;
+            int length = 0;
+            for (int candidate = 1; candidate <= 16 && found == nullptr;
+                 ++candidate) {
+                if (bit_index_ + static_cast<std::size_t>(candidate) >
+                    available_bits()) {
+                    return false;
+                }
+                const auto code = bits_at(bit_index_, candidate);
+                for (const auto& entry : kRlCodes) {
+                    if (entry.bits == candidate && entry.code == code) {
+                        found = &entry;
+                        length = candidate;
+                        break;
+                    }
+                }
             }
-            value = std::clamp(value, -0x400, 0x3FF);
-            block[static_cast<std::size_t>(q_scale > 0 ? kZigZag[k] : k)] =
-                value;
-            if (half_index_ >= half_end_) return false;
-            code = next_half();
-            k += ((code >> 10) & 0x3F) + 1;
-            if (k > 63) break;
-            // The hardware reads the quant entry for the *next* scan position
-            // here, past the end of the table when the block runs long.
-            // (Written out rather than std::min, which the Windows headers
-            // define as a macro.)
-            const auto entry_index = k < 63 ? k : 63;
-            const auto entry = quant[static_cast<std::size_t>(entry_index)];
-            value = (signed10(code) * entry * q_scale + 4) / 8;
+            if (found == nullptr) return false;
+            bit_index_ += static_cast<std::size_t>(length);
+            if (found->kind == 2) return true;  // end of block
+            if (found->kind == 1) {             // escape: literal run and level
+                if (bit_index_ + 16 > available_bits()) return false;
+                scan += static_cast<int>(bits_at(bit_index_, 6)) + 1;
+                const int level =
+                    signed_value(bits_at(bit_index_ + 6, 10), 10);
+                bit_index_ += 16;
+                if (scan > 63) return true;  // malformed, nothing left to place
+                const auto raster =
+                    kScanToRaster[static_cast<std::size_t>(scan)];
+                block[raster] = (level * qscale_ * quant[raster]) >> 3;
+                continue;
+            }
+            scan += found->run;
+            if (bit_index_ + 1 > available_bits()) return false;
+            const int sign = bits_at(bit_index_, 1) != 0 ? -1 : 1;
+            ++bit_index_;
+            if (scan > 63) return true;
+            const auto raster = kScanToRaster[static_cast<std::size_t>(scan)];
+            block[raster] =
+                sign * ((found->level * qscale_ * quant[raster]) >> 3);
         }
-        idct(block);
-        return true;
     }
 
     // Separable IDCT with the 1/4 scaling the hardware applies: a block whose
@@ -456,6 +514,20 @@ private:
         ++words_out_;
     }
 
+    // The movie stream's scan order, which is the MPEG-1 one; the run
+    // length table above is MPEG-1's, and this is the order its runs index.
+    static constexpr std::array<std::uint8_t, 64> kScanToRaster = {
+        0,  1,  8,  16, 9,  2,  3,  10, 17, 24, 32, 25, 18, 11, 4,  5,
+        12, 19, 26, 33, 40, 48, 41, 34, 27, 20, 13, 6,  7,  14, 21, 28,
+        35, 42, 49, 56, 57, 50, 43, 36, 29, 22, 15, 23, 30, 37, 44, 51,
+        58, 59, 52, 45, 38, 31, 39, 46, 53, 60, 61, 54, 47, 55, 62, 63};
+
+    static constexpr std::array<std::uint8_t, 64> kDefaultIntraQuant = {
+        8,  16, 19, 22, 26, 27, 29, 34, 16, 16, 22, 24, 27, 29, 34, 37,
+        19, 22, 26, 27, 29, 34, 34, 38, 22, 22, 26, 27, 29, 34, 37, 40,
+        22, 26, 27, 29, 32, 35, 40, 48, 26, 27, 29, 32, 35, 40, 48, 58,
+        26, 27, 29, 34, 38, 46, 56, 69, 27, 29, 35, 38, 46, 56, 69, 83};
+
     static constexpr std::array<int, 64> kZigZag = {
         0,  1,  5,  6,  14, 15, 27, 28, 2,  4,  7,  13, 16, 26, 29, 42,
         3,  8,  12, 17, 25, 30, 41, 43, 9,  11, 18, 24, 31, 40, 44, 53,
@@ -470,8 +542,10 @@ private:
     std::vector<std::uint32_t> output_;
     std::size_t output_index_{0};
 
-    std::size_t half_index_{0};
-    std::size_t half_end_{0};
+    std::size_t bit_index_{0};
+    bool stream_started_{false};
+    int qscale_{1};
+    int version_{2};
 
     int command_{0};
     std::size_t param_target_{0};
@@ -483,6 +557,7 @@ private:
     bool enable_out_{false};
 
     std::uint64_t macroblocks_{0};
+    std::uint64_t failed_blocks_{0};
     std::uint64_t words_in_{0};
     std::uint64_t words_out_{0};
 };

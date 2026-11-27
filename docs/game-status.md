@@ -178,9 +178,35 @@ None.
   scanning at, the frame index from there (zero based), the output file, and
   optionally a coded width and height. The `work/` folder holds the ffmpeg build
   and the reference YUV dumps; neither is committed.
-- **Where this route dead-ends:** the 1400-field run decodes 8 frames (2400
-  macroblocks, 460800 words of MDEC output) and submits 13 GP0 primitives but
-  uploads no pixels, because the video never reaches the display stage. Every
+- **The decoder is in the port now, and the player does not use it:** the
+  bit-packed reader moved into `r6::MdecDevice` (table shared with the tool
+  through `include/r6/mdec_rl_table.h`), so the device reads the STR stream
+  directly instead of 16-bit run/level codes. Given a real frame payload it
+  produces 300 of 300 macroblocks and 38,400 words, the 15-bit size - the same
+  picture the tool writes. In the 1400-field run it produces nothing, and that is
+  now explained rather than guessed: the words the player sends are not the
+  stream. Captured from DMA0 (source `0x800FDAC8`, 1,824 words) the buffer holds
+  exactly three distinct words - `FE000400` 600 times, `FE000600` 1,200 times and
+  `FE00FE00` 24 times - and the disc payload's first bytes (`20 07 00 38`) appear
+  nowhere in it. It is a fill pattern of blank blocks, so the device decodes 0
+  macroblocks, the GPU uploads nothing, and the screen stays black.
+- **Where the movie stands after that move:** `MDEC: 0 macroblock(s), 14,656
+  word(s) in, 0 word(s) out, depth 2`; `GPU: primitives=13 vram_pixels=0
+  bounds=none`; the 320x240 shot has 312 non-black pixels, which is only the port's
+  own "60 FPS" overlay, and a mean channel value of 1.0. So the answer to "does a
+  non-black movie frame reach the screen" is no - and it is not the decoder that
+  fails now: the player never puts the payload into its own MDEC input buffer.
+  That buffer is filled and then left alone while the player waits at the ring
+  slot refusal (171 sectors read, last 128385), which is the same upstream stall
+  recorded above.
+- **Next step:** find the copy that is supposed to move a frame's payload into
+  `0x800FDAC8` before the decode command, and why it does not run. The MDEC side
+  needs no further work: a real payload in that buffer now decodes.
+- **Where this route dead-ends:** the 1400-field run submits 13 GP0
+  primitives but uploads no pixels, because the video never reaches the display
+  stage. (It used to report 2,400 macroblocks of MDEC output; those came from
+  reading the player's blank-block fill pattern as if it were a stream, and the
+  bit-packed reader correctly decodes none of it.) Every
   further CD/register change is chasing a refusal the guest makes on purpose
   while it is waiting for its own decoder. The two ways forward are (a) work the
   player's frame pipeline instead - the consumer that clears the frame header

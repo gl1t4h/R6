@@ -1,3 +1,7 @@
+#pragma once
+
+#include <cstdint>
+
 // MPEG-1 run/level Huffman table, from the MPEG-1 specification through
 // libavcodec/mpeg12data.c (ff_mpeg1_vlc_table with ff_mpeg12_run/level).
 // Generated from that source, not retyped: kind 0 is a coefficient, 1 the
