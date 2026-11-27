@@ -494,15 +494,26 @@ None.
   (45,120 macroblocks, LBA 281,890) has **58,603 non-black pixels in 4,651
   colours**, no repeating cycle: a dark red field with a picture-shaped mass in
   the middle instead of stripes.
+- **The row layout the uploads describe.** A frame arrives as **20** GP0
+  uploads of 24x240 at x = 0, 24, ..., 456 (the same 20 again at y = 256 for
+  the back buffer, and 20 of 24x192 at y = 24 and 280 for the atlas), not 13.
+  A 24-pixel strip writes 24 VRAM pixels, which is 48 bytes of the line, so
+  20 x 48 = **960 bytes per line**, contiguous: the 700-field VRAM dump has
+  every 24-pixel slot written across its whole 48 bytes (8-12 nonzero words in
+  the second half of each slot on row 120) and no 12-word gaps anywhere. 960
+  bytes is exactly 320 pixels x 3 bytes - the width GP1(08) reports with bit 4
+  set - and because the two buffers sit 256 rows apart with 240 lines each, one
+  frame line occupies one VRAM row: **stride 2048 bytes**. That is what the
+  decoder implements. The 624-byte reading (13 strips of 24 bytes) is not what
+  the guest issues: a 24-pixel strip is 48 bytes and there are 20 of them.
 - **What is on screen is still not a picture.** That 940-field frame is not the
   pale-blue converging shafts or the ACTIVISION wordmark the reference decoder
   shows for `LOGO.STR` frames: pixel-for-pixel it matches no reference frame
-  (mean absolute error 33/255 against every frame tried from 30 to 150, and the
-  content mass spans about a third of the width and half the height), and a
-  second capture at 700 fields looks the same way. So the display format was
-  one cause, and it is fixed and committed; what the guest converts and uploads
-  into that buffer is the remaining one, and that - not the upload placement,
-  which is correct, and not the display decode - is what to chase next.
+  (mean absolute error 33/255 against every frame tried from 30 to 150), and a
+  second capture at 700 fields looks the same way. The frame does reach the
+  full 960-byte line (row 120 of the dump carries data in slots 1-16 of 20, the
+  rest of the line dark), so this is not a width or placement problem: what the
+  guest converts into that buffer is what is wrong, and that is what to chase.
 - **Can the content movie at `286,228` reach the screen?** `286,228` is inside
   `/CINEMAS/L1M1.STR` (LBA 282,216), and the reference decoder shows real content
   there (`241 of 300 macroblock(s)`, ~63,000 lit pixels). The decoder is no
