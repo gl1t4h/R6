@@ -134,28 +134,53 @@ None.
   bytes at `0x80148AD4`, and every header read from it matches the disc image
   byte for byte (sector 128304 holds `0160 8001 0000 000A 0001 ...`: type
   `0x0160`, slice index 0 at +4, ten slices at +6, frame 1 at +8), with the
-  write index advancing one slot per sector. Publication is **once per frame,
-  not once per sector**: the epilogue at `0x800858B0` stores 3 into the slot's
-  type (payload staged), increments `[0x800C1514]`, and calls `0x8008DB44` only
-  when `[0x800C1508]` is set - which only the last-slice branch at `0x800857A4`
-  does, and a trace of 14 sectors shows `[0x800C1508] = 0` at every check. The
+  write index advancing one slot per sector. **Publication runs once per
+  sector**: the epilogue at `0x800858B0` stores 3 into the slot's type (payload
+  staged), increments `[0x800C1514]`, and calls `0x8008DB44`, which sets that
+  same slot to type 2 and moves `[0x800C1518]`; a trace prints `PUB p=0 w=1`,
+  `p=1 w=2` and so on, one every ~6,000 cycles. The consequence matters: the
+  consumer sees a frame as ready on its **first** slice, not its last. The
   reader gives up at a frame boundary when the slot it is about to reuse still
   holds a type: `0x800850E8`-`0x8008512C` stores state 4, and the new-frame wrap
   at `0x80085628`-`0x80085648` zeroes slot 0's type and stores state 9. In the
-  4000-cycle trace that is sector 128385 with the write index at 39 of 48 and
-  the consumer index still 0: nothing had been released yet, and the player's
-  first release of ten slots lands 90,000 cycles later. The ring is therefore
-  full of frames the player has not consumed, and the bail is the reader's own
-  back-pressure, not a misread header.
-- **The drive is not parked (correction to the note above):** the `fifo=2016`,
-  `acked=1` state read as a deadlock is the end-of-run snapshot of a drive that
-  had already been stopped from the guest side; a 4000-cycle run ends with
-  `fifo=0` and `reading=1`, and a live drain takes a few hundred cycles. Adding
-  a release for a sector the guest acknowledged but never drained (drop the
-  remainder after three sector times and arm the next) does fire, and it is
-  worse: the reader loses a slice, resynchronises and re-reads the disc - 1400
-  fields then read 54,730 sectors (last 182,944) for 1,800 macroblocks instead
-  of 2,400. It was reverted; the drain gate is not what stops the stream.
+  4000-cycle trace that is sector 128385: the write index sits at 39 and the
+  consumer index has just wrapped to 0, so the slot the wrap needs is one the
+  player has already claimed. The ring is therefore full of frames the player
+  has not consumed, and the bail is the reader's own back-pressure, not a
+  misread header; the handshake timings are in the next note.
+- **Why the release lands after the reader has bailed (measured):** the payload
+  pool behind the ring is four frames deep, not two buffers. Releases come in
+  order for payload index 0, 10, 20, 30 and then 0 again, and the reader's
+  write index wraps at 40, so ten slots are reused four frames later. The
+  release is the same handshake the reader waits on: `0x800872AC` only clears a
+  frame's slots when its head slot reads state 4, which the consumer
+  (`0x80086B10`) sets when the player claims that frame, and `[0x800C151C]`
+  moves only by a frame's slice count inside the release - the consumer never
+  advances on its own. The player needs 550,000-800,000 cycles per frame
+  (releases at 6,386,556, 6,949,326, 7,489,000, 8,053,500 and 8,617,936 in a
+  1400-field run) while the reader stages ten sectors in ~60,000 (a publish
+  every 6,000). Trace of that run: publishes reach `p=39 w=39 c=0`, the
+  new-frame wrap at 6,864,564 finds slot 0 in state 4 (`NEWF ... s0=4`), the
+  reader bails with state 9 at 6,864,578, and the release that frees that slot
+  lands 85,000 cycles later at 6,949,326 (`idx=0 ... frame=5`). After the bail
+  the drive holds sector 128385's 2,016 bytes (`fifo=2016`, `acked=1`, nothing
+  armed, `reading=1`) and presents nothing more - no publish occurs after
+  6,864,968 in the whole run, and the player only drains the four frames still
+  staged (releases at 7,489,000, 8,053,500, 8,617,936) before stopping at 2,400
+  macroblocks.
+- **Why pacing alone cannot close that gap:** at 4,000 cycles a sector the
+  reader is about eighteen times faster than the player and laps the four-frame
+  pool at frame 5; at the real 2x rate it instead claims a frame on its first
+  published slice and starts converting while nine slices are still arriving,
+  which is the 227-macroblock stall. A delivery that satisfies both constraints
+  is frame-granular - ten sectors back to back, then a gap of about one
+  conversion (~700,000 cycles). That is a drive-pacing change and was out of
+  scope here.
+- **Drive-side release re-tested and rejected:** letting a sector the guest
+  acknowledged but never drained expire after three sector times does fire, and
+  it is worse - the reader loses a slice, resynchronises and re-reads the disc:
+  1400 fields then read 54,730 sectors (last 182,944) for 1,800 macroblocks
+  instead of 2,400. It was reverted.
 - **STR route (`tools/str-frame.cpp`):** the demux and the decoder both work
   now, and the tool writes a real picture. It walks the image from a given LBA,
   groups video records into frames by the record header's frame number, skips XA
