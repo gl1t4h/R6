@@ -59,10 +59,10 @@ public:
     // each value: 50k-300k never reach the picture at all (0-3,600
     // macroblocks, no video pixels), 400k-590k decode part of a stream and then
     // stall mid-chain, 600k and 620k complete, 640k-660k stall again, and every
-    // value from 680k to 1.5M completes. 600k is therefore the smallest gap
-    // that plays the movie, but it sits in a window roughly 40,000 cycles wide;
-    // 700k and up are the safe plateau if that window ever moves.
-    static constexpr std::uint64_t kFrameGapCycles = 600000;
+    // value from 680k to 1.5M completes. 600k is the smallest gap that plays
+    // the movie but sits in a window only ~40,000 cycles wide, so the shipped
+    // value is taken from the wide plateau instead.
+    static constexpr std::uint64_t kFrameGapCycles = 700000;
 
     explicit CdromDevice(PlatformServices& services) : services_(services) {}
 

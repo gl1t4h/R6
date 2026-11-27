@@ -207,8 +207,17 @@ None.
   dumped frame contains a picture. The reference decoder on the same stream
   (frame 6: `300 of 300 macroblock(s), 0 damaged, 21664 of 21696 bit(s) used`)
   reports **0 lit pixels**, so this part of the movie really is black and the
-  stripes are the port's own rubbish rather than a decode fault. A fair
-  picture check has to dump a frame from a stream that is not black.
+  stripes are not a decode fault. **The stripes are the game's own texture
+  atlas:** tracing every GP0 upload in a 9,000-field run shows 25 uploads and
+  not one video frame - the largest are two 24x240 strips at VRAM (0,0) and
+  (24,0), then two 24x192 strips at (408,24) and (336,280), then 5-to-24 pixel
+  sprites. The display area alternates between (0,0) and (0,256) (GP1 0x05), so
+  the display shows those strips, and the coloured bands in the dumped frame
+  line up with the two 24-pixel-wide uploads at x=0..47 - 8,009 non-black
+  pixels there against 11,520 for both strips. A 320x240 frame needs 76,800
+  halfwords in one upload and nothing close is ever issued: the player's
+  upload sites at `0x80082FF8` and `0x8008302C` are still not reached, so the
+  decoded frames never reach VRAM and the screen keeps showing the atlas.
 - **Drive-side release re-tested and rejected:** letting a sector the guest
   acknowledged but never drained expire after three sector times does fire, and
   it is worse - the reader loses a slice, resynchronises and re-reads the disc:
