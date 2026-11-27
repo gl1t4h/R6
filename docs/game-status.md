@@ -1432,3 +1432,30 @@ A guard that refused to replace a FIFO whose user bytes are still unread
 was tried and dropped: the replace arrives through a new read command,
 which clears the FIFO before the guard can see it, so it never fired and
 changed nothing measurable. The stream still stops after 18 frames.
+
+### The FIFO around every command
+
+`R6_TRACE_CD_FIFO` prints the FIFO offset and size before and after
+`execute_command`, and `present_sector`, together with the command, the
+sector and whether a read is in progress. A read also prints the word the
+next `read_word()` returns, so the bytes the guest is about to collect are
+visible without a debugger.
+
+At the frame-19 boundary the log reads:
+
+```
+present-out cmd=1B sec=133148 off=0    size=2060
+SDp ... words=8 cmd=1B sec=133147 off=12 size=2060 w0=80010160
+cmd-in  cmd=01 sec=133148 off=44 size=2060
+```
+
+The drive hands over sector 133147 at offset 12 with `0x80010160`, the same
+word as every accepted record. Nothing is swapped underneath the guest at
+that point, so the rejection is not an alignment fault in the drive.
+
+What the log does show is the retry path: `GetStat` and `Setmode` keep the
+sector by design, so the next header read lands at offset 56, 88 or 100 and
+collects payload bytes (`0x218040A0`, `0x50050400`). Rewinding the FIFO on
+a keeping command changed those offsets but not the outcome - 18 payloads
+and a black frame either way - so it was dropped rather than kept as an
+unmeasured model change.

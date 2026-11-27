@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <cstdio>
+#include <cstdlib>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -187,6 +189,15 @@ public:
     // "the guest never asked again" when a stream stops.
     std::uint32_t presented_sector() const { return presented_sector_; }
     std::uint8_t last_command() const { return last_command_; }
+
+    // The word the next read_word() would return, for diagnostics only.
+    std::uint32_t peek_word() const {
+        if (data_index_ + 4 > data_.size()) return 0;
+        return static_cast<std::uint32_t>(data_[data_index_]) |
+               (static_cast<std::uint32_t>(data_[data_index_ + 1]) << 8) |
+               (static_cast<std::uint32_t>(data_[data_index_ + 2]) << 16) |
+               (static_cast<std::uint32_t>(data_[data_index_ + 3]) << 24);
+    }
     std::size_t data_size() const { return data_.size(); }
     std::size_t data_offset() const { return data_index_; }
     std::size_t data_remaining() const {
@@ -294,12 +305,24 @@ private:
         sector_delay_ = sector_delay_cycles_;
     }
 
-    void present_sector() {
+    // Bring-up: prints where the FIFO stands around the two places that can
+    // swap the sector under the guest's feet.
+    void trace_fifo_event(const char* what, std::uint8_t command) {
+        static const bool enabled =
+            std::getenv("R6_TRACE_CD_FIFO") != nullptr;
+        if (!enabled) return;
+        std::printf("EC %u %s cmd=%02X sec=%u off=%zu size=%zu reading=%u\n",
+                    ++fifo_events_, what, command, sector_, data_index_,
+                    data_.size(), reading_ ? 1u : 0u);
+    }
 
+    void present_sector() {
+        trace_fifo_event("present-in", last_command_);
         next_sector_pending_ = false;
         data_acknowledged_ = false;
         load_sector();
         interrupt_ = kIntDataReady;
+        trace_fifo_event("present-out", last_command_);
     }
 
     void load_sector() {
@@ -492,6 +515,7 @@ private:
 
     void execute_command(std::uint8_t command) {
         last_command_ = command;
+        trace_fifo_event("cmd-in", command);
         // A driver polling the drive's status while a sector is waiting must
         // not cost it that sector. Commands that abort or restart a transfer
         // do discard the FIFO; a status or parameter command leaves it alone.
@@ -668,6 +692,7 @@ private:
                 break;
         }
         parameters_.clear();
+        trace_fifo_event("cmd-out", command);
     }
 
     static std::uint8_t to_bcd(std::uint32_t value) {
@@ -711,6 +736,7 @@ private:
     std::uint32_t presented_sector_{0};
     // Bring-up: the command whose data the FIFO currently holds.
     std::uint8_t last_command_{0};
+    std::uint32_t fifo_events_{0};
     bool start_read_after_ack_{false};
     bool next_sector_pending_{false};
     bool sector_pending_{false};

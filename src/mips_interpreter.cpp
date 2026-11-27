@@ -625,13 +625,14 @@ void MipsInterpreter::run_dma3_transfer() {
     static const bool trace_before = std::getenv("R6_TRACE_STREAM") != nullptr;
     if (trace_before && cpu_.pc >= 0x80093000u) {
         std::printf("SDp %llu pc=%08X madr=%08X words=%u cmd=%02X sec=%u "
-                    "off=%zu size=%zu\n",
+                    "off=%zu size=%zu w0=%08X\n",
                     static_cast<unsigned long long>(hardware_.cycles()),
                     cpu_.pc, address, words,
                     hardware_.cdrom().last_command(),
                     hardware_.cdrom().presented_sector(),
                     hardware_.cdrom().data_offset(),
-                    hardware_.cdrom().data_size());
+                    hardware_.cdrom().data_size(),
+                    hardware_.cdrom().peek_word());
     }
     for (std::uint32_t index = 0; index < words; ++index) {
         write32(address + index * 4, hardware_.cdrom().read_word());
