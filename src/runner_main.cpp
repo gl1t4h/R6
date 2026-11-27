@@ -878,6 +878,14 @@ int main(int argc, char** argv) {
     }
     std::cout << "\n";
 
+    if (!interpreter.watched_args().empty()) {
+        std::cout << "\nCall args (" << interpreter.watched_args().size()
+                  << " recorded):\n";
+        for (const auto& entry : interpreter.watched_args()) {
+            std::cout << "  " << entry << "\n";
+        }
+    }
+
     std::cout << "\nLast PCs:";
     for (const auto pc : interpreter.recent_pcs()) {
         std::cout << " 0x" << std::hex << pc << std::dec;

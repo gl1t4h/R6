@@ -1357,3 +1357,32 @@ same outcome. Unmodified: main state 6, `0x800BC258` zero, the pump
 state-10 handler `0x800348E8` and calls `0x8008F398`, never runs, and the
 frame is still 0 of 76,800. The modelled MDEC does not by itself finish the
 cinema, so the stream still has to be fixed for state 10 to be reachable.
+
+### The cinema pump is a per-read callback
+
+`0x80093170` is not called per frame. The CD interrupt handler `0x80093100`
+(installed in the interrupt table at `0x800224B0`) registers it at
+`0x800226BC`, libcd's read callback, and libcd's read loop runs it from the
+`jalr` at `0x80015E40` once a read reaches DataEnd. The sibling
+`0x8009327C` at `0x800225F0` is the channel-3 DMA callback; the helper
+`0x80093F14` is the generic DMA-channel routine the pump uses for its
+8-word header and 504-word payload transfers. So one pump equals one
+finished `CdRead`, which is why 500M steps give 22 pumps and 19 frames.
+
+Disc throughput is not the limit. During the file load the drive hands over
+39,360 sectors in 300M cycles (about 7,600 cycles each). In the cutscene the
+player abandons its read instead: the CD event tail repeats
+Setloc/SeekL 133148, Setmode `0xE0`, ReadS, one sector, GetStat,
+Setmode `0x80`, Setloc, SeekL - 3 header DMAs at `0x8009408C` in 400M
+cycles, each cleared from the ring entry at `0x801A8040`. Only reads that
+run to DataEnd reach the callback, and our controller never raised INT4,
+so a read could only end on a timeout.
+
+The starvation itself is the sector-retention bug fixed in `ad26042`: the
+drive discarded a sector whose interrupt had been acknowledged while its
+bytes were still in the FIFO, so nothing was left to drain and no next
+sector was armed. Rebuilt on top of that fix, the numbers below were taken
+with `--watch-args` printing the callers above. The player still re-reads
+LBA 133148, whose user data starts `60 01` (the `0x160` halfword it
+validates) while the raw sector starts `00 FF FF .. 29 37 23 02`, so the
+record it expects and the sector it is handed still have to be reconciled.
