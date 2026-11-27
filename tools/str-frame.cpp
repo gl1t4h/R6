@@ -32,6 +32,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cctype>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -271,6 +272,66 @@ void write_ppm(const std::string& path, int width, int height,
               static_cast<std::streamsize>(rgb.size()));
 }
 
+// A .bmp so the frame opens in any Windows viewer without a converter; PPM is
+// kept for anything that would rather have the plain bytes.
+void write_bmp(const std::string& path, int width, int height,
+               const std::vector<std::uint8_t>& rgb) {
+    const int row = width * 3;
+    const int padding = (4 - row % 4) % 4;
+    const std::uint32_t image_bytes =
+        static_cast<std::uint32_t>((row + padding) * height);
+    const std::uint32_t file_bytes = 54 + image_bytes;
+
+    std::vector<std::uint8_t> header(54, 0);
+    const auto put16 = [&header](std::size_t at, std::uint32_t value) {
+        header[at] = static_cast<std::uint8_t>(value & 0xFF);
+        header[at + 1] = static_cast<std::uint8_t>((value >> 8) & 0xFF);
+    };
+    const auto put32 = [&header](std::size_t at, std::uint32_t value) {
+        for (int byte = 0; byte < 4; ++byte) {
+            header[at + byte] =
+                static_cast<std::uint8_t>((value >> (byte * 8)) & 0xFF);
+        }
+    };
+    header[0] = 'B';
+    header[1] = 'M';
+    put32(2, file_bytes);
+    put32(10, 54);
+    put32(14, 40);
+    put32(18, static_cast<std::uint32_t>(width));
+    put32(22, static_cast<std::uint32_t>(height));
+    put16(26, 1);
+    put16(28, 24);
+    put32(34, image_bytes);
+    put32(38, 2835);
+    put32(42, 2835);
+
+    std::ofstream bmp(path, std::ios::binary);
+    bmp.write(reinterpret_cast<const char*>(header.data()), 54);
+    std::vector<std::uint8_t> line(static_cast<std::size_t>(row) + padding, 0);
+    // Bottom row first, and blue before red, which is the order BMP wants.
+    for (int y = height - 1; y >= 0; --y) {
+        for (int x = 0; x < width; ++x) {
+            const std::size_t at =
+                (static_cast<std::size_t>(y) * width + x) * 3;
+            line[x * 3] = rgb[at + 2];
+            line[x * 3 + 1] = rgb[at + 1];
+            line[x * 3 + 2] = rgb[at];
+        }
+        bmp.write(reinterpret_cast<const char*>(line.data()),
+                  static_cast<std::streamsize>(line.size()));
+    }
+}
+
+bool ends_with(const std::string& text, const std::string& tail) {
+    if (tail.size() > text.size()) return false;
+    return std::equal(tail.rbegin(), tail.rend(), text.rbegin(),
+                      [](char a, char b) {
+                          return std::tolower(static_cast<unsigned char>(a)) ==
+                                 std::tolower(static_cast<unsigned char>(b));
+                      });
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -401,7 +462,11 @@ int main(int argc, char** argv) {
         stats.qscale, stats.version, stats.macroblocks,
         static_cast<std::size_t>(mb_wide) * mb_high, stats.damaged,
         stats.bits_used, stats.bits_total, lit);
-    write_ppm(out_path, width, height, rgb);
+    if (ends_with(out_path, ".bmp")) {
+        write_bmp(out_path, width, height, rgb);
+    } else {
+        write_ppm(out_path, width, height, rgb);
+    }
     std::printf("  wrote %s\n", out_path.c_str());
     return 0;
 }

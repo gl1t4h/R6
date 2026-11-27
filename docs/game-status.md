@@ -172,9 +172,12 @@ None.
   before the next scene. Frames are visibly 8x8 blocky in the bright shafts - a
   flat-colour, low-bitrate encode - which is how the stream is, not a decode
   fault.
-- **Start here:** `str-frame.exe "Spider-Man (USA).bin" 128304 130 out.ppm`
-  writes that wordmark frame. The `work/` folder holds the ffmpeg build and the
-  reference YUV dumps; neither is committed.
+- **Start here:** `pc\str-frame.exe "Spider-Man (USA).bin" 128304 130 logo.bmp`
+  writes that wordmark frame; a `.bmp` path gives a picture Windows opens as it
+  is, a `.ppm` path gives the plain bytes. The arguments are the LBA to start
+  scanning at, the frame index from there (zero based), the output file, and
+  optionally a coded width and height. The `work/` folder holds the ffmpeg build
+  and the reference YUV dumps; neither is committed.
 - **Where this route dead-ends:** the 1400-field run decodes 8 frames (2400
   macroblocks, 460800 words of MDEC output) and submits 13 GP0 primitives but
   uploads no pixels, because the video never reaches the display stage. Every
