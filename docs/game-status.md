@@ -536,6 +536,48 @@ None.
   of that output reproduces the reference frame, and the VRAM dump matches
   neither the reference (best channel correlation 0.32 at 700 fields, 0.25 at
   950) nor the device's own output (0.12 at best).
+- **What the player waits on after a decoded frame (measured).** Two
+  handshakes sit in the frame loop, one before the next decode and one before
+  each output burst, and the port already satisfies both. After a frame's
+  command and DMA0 burst (`0x1F801820 = 0x32000FC0`: opcode 1, depth 2, 4,032
+  parameter words; DMA0 `MADR = 0x800FDAC8`, `BCR = 0x007E0020` = 126 x 32
+  words, `CHCR = 0x01000201`) the next decode step at `0x80085CE8` calls
+  `0x80085DF0`, which reads `*(u32*)0x1F801824` and spins while bit 29
+  (command busy) is set, up to `0x100000` iterations, then reports through
+  `0x8009606C`. Before each output burst `0x80085D78` calls `0x80085E84`,
+  which reads `*(u32*)0x1F801098` and spins while bit 24 (DMA start/busy) is
+  set, then reports through `0x8009607C`; its caller at `0x80085D80` then
+  starts the burst (`BCR = 0x00480020` = 72 x 32 words,
+  `CHCR = 0x01000200`). A register probe over 940 fields reads back `0x8484FFFF` and
+  `0x00000200` on the **first** poll of each loop, so neither loop turns and
+  neither timeout message is printed. What the run does do is start the
+  MDEC-out channel at least **8,192** times while 3,760 full 2,304-word
+  bursts carry all 8,663,040 output words: the other starts find the
+  decoder's output FIFO empty, and because `run_dma1_words` always writes
+  the full requested count while `MdecDevice::read_word` returns 0 once the
+  FIFO is empty, they write zeros over the target buffer and clear the
+  channel at once, instead of leaving it busy until the requested words
+  exist. No
+  post-decode handshake is what keeps the picture wrong. Once they pass, the
+  frame is the guest's own work: the hot blocks are its converter
+  (`0x8002A478`/`0x8002A444`, 4,480,332 and 4,480,331 executions) and its
+  24x240 strip uploader (`0x80084DC8`/`0x80084D80`, 3,757,728 each), with the
+  movie poll `0x8002B430` and the ring claim `0x80086B10` at 1,655,156. The
+  addresses above come from the current `translation.cpp`; the linear
+  disassembly under `work/` predates the disc image replaced on 27 November
+  2026 and decodes different instructions at these addresses.
+- **First frame captured.** `--frames 700 --cycles 2000000000 --headless
+  --shot` ends with 45,976,567 blocks, 17 GP0 primitives, 54,445 VRAM pixels,
+  the display on, 3,000 sectors read (last LBA 280,870) and 20,640
+  macroblocks - 68.8 frames of 300, 505,856 words in and 3,962,880 out - and
+  writes the frame the player has on screen. It is not the pale shafts or the
+  ACTIVISION wordmark: it is a black field with one band of coloured noise
+  around y=100-150, broken into vertical bars. The 940-field capture shows
+  the same defect (177,243 VRAM pixels, 4,020 sectors, last 281,890, 45,120
+  macroblocks). The first frame can therefore be captured, and it is still the
+  decoder's picture rather than the stream's: the block reader remains the
+  fault to fix.
+
 - **Can the content movie at `286,228` reach the screen?** `286,228` is inside
   `/CINEMAS/L1M1.STR` (LBA 282,216), and the reference decoder shows real content
   there (`241 of 300 macroblock(s)`, ~63,000 lit pixels). The decoder is no
