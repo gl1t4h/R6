@@ -551,9 +551,10 @@ None.
   `CHCR = 0x01000200`). A register probe over 940 fields reads back `0x8484FFFF` and
   `0x00000200` on the **first** poll of each loop, so neither loop turns and
   neither timeout message is printed. What the run does do is start the
-  MDEC-out channel at least **8,192** times while 3,760 full 2,304-word
-  bursts carry all 8,663,040 output words: the other starts find the
-  decoder's output FIFO empty, and because `run_dma1_words` always writes
+  MDEC-out channel at least **8,192** times, while the 8,663,040 decoded
+  words amount to only 3,760 bursts of 2,304 words, so a large share of the
+  starts cannot have found a full burst ready: those find the decoder's
+  output FIFO empty and, because `run_dma1_words` always writes
   the full requested count while `MdecDevice::read_word` returns 0 once the
   FIFO is empty, they write zeros over the target buffer and clear the
   channel at once, instead of leaving it busy until the requested words
