@@ -567,17 +567,40 @@ None.
   addresses above come from the current `translation.cpp`; the linear
   disassembly under `work/` predates the disc image replaced on 27 November
   2026 and decodes different instructions at these addresses.
-- **First frame captured.** `--frames 700 --cycles 2000000000 --headless
-  --shot` ends with 45,976,567 blocks, 17 GP0 primitives, 54,445 VRAM pixels,
-  the display on, 3,000 sectors read (last LBA 280,870) and 20,640
-  macroblocks - 68.8 frames of 300, 505,856 words in and 3,962,880 out - and
-  writes the frame the player has on screen. It is not the pale shafts or the
-  ACTIVISION wordmark: it is a black field with one band of coloured noise
-  around y=100-150, broken into vertical bars. The 940-field capture shows
-  the same defect (177,243 VRAM pixels, 4,020 sectors, last 281,890, 45,120
-  macroblocks). The first frame can therefore be captured, and it is still the
-  decoder's picture rather than the stream's: the block reader remains the
-  fault to fix.
+- **First field where the movie is on screen (measured).** A 1000-field run
+  with a per-field dump of the display page puts the first non-black display
+  field at **503**. Every field up to 492 is a black page, 492-502 are also
+  black, and 503 is the first field whose page carries the movie: `--frames
+  503` ends with 32,936,477 blocks, 17 GP0 primitives, 24,103 VRAM pixels,
+  2,160 sectors (last LBA 280,030), 720 macroblocks (2.4 frames of 300) and
+  8,397 non-black display pixels with a mean channel value of 1.6 - the
+  stream's opening fade, two frames into `LOGO.STR`. The earlier 700-field
+  capture is therefore the 69th decoded frame, not the first: it reads 3,000
+  sectors (last 280,870) and 20,640 macroblocks, and its display page has
+  content in rows 104-183 only (19,297 non-black pixels out of 76,800).
+  Comparing dumped display pages against `str-frame` decodes of the same
+  stream puts the best match on the reference's black opening frames (mean
+  absolute error 0.5 at field 503 rising to 4.6 by field 520), so the page is
+  carrying the movie's own picture at this point, not boot content.
+- **What the decoder is actually fed (measured).** The DMA0 source at
+  `0x800FDAC8` in the 700- and 950-field RAM snapshots holds 16-bit run-level
+  words, not an MPEG-1 bitstream: a DCT header word (quantiser scale in bits
+  15-10, signed DC in bits 9-0) followed by run/level words and a `0xFE00`
+  end-of-block, e.g. `0400`/`0600` pairs for the black opening frames and
+  `0424`/`07F0`/`063C` for the fade at 950 fields. That is the format
+  psx-spx documents under *MDEC Data Format*, and `MdecDevice::decode_block`
+  follows its `rl_decode_block` (quantiser from the header word, `FE00` as
+  padding or end of block, zig-zag assignment, `(level*qt[k]*qscale+4)/8`).
+  The MPEG-1/Huffman layer above it is decoded in software - by the game's own
+  routine at `0x8002A3A8` (which reads five-word windows and packs run/level
+  words) and by `tools/str-frame.cpp` - so an MPEG-1 bit reader inside
+  `MdecDevice` would misparse the words the player sends it. The picture fault
+  is therefore not the block reader's format. What is still open is the
+  placement: each strip upload is 2,880 words (11,520 bytes, 5,760 16-bit
+  pixels - 15-bit sizing for a 24x240 rect), 20 strips make 230,400 bytes, the
+  size of one 320x240 24-bit frame, and the page is read as 24-bit because
+  GP1(08) carries bit 4 - yet at 700 fields the frame only fills display rows
+  104-183.
 
 - **Can the content movie at `286,228` reach the screen?** `286,228` is inside
   `/CINEMAS/L1M1.STR` (LBA 282,216), and the reference decoder shows real content
