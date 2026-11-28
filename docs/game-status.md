@@ -513,7 +513,29 @@ None.
   second capture at 700 fields looks the same way. The frame does reach the
   full 960-byte line (row 120 of the dump carries data in slots 1-16 of 20, the
   rest of the line dark), so this is not a width or placement problem: what the
-  guest converts into that buffer is what is wrong, and that is what to chase.
+  guest converts into that buffer is what is wrong.
+- **The block the decoder hands the player is not the stream's picture.**
+  Frame 151 of `LOGO.STR` (the frame on screen at 940 fields), decoded by
+  `MdecDevice` in its 24-bit mode after the MPEG-1 intra matrix is fed, compared
+  with `str-frame`'s decode of the same frame: channel correlation **0.00**
+  (0.002 at frame 60), and unchanged under every byte order tried for the
+  payload (0123, 1032, 3210, 2301). Of the 230,400 output bytes 115,120 clamp to
+  0 and 58,768 to 255; the reference frame's luma is mean 8.4, standard
+  deviation 25.2, while the device picture is mean 97, deviation 113. The device
+  also finds 225 of the 300 macroblocks and spends 20 words per macroblock where
+  the stream holds 15. The cause is the compressed-data model, not anything
+  downstream of it: `MdecDevice::decode_block` reads a fixed 6-bit run / 10-bit
+  level out of every 16-bit half, with a per-block quantiser scale in the top
+  six bits, while the MDEC stream is MPEG-1 intra coding, as libavcodec's
+  `mdec.c` implements it and `tools/str-frame.cpp` reproduces to 1.9 luma MAE:
+  byte-swapped 16-bit units, four preamble bytes then a frame-wide `qscale` and
+  `version`, MPEG-1 run/level VLC with a per-coefficient sign bit and `000001`
+  escape, and six blocks per macroblock ordered Cr, Cb, Y0-Y3. Since the picture
+  never exists in the device's output, the 24-bit byte order and the guest's
+  convert cannot be what makes the frame wrong: no permutation, stride or offset
+  of that output reproduces the reference frame, and the VRAM dump matches
+  neither the reference (best channel correlation 0.32 at 700 fields, 0.25 at
+  950) nor the device's own output (0.12 at best).
 - **Can the content movie at `286,228` reach the screen?** `286,228` is inside
   `/CINEMAS/L1M1.STR` (LBA 282,216), and the reference decoder shows real content
   there (`241 of 300 macroblock(s)`, ~63,000 lit pixels). The decoder is no
